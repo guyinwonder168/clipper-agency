@@ -7,7 +7,7 @@ import click
 from dotenv import load_dotenv
 
 from clipper_agency import __version__
-from clipper_agency.config.loader import load_settings
+from clipper_agency.config.loader import load_niche, load_settings
 from clipper_agency.core.logging import setup_logging, get_logger
 from clipper_agency.db.queries import PIPELINE_ORDER
 from clipper_agency.orchestrator.engine import Orchestrator
@@ -92,6 +92,13 @@ def run(topic: str, niche: str, db: str | None, output_dir: str | None, dry_run:
     """Run the full pipeline for a topic."""
     click.echo(f"Clipper Agency — Topic: {topic}")
     click.echo(f"Niche: {niche}")
+
+    # Validate niche exists before starting pipeline
+    try:
+        load_niche(niche)
+    except FileNotFoundError:
+        click.echo(f"Error: Niche '{niche}' not found. Check available niches in niches/ directory.")
+        raise SystemExit(1)
 
     if dry_run:
         click.echo("Dry run: input valid. Pipeline execution coming soon...")

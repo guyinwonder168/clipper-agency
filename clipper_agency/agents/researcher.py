@@ -32,7 +32,11 @@ MAX_SOURCE_CHARS = 40_000  # ~10K tokens worth of text
 MAX_CHARS_PER_SOURCE = 500
 
 
-RESEARCH_PROMPT = """You are a research assistant for a TikTok content creator.
+RESEARCH_PROMPT = """You are a research assistant for {channel_description}.
+
+Write your output in {language} with a {tone} style.
+Focus research on: {content_angle}.
+
 Analyze the provided search results and create a concise research brief.
 
 Rules to follow:
@@ -44,7 +48,7 @@ Search results:
 Return a concise research brief that covers:
 1. Key facts and verified information
 2. Trending angles and viral potential
-3. Content suggestions for TikTok
+3. Content suggestions for short-form video
 4. Any risks or sensitive topics to handle carefully
 """
 
@@ -65,6 +69,10 @@ class ResearcherAgent(BaseAgent):
         job_id: int,
         topic: str = "",
         safety_rules: list[str] | None = None,
+        channel_description: str = "",
+        language: str = "",
+        tone: str = "",
+        content_angle: str = "",
         max_results: int = 5,
         output_dir: str = "",
         assets_cache: str = "",
@@ -89,7 +97,8 @@ class ResearcherAgent(BaseAgent):
         aggregated = self._aggregate_data(firecrawl_data, scrapecreators_data)
 
         # ── 2. Synthesize research brief (cached or live LLM) ───────────
-        brief = self._get_research_brief(aggregated, topic, rules, output_dir, job_id)
+        brief = self._get_research_brief(aggregated, topic, rules, output_dir, job_id,
+                                          channel_description, language, tone, content_angle)
 
         result = {
             "status": "completed",
@@ -166,6 +175,10 @@ class ResearcherAgent(BaseAgent):
         safety_rules: list[str],
         output_dir: str,
         job_id: int,
+        channel_description: str = "",
+        language: str = "",
+        tone: str = "",
+        content_angle: str = "",
     ) -> str:
         cache_path = research_brief_cache_file(output_dir, job_id)
 
@@ -175,7 +188,8 @@ class ResearcherAgent(BaseAgent):
                 return json.load(fh)["research_brief"]
 
         logger.info("Researcher: research_brief cache MISS — calling LLM")
-        result = self._synthesize_research(aggregated, topic, safety_rules)
+        result = self._synthesize_research(aggregated, topic, safety_rules,
+                                            channel_description, language, tone, content_angle)
         brief = result["research_brief"]
 
         with open(cache_path, "w") as fh:
@@ -253,6 +267,10 @@ class ResearcherAgent(BaseAgent):
         aggregated: dict[str, Any],
         topic: str,
         safety_rules: list[str],
+        channel_description: str = "",
+        language: str = "",
+        tone: str = "",
+        content_angle: str = "",
     ) -> dict[str, Any]:
         sources = aggregated.get("sources", [])
 
@@ -291,6 +309,10 @@ class ResearcherAgent(BaseAgent):
                 {
                     "role": "system",
                     "content": RESEARCH_PROMPT.format(
+                        channel_description=channel_description or "a content creator",
+                        language=language or "English",
+                        tone=tone or "casual",
+                        content_angle=content_angle or "trending topics",
                         rules_text=rules_text, sources_text=sources_text
                     ),
                 },

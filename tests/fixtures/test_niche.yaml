@@ -9,3 +9,8 @@ safety_rules:
   - no_sara
   - mark_rumors_as_unconfirmed
 caption_style: short_with_hashtags
+content_angle: trending_artist_update
+search_terms:
+  - viral
+  - trending
+max_hashtags: 5

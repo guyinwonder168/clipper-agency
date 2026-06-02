@@ -27,3 +27,27 @@ def test_load_prompt_returns_fallback_when_file_empty(tmp_path):
     result = load_prompt("safety", fallback="Fallback prompt", prompts_dir=prompts_dir)
 
     assert result == "Fallback prompt"
+
+
+def test_researcher_prompt_has_channel_description_placeholder():
+    """researcher.md must contain {channel_description} placeholder."""
+    from clipper_agency.agents.prompts import PROMPTS_DIR
+    content = (PROMPTS_DIR / "researcher.md").read_text()
+    assert "{channel_description}" in content
+
+
+def test_scriptwriter_prompt_has_channel_description_placeholder():
+    """scriptwriter.md must contain {channel_description} placeholder."""
+    from clipper_agency.agents.prompts import PROMPTS_DIR
+    content = (PROMPTS_DIR / "scriptwriter.md").read_text()
+    assert "{channel_description}" in content
+
+
+def test_no_hardcoded_niche_in_prompt_files():
+    """No prompt file should contain 'Indonesian artist infotainment'."""
+    from clipper_agency.agents.prompts import PROMPTS_DIR
+    for md_file in PROMPTS_DIR.glob("*.md"):
+        content = md_file.read_text()
+        assert "Indonesian artist infotainment" not in content, (
+            f"{md_file.name} still contains hardcoded niche text"
+        )

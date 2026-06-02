@@ -7,9 +7,32 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from clipper_agency.config.loader import load_settings
+from clipper_agency.config.schema import NicheConfig
 from clipper_agency.db.connection import close_connection, get_connection
 from clipper_agency.db.schema import initialize_schema
 from clipper_agency.orchestrator.engine import Orchestrator
+
+
+@pytest.fixture(autouse=True)
+def mock_load_niche_autouse(mocker):
+    """Mock load_niche to return a valid test NicheConfig for all tests."""
+    test_config = NicheConfig(
+        name="test_niche",
+        description="Test niche for pipeline tests",
+        language="id",
+        tone="informal_investigative",
+        content_angle="Gosip dan Analisis Ringan",
+        platform="tiktok",
+        duration_min=30,
+        duration_max=90,
+        safety_rules=["no_defamation", "mark_rumors_as_unconfirmed"],
+        search_terms=["test search"],
+        max_hashtags=5,
+    )
+    mocker.patch(
+        "clipper_agency.orchestrator.engine.load_niche",
+        return_value=test_config,
+    )
 
 
 @pytest.fixture
@@ -1524,6 +1547,67 @@ class TestRunPipelineFrom:
         # Verify template_name was passed to packager metadata
         pkg_call = mock_pkg_inst.package.call_args
         assert pkg_call[1]["metadata"]["template_name"] == "news_card"
+
+    def test_run_pipeline_from_uses_snapshot_niche_ctx(self, db_initialized, tmp_path):
+        """run_pipeline_from should use niche_ctx from snapshot if present."""
+        ac = str(tmp_path / "cache")
+        od = str(tmp_path / "outputs")
+        # Create a job with niche_ctx already in the snapshot
+        job_id = self._setup_completed_job(
+            db_initialized, ac, od,
+            completed_agents=["safety", "researcher", "scriptwriter",
+                              "voice_producer", "visual_director"],
+            failed_agent="composer",
+            config_snapshot={
+                "topic": "Test topic", "niche": "test_niche",
+                "output_dir": od, "assets_cache": ac,
+                "niche_ctx": {
+                    "safety_rules": ["custom_rule"],
+                    "channel_description": "Snapshot-based description",
+                    "language": "fr",
+                    "tone": "formal",
+                    "content_angle": "Snapshot angle",
+                },
+            },
+        )
+        orch = Orchestrator(db_path=db_initialized)
+        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
+
+        with patch.object(Orchestrator, "_run_safety") as mock_safety, \
+             patch.object(Orchestrator, "_run_researcher") as mock_researcher, \
+             patch.object(Orchestrator, "_run_scriptwriter") as mock_sw, \
+             patch.object(Orchestrator, "_run_voice_producer") as mock_vp, \
+             patch.object(Orchestrator, "_run_visual_director") as mock_vd, \
+             patch.object(Orchestrator, "_run_composer") as mock_comp, \
+             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
+             patch.object(Orchestrator, "_package_output") as mock_pkg:
+            mock_comp.return_value = {
+                "status": "completed",
+                "video_path": str(video), "thumbnail_path": "",
+            }
+            mock_rev.return_value = {
+                "status": "pass", "score": 80, "feedback": "ok", "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed", "output_dir": "/tmp",
+                "video_path": "", "caption_path": "",
+                "thumbnail_path": "", "metadata_path": "",
+            }
+
+            result = orch.run_pipeline_from(job_id, from_agent="composer")
+
+        assert result["status"] == "completed"
+
+    def test_run_pipeline_niche_not_found_fails(self, db_initialized, mocker):
+        """run_pipeline should fail fast if niche YAML is missing."""
+        mocker.patch(
+            "clipper_agency.orchestrator.engine.load_niche",
+            side_effect=FileNotFoundError("Niche not found: niches/missing.yaml"),
+        )
+        orch = Orchestrator(db_path=db_initialized)
+        result = orch.run_pipeline(topic="Test", niche="missing_niche")
+        assert result["status"] == "failed"
+        assert "missing_niche" in str(result["reason"])
 
 
 # ── Engine helper methods — coverage for uncovered paths ──────────

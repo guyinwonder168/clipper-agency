@@ -85,8 +85,9 @@ class TestRunCommand:
         assert result.exit_code == 0
         assert "Test topic" in result.output
 
+    @patch("clipper_agency.__main__.load_niche")
     @patch("clipper_agency.orchestrator.engine.Orchestrator.run_pipeline")
-    def test_run_with_niche_default(self, mock_run):
+    def test_run_with_niche_default(self, mock_run, mock_load_niche):
         """run command should show the niche."""
         mock_run.return_value = {"status": "completed", "job_id": 1, "output": {}}
         runner = CliRunner()
@@ -101,8 +102,9 @@ class TestRunCommand:
         assert result.exit_code == 0
         assert "Pipeline execution coming soon" in result.output or "dry" in result.output.lower()
 
+    @patch("clipper_agency.__main__.load_niche")
     @patch("clipper_agency.orchestrator.engine.Orchestrator.run_pipeline")
-    def test_run_dispatches_to_orchestrator(self, mock_run):
+    def test_run_dispatches_to_orchestrator(self, mock_run, mock_load_niche):
         """run command should call Orchestrator.run_pipeline on execution."""
         mock_run.return_value = {
             "status": "completed",

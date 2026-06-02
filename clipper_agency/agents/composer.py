@@ -104,9 +104,6 @@ class ComposerAgent(BaseAgent):
             )
             self._generate_thumbnail(video_path, thumbnail_path)
 
-            if agent_dir:
-                self._persist_diagnostics(agent_dir, ffmpeg_cmd, "")
-
             logger.info(
                 "Composer: completed — video=%s thumbnail=%s cards=%d",
                 video_path, thumbnail_path, len(card_fallback_scenes),
@@ -119,6 +116,7 @@ class ComposerAgent(BaseAgent):
                 "card_fallback_scenes": card_fallback_scenes,
             }
             if agent_dir:
+                self._persist_diagnostics(agent_dir, ffmpeg_cmd, "")
                 write_json(agent_output_file(assets_cache, job_id, "composer"),
                             output)
             return output

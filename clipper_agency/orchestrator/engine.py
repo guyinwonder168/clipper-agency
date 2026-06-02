@@ -13,7 +13,10 @@ from clipper_agency.agents.safety import SafetyAgent
 from clipper_agency.agents.scriptwriter import ScriptwriterAgent
 from clipper_agency.agents.visual_director import VisualDirectorAgent
 from clipper_agency.agents.voice_producer import VoiceProducerAgent
-from clipper_agency.config.loader import load_settings
+from clipper_agency.config.loader import (
+    load_settings, load_niche, build_channel_description,
+    get_language_name, get_tone_name, get_angle_name,
+)
 from clipper_agency.core.artifacts import write_json
 from clipper_agency.core.manifest import (
     create_manifest,
@@ -174,7 +177,9 @@ class Orchestrator:
 
     def _stage_research(
         self, conn: Any, job_id: int, topic: str,
-        safety_rules: list[str], assets_cache: str, output_dir: str,
+        safety_rules: list[str], channel_description: str,
+        language: str, tone: str, content_angle: str,
+        assets_cache: str, output_dir: str,
     ) -> dict[str, Any]:
         """Run G3→Researcher→G4→G5.
 
@@ -187,6 +192,8 @@ class Orchestrator:
         mark_agent_running(conn, job_id, "researcher")
         research_output = self._run_researcher(
             job_id=job_id, topic=topic, safety_rules=safety_rules,
+            channel_description=channel_description,
+            language=language, tone=tone, content_angle=content_angle,
             output_dir=output_dir, assets_cache=assets_cache,
         )
         self._complete_agent(conn, assets_cache, job_id, "researcher")
@@ -216,7 +223,9 @@ class Orchestrator:
 
     def _stage_content(
         self, conn: Any, job_id: int, topic: str,
-        safety_rules: list[str], research_output: dict[str, Any],
+        safety_rules: list[str], channel_description: str,
+        language: str, tone: str, content_angle: str,
+        research_output: dict[str, Any],
         assets_cache: str, output_dir: str,
     ) -> tuple[dict[str, Any], dict[str, Any]] | dict[str, Any]:
         """Run G6→Scriptwriter→G7→Voice→G8.
@@ -224,7 +233,9 @@ class Orchestrator:
         Returns (script_output, voice_output) on success or a failure dict.
         """
         script_output = self._run_content_scriptwriter(
-            conn, job_id, topic, safety_rules, research_output, assets_cache,
+            conn, job_id, topic, safety_rules, channel_description,
+            language, tone, content_angle,
+            research_output, assets_cache,
         )
 
         logger.info("G7: running Voice Producer agent")
@@ -317,12 +328,32 @@ class Orchestrator:
         assets_cache = str(kwargs.get("assets_cache") or settings.assets_cache)
         logger.info("Pipeline START: niche='%s'", niche)
 
+        # Load niche configuration — single source of truth
+        try:
+            niche_config = load_niche(niche)
+        except FileNotFoundError:
+            logger.error("Niche config not found: %r — aborting pipeline", niche)
+            return {"status": "failed",
+                    "reason": f"Niche config {niche!r} not found"}
+        safety_rules = niche_config.safety_rules
+        channel_description = build_channel_description(niche_config)
+        language_name = get_language_name(niche_config)
+        tone_name = get_tone_name(niche_config)
+        angle_name = get_angle_name(niche_config)
+
         # Build config snapshot for retry/resume determinism
         config_snapshot = {
             "topic": topic,
             "niche": niche,
             "output_dir": output_dir,
             "assets_cache": assets_cache,
+            "niche_ctx": {
+                "safety_rules": safety_rules,
+                "channel_description": channel_description,
+                "language": language_name,
+                "tone": tone_name,
+                "content_angle": angle_name,
+            },
         }
 
         # Stage 1: Preflight + Safety
@@ -333,19 +364,20 @@ class Orchestrator:
         job_id, cost_result = stage1
 
         try:
-            safety_rules = ["no_defamation", "mark_rumors_as_unconfirmed"]
-
             # Stage 2: Research (G3→G5)
             research_output = self._stage_research(
-                conn, job_id, topic, safety_rules, assets_cache, output_dir,
+                conn, job_id, topic, safety_rules, channel_description,
+                language_name, tone_name, angle_name,
+                assets_cache, output_dir,
             )
             if isinstance(research_output, dict) and research_output.get("status") == "failed":
                 return research_output
 
             # Stage 3: Content creation (G6→G8)
             stage3 = self._stage_content(
-                conn, job_id, topic, safety_rules, research_output,
-                assets_cache, output_dir,
+                conn, job_id, topic, safety_rules, channel_description,
+                language_name, tone_name, angle_name,
+                research_output, assets_cache, output_dir,
             )
             if isinstance(stage3, dict) and stage3.get("status") == "failed":
                 return stage3
@@ -573,14 +605,17 @@ class Orchestrator:
 
     def _retry_research_stage(
         self, conn: Any, job_id: int, topic: str,
-        safety_rules: list[str], assets_cache: str,
-        output_dir: str, from_idx: int,
+        safety_rules: list[str], channel_description: str,
+        language: str, tone: str, content_angle: str,
+        assets_cache: str, output_dir: str, from_idx: int,
     ) -> tuple[dict[str, Any] | None, dict | None]:
         """Run research if needed. Returns (research_output, abort)."""
         if from_idx > PIPELINE_ORDER.index("researcher"):
             return None, None
         research_result = self._stage_research(
-            conn, job_id, topic, safety_rules, assets_cache, output_dir,
+            conn, job_id, topic, safety_rules, channel_description,
+            language, tone, content_angle,
+            assets_cache, output_dir,
         )
         if isinstance(research_result, dict) and research_result.get(
             "status",
@@ -590,17 +625,24 @@ class Orchestrator:
 
     def _retry_downstream_stages(
         self, conn: Any, job_id: int, topic: str,
-        safety_rules: list[str], niche: str, output_dir: str,
-        assets_cache: str, from_idx: int, use_cache: bool,
+        niche_ctx: dict[str, Any],
+        niche: str, output_dir: str, assets_cache: str,
+        from_idx: int, use_cache: bool,
         research_output: dict[str, Any], script_output: dict[str, Any],
         voice_output: dict[str, Any], visual_output: dict[str, Any],
     ) -> dict | None:
         """Run retry stages after research. Returns abort on failure."""
+        safety_rules = niche_ctx["safety_rules"]
+        channel_description = niche_ctx["channel_description"]
+        language = niche_ctx["language"]
+        tone = niche_ctx["tone"]
+        content_angle = niche_ctx["content_angle"]
         if from_idx <= PIPELINE_ORDER.index("scriptwriter"):
             script_output = self._run_cached_or_fresh(
                 "scriptwriter", use_cache, assets_cache, job_id,
                 lambda: self._run_content_scriptwriter(
                     conn, job_id, topic, safety_rules,
+                    channel_description, language, tone, content_angle,
                     research_output, assets_cache,
                 ),
             )
@@ -685,7 +727,37 @@ class Orchestrator:
             from_idx, assets_cache, job_id,
         )
 
-        safety_rules = ["no_defamation", "mark_rumors_as_unconfirmed"]
+        # Load niche config from snapshot for deterministic retry
+        niche_ctx_raw = snapshot.get("niche_ctx", {})
+        if niche_ctx_raw:
+            niche_ctx = niche_ctx_raw
+            safety_rules = niche_ctx["safety_rules"]
+            channel_description = niche_ctx["channel_description"]
+            language_name = niche_ctx["language"]
+            tone_name = niche_ctx["tone"]
+            angle_name = niche_ctx["content_angle"]
+        else:
+            # Fallback for old jobs without niche_ctx in snapshot
+            try:
+                niche_config = load_niche(niche)
+            except FileNotFoundError:
+                logger.error(
+                    "Niche config not found: %r — aborting retry", niche,
+                )
+                return {"status": "failed",
+                        "reason": f"Niche config {niche!r} not found"}
+            safety_rules = niche_config.safety_rules
+            channel_description = build_channel_description(niche_config)
+            language_name = get_language_name(niche_config)
+            tone_name = get_tone_name(niche_config)
+            angle_name = get_angle_name(niche_config)
+            niche_ctx = {
+                "safety_rules": safety_rules,
+                "channel_description": channel_description,
+                "language": language_name,
+                "tone": tone_name,
+                "content_angle": angle_name,
+            }
 
         try:
             # Stage: Safety
@@ -697,8 +769,9 @@ class Orchestrator:
 
             # Stage: Research (researcher + gates G3-G5)
             fresh, abort = self._retry_research_stage(
-                conn, job_id, topic, safety_rules, assets_cache,
-                output_dir, from_idx,
+                conn, job_id, topic, safety_rules, channel_description,
+                language_name, tone_name, angle_name,
+                assets_cache, output_dir, from_idx,
             )
             if abort:
                 return abort
@@ -706,9 +779,9 @@ class Orchestrator:
                 research_output = fresh
 
             abort = self._retry_downstream_stages(
-                conn, job_id, topic, safety_rules, niche, output_dir,
-                assets_cache, from_idx, use_cache, research_output,
-                script_output, voice_output, visual_output,
+                conn, job_id, topic, niche_ctx,
+                niche, output_dir, assets_cache, from_idx, use_cache,
+                research_output, script_output, voice_output, visual_output,
             )
             if abort:
                 return abort
@@ -724,7 +797,9 @@ class Orchestrator:
 
     def _run_content_scriptwriter(
         self, conn: Any, job_id: int, topic: str,
-        safety_rules: list[str], research_output: dict[str, Any],
+        safety_rules: list[str], channel_description: str,
+        language: str, tone: str, content_angle: str,
+        research_output: dict[str, Any],
         assets_cache: str,
     ) -> dict[str, Any]:
         """Run scriptwriter stage of content creation."""
@@ -736,7 +811,10 @@ class Orchestrator:
         script_output = self._run_scriptwriter(
             job_id=job_id, topic=topic,
             research_brief=research_output.get("research_brief", ""),
-            safety_rules=safety_rules, assets_cache=assets_cache,
+            safety_rules=safety_rules,
+            channel_description=channel_description,
+            language=language, tone=tone, content_angle=content_angle,
+            assets_cache=assets_cache,
         )
         self._complete_agent(conn, assets_cache, job_id, "scriptwriter")
 
