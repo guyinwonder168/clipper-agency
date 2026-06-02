@@ -45,6 +45,13 @@ class TestLoadNiche:
         assert niche.video_length.target == 30
         assert "no_defamation" in niche.safety_rules
 
+    def test_load_niche_includes_new_fields(self, fixtures_dir):
+        """NicheConfig should parse content_angle, search_terms, max_hashtags."""
+        niche = load_niche("test_niche", niches_dir=fixtures_dir)
+        assert niche.content_angle == "trending_artist_update"
+        assert niche.search_terms == ["viral", "trending"]
+        assert niche.max_hashtags == 5
+
     def test_load_niche_file_not_found(self, fixtures_dir):
         with pytest.raises(FileNotFoundError, match="Niche not found"):
             load_niche("nonexistent_niche", niches_dir=fixtures_dir)

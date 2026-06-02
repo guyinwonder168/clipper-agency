@@ -46,6 +46,9 @@ class NicheConfig(BaseModel):
     video_length: VideoLengthConfig = Field(default_factory=VideoLengthConfig)
     safety_rules: list[str] = Field(default_factory=list)
     caption_style: str = "short_with_hashtags"
+    content_angle: str = "trending_artist_update"
+    search_terms: list[str] = Field(default_factory=list)
+    max_hashtags: int = 5
 
 
 class TemplateConfig(BaseModel):
