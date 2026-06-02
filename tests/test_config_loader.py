@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from clipper_agency.config.loader import load_niche, load_template, load_config, load_settings
+from clipper_agency.config.loader import build_channel_description, load_config, load_niche, load_settings, load_template
 from clipper_agency.config.schema import AppSettings, NicheConfig, TemplateConfig
 
 
@@ -107,3 +107,31 @@ class TestLoadConfig:
         assert config.get("name") == "indonesian_artists"
         # Still has app settings
         assert "db_path" in config
+
+
+class TestBuildChannelDescription:
+    """build_channel_description() — builds identity string from NicheConfig."""
+
+    def test_builds_description_from_niche_config(self, fixtures_dir):
+        niche = load_niche("test_niche", niches_dir=fixtures_dir)
+        desc = build_channel_description(niche)
+        assert "Indonesian" in desc
+        assert "trending artist update" in desc
+        assert "casual TikTok" in desc
+
+    def test_default_niche_builds_description(self):
+        niche = load_niche("indonesian_artists")
+        desc = build_channel_description(niche)
+        assert desc  # non-empty
+        assert "Indonesian" in desc
+
+    def test_custom_niche_builds_description(self):
+        from clipper_agency.config.schema import NicheConfig
+        niche = NicheConfig(
+            name="tech_reviews",
+            language="en",
+            tone="professional",
+            content_angle="latest_gadget_reviews",
+        )
+        desc = build_channel_description(niche)
+        assert desc  # non-empty
