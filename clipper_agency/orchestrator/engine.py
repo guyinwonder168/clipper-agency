@@ -17,7 +17,6 @@ from clipper_agency.config.loader import (
     load_settings, load_niche, build_channel_description,
     get_language_name, get_tone_name, get_angle_name,
 )
-from clipper_agency.config.schema import NicheConfig
 from clipper_agency.core.artifacts import write_json
 from clipper_agency.core.manifest import (
     create_manifest,
@@ -332,9 +331,10 @@ class Orchestrator:
         # Load niche configuration — single source of truth
         try:
             niche_config = load_niche(niche)
-        except FileNotFoundError as e:
-            logger.warning("Niche config not found: %s — using defaults", e)
-            niche_config = NicheConfig(name=niche or "default")
+        except FileNotFoundError:
+            logger.error("Niche config not found: %r — aborting pipeline", niche)
+            return {"status": "failed",
+                    "reason": f"Niche config {niche!r} not found"}
         safety_rules = niche_config.safety_rules
         channel_description = build_channel_description(niche_config)
         language_name = get_language_name(niche_config)
@@ -347,6 +347,13 @@ class Orchestrator:
             "niche": niche,
             "output_dir": output_dir,
             "assets_cache": assets_cache,
+            "niche_ctx": {
+                "safety_rules": safety_rules,
+                "channel_description": channel_description,
+                "language": language_name,
+                "tone": tone_name,
+                "content_angle": angle_name,
+            },
         }
 
         # Stage 1: Preflight + Safety
@@ -618,14 +625,18 @@ class Orchestrator:
 
     def _retry_downstream_stages(
         self, conn: Any, job_id: int, topic: str,
-        safety_rules: list[str], channel_description: str,
-        language: str, tone: str, content_angle: str,
+        niche_ctx: dict[str, Any],
         niche: str, output_dir: str, assets_cache: str,
         from_idx: int, use_cache: bool,
         research_output: dict[str, Any], script_output: dict[str, Any],
         voice_output: dict[str, Any], visual_output: dict[str, Any],
     ) -> dict | None:
         """Run retry stages after research. Returns abort on failure."""
+        safety_rules = niche_ctx["safety_rules"]
+        channel_description = niche_ctx["channel_description"]
+        language = niche_ctx["language"]
+        tone = niche_ctx["tone"]
+        content_angle = niche_ctx["content_angle"]
         if from_idx <= PIPELINE_ORDER.index("scriptwriter"):
             script_output = self._run_cached_or_fresh(
                 "scriptwriter", use_cache, assets_cache, job_id,
@@ -716,17 +727,37 @@ class Orchestrator:
             from_idx, assets_cache, job_id,
         )
 
-        # Load niche configuration — single source of truth
-        try:
-            niche_config = load_niche(niche)
-        except FileNotFoundError as e:
-            logger.warning("Niche config not found: %s — using defaults", e)
-            niche_config = NicheConfig(name=niche or "default")
-        safety_rules = niche_config.safety_rules
-        channel_description = build_channel_description(niche_config)
-        language_name = get_language_name(niche_config)
-        tone_name = get_tone_name(niche_config)
-        angle_name = get_angle_name(niche_config)
+        # Load niche config from snapshot for deterministic retry
+        niche_ctx_raw = snapshot.get("niche_ctx", {})
+        if niche_ctx_raw:
+            niche_ctx = niche_ctx_raw
+            safety_rules = niche_ctx["safety_rules"]
+            channel_description = niche_ctx["channel_description"]
+            language_name = niche_ctx["language"]
+            tone_name = niche_ctx["tone"]
+            angle_name = niche_ctx["content_angle"]
+        else:
+            # Fallback for old jobs without niche_ctx in snapshot
+            try:
+                niche_config = load_niche(niche)
+            except FileNotFoundError:
+                logger.error(
+                    "Niche config not found: %r — aborting retry", niche,
+                )
+                return {"status": "failed",
+                        "reason": f"Niche config {niche!r} not found"}
+            safety_rules = niche_config.safety_rules
+            channel_description = build_channel_description(niche_config)
+            language_name = get_language_name(niche_config)
+            tone_name = get_tone_name(niche_config)
+            angle_name = get_angle_name(niche_config)
+            niche_ctx = {
+                "safety_rules": safety_rules,
+                "channel_description": channel_description,
+                "language": language_name,
+                "tone": tone_name,
+                "content_angle": angle_name,
+            }
 
         try:
             # Stage: Safety
@@ -748,8 +779,7 @@ class Orchestrator:
                 research_output = fresh
 
             abort = self._retry_downstream_stages(
-                conn, job_id, topic, safety_rules, channel_description,
-                language_name, tone_name, angle_name,
+                conn, job_id, topic, niche_ctx,
                 niche, output_dir, assets_cache, from_idx, use_cache,
                 research_output, script_output, voice_output, visual_output,
             )

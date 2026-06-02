@@ -7,9 +7,32 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from clipper_agency.config.loader import load_settings
+from clipper_agency.config.schema import NicheConfig
 from clipper_agency.db.connection import close_connection, get_connection
 from clipper_agency.db.schema import initialize_schema
 from clipper_agency.orchestrator.engine import Orchestrator
+
+
+@pytest.fixture(autouse=True)
+def mock_load_niche_autouse(mocker):
+    """Mock load_niche to return a valid test NicheConfig for all tests."""
+    test_config = NicheConfig(
+        name="test_niche",
+        description="Test niche for pipeline tests",
+        language="id",
+        tone="informal_investigative",
+        content_angle="Gosip dan Analisis Ringan",
+        platform="tiktok",
+        duration_min=30,
+        duration_max=90,
+        safety_rules=["no_defamation", "mark_rumors_as_unconfirmed"],
+        search_terms=["test search"],
+        max_hashtags=5,
+    )
+    mocker.patch(
+        "clipper_agency.orchestrator.engine.load_niche",
+        return_value=test_config,
+    )
 
 
 @pytest.fixture
