@@ -13,7 +13,7 @@ from clipper_agency.llm.client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
 
-SCRIPTWRITER_PROMPT = """You are a TikTok scriptwriter creating engaging scripts for an Indonesian artist infotainment channel.
+SCRIPTWRITER_PROMPT = """You are a TikTok scriptwriter creating engaging scripts for {channel_description}.
 
 Given a research brief and topic, create:
 1. A scene-by-scene TikTok script (hook, body, CTA)
@@ -31,7 +31,7 @@ Format your response as JSON:
 Guidelines:
 - Hook within first 3 seconds
 - Keep total duration under 90 seconds
-- Use casual, engaging Indonesian tone
+- Use casual, engaging tone
 - Include a strong CTA (call to action)
 
 Safety rules to follow:
@@ -52,6 +52,7 @@ class ScriptwriterAgent(BaseAgent):
         topic: str = "",
         research_brief: str = "",
         safety_rules: list[str] | None = None,
+        channel_description: str = "",
         assets_cache: str = "",
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -78,6 +79,7 @@ class ScriptwriterAgent(BaseAgent):
                 {
                     "role": "system",
                     "content": prompt.format(
+                        channel_description=channel_description or "a content creator",
                         safety_rules_text=safety_rules_text,
                     ),
                 },
