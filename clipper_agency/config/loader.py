@@ -62,6 +62,23 @@ def build_channel_description(niche: NicheConfig) -> str:
     return f"a {language_name} {angle} {tone_name} channel"
 
 
+def get_language_name(niche: NicheConfig) -> str:
+    """Return human-readable language name for a niche."""
+    language_map = {"id": "Indonesian", "en": "English"}
+    return language_map.get(niche.language, niche.language)
+
+
+def get_tone_name(niche: NicheConfig) -> str:
+    """Return human-readable tone description for a niche."""
+    tone_map = {"casual_tiktok": "casual TikTok", "professional": "professional", "casual": "casual"}
+    return tone_map.get(niche.tone, niche.tone)
+
+
+def get_angle_name(niche: NicheConfig) -> str:
+    """Return human-readable content angle for a niche."""
+    return niche.content_angle.replace("_", " ")
+
+
 def load_config(config_path: str | None = None) -> dict:
     """Legacy dict-based loader — delegates to structured loaders.
 

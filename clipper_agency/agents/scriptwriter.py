@@ -15,9 +15,12 @@ logger = logging.getLogger(__name__)
 
 SCRIPTWRITER_PROMPT = """You are a TikTok scriptwriter creating engaging scripts for {channel_description}.
 
+Write scripts in {language} with a {tone} style.
+Focus content on: {content_angle}.
+
 Given a research brief and topic, create:
 1. A scene-by-scene TikTok script (hook, body, CTA)
-2. An engaging caption
+2. An engaging caption in {language}
 3. Relevant hashtags
 
 Format your response as JSON:
@@ -31,7 +34,7 @@ Format your response as JSON:
 Guidelines:
 - Hook within first 3 seconds
 - Keep total duration under 90 seconds
-- Use casual, engaging tone
+- Use {tone} tone
 - Include a strong CTA (call to action)
 
 Safety rules to follow:
@@ -53,6 +56,9 @@ class ScriptwriterAgent(BaseAgent):
         research_brief: str = "",
         safety_rules: list[str] | None = None,
         channel_description: str = "",
+        language: str = "",
+        tone: str = "",
+        content_angle: str = "",
         assets_cache: str = "",
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -80,6 +86,9 @@ class ScriptwriterAgent(BaseAgent):
                     "role": "system",
                     "content": prompt.format(
                         channel_description=channel_description or "a content creator",
+                        language=language or "English",
+                        tone=tone or "casual",
+                        content_angle=content_angle or "trending topics",
                         safety_rules_text=safety_rules_text,
                     ),
                 },
