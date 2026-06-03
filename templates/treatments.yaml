@@ -1,0 +1,113 @@
+# Treatment templates for Visual Director asset processing.
+# All treatments output 30fps for concat compatibility.
+# Used by the template-driven rendering engine in clipper_agency.
+
+treatments:
+  ken_burns_zoom_in:
+    description: "Slow zoom-in on image with Ken Burns effect. Good for establishing shots and emphasis."
+    target_fps: 30
+    default_duration: 5.0
+    input_type: image
+    ffmpeg_filter: "zoompan=z='min(zoom+0.0015,1.5)':d={frames}:s=1080x1920:fps=30"
+
+  ken_burns_pan_left:
+    description: "Pan left across image with slight zoom. Creates movement from static images."
+    target_fps: 30
+    default_duration: 5.0
+    input_type: image
+    ffmpeg_filter: "zoompan=z='1.05':x='iw-(iw/zoom)*on/{frames}':y='ih/2-(ih/zoom)/2':d={frames}:s=1080x1920:fps=30"
+
+  cinematic_crop:
+    description: "Crop and scale video to 9:16 cinematic ratio. Preserves source duration."
+    target_fps: 30
+    default_duration: null
+    input_type: video
+    ffmpeg_filter: "crop=ih*9/16:ih,scale=1080:1920"
+
+  broll_standard:
+    description: "Standard B-roll pass-through. No special filter, just fps normalization."
+    target_fps: 30
+    default_duration: null
+    input_type: video
+    ffmpeg_filter: null
+
+  slow_motion:
+    description: "Half-speed slow motion effect. Doubles visual duration of clip."
+    target_fps: 30
+    default_duration: null
+    input_type: video
+    ffmpeg_filter: "setpts=2.0*PTS"
+
+  lower_third_slide:
+    description: "Animated text bar sliding in from bottom. Used for names, titles, context."
+    target_fps: 30
+    default_duration: 3.0
+    input_type: text
+    ffmpeg_filter: "drawtext=text='{text}':fontsize=42:fontcolor=white:x=(w-text_w)/2:y=h*0.75:box=1:boxcolor=black@0.6:boxborderw=10"
+
+  text_card_reveal:
+    description: "Full-screen text card with alpha fade-in reveal. Good for hooks and facts."
+    target_fps: 30
+    default_duration: 4.0
+    input_type: text
+    ffmpeg_filter: "drawtext=text='{text}':fontsize=64:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:alpha='if(lt(t,0.5),t/0.5,1)'"
+
+  hook_big_caption:
+    description: "Large centered bold caption for hook moments. Maximum visual impact."
+    target_fps: 30
+    default_duration: 3.0
+    input_type: text
+    ffmpeg_filter: "drawtext=text='{text}':fontsize=80:fontcolor=white:borderw=4:bordercolor=black:x=(w-text_w)/2:y=(h-text_h)/2"
+
+  fade_to_black:
+    description: "Fade video to black at end. Used for scene endings and dramatic pauses."
+    target_fps: 30
+    default_duration: null
+    input_type: video
+    ffmpeg_filter: "fade=t=out:st={start_time}:d=0.5"
+
+transitions:
+  crossfade:
+    description: "Smooth blend between clips. Standard transition for most scenes."
+    default_duration: 0.3
+    ffmpeg_filter: "xfade=transition=fade:duration={duration}:offset={offset}"
+
+  hard_cut:
+    description: "Instant cut with no blend. High energy, maintains pacing."
+    default_duration: 0.0
+    ffmpeg_filter: null
+
+  wipe_left:
+    description: "Wipe from right to left. Good for topic changes."
+    default_duration: 0.5
+    ffmpeg_filter: "xfade=transition=wipeleft:duration={duration}:offset={offset}"
+
+  dissolve:
+    description: "Gradual dissolve with slight brightness dip. Softer than crossfade."
+    default_duration: 0.4
+    ffmpeg_filter: "xfade=transition=dissolve:duration={duration}:offset={offset}"
+
+  circle_open:
+    description: "Circle expanding reveal. Playful transition for lighter content."
+    default_duration: 0.5
+    ffmpeg_filter: "xfade=transition=circleopen:duration={duration}:offset={offset}"
+
+fps_rules:
+  target_fps: 30
+  rules:
+    - "All output segments must be 30fps before concat"
+    - "Images rendered at 30fps via zoompan fps parameter"
+    - "Videos re-encoded with -r 30 if source differs"
+    - "Never change source fps during slow-motion setpts — only at final encode"
+    - "Frame count for image treatments: duration_seconds * 30"
+
+pacing_rules:
+  tiktok_standard:
+    max_clip_duration: 5.0
+    min_clip_duration: 1.5
+    hook_window_seconds: 3.0
+    caption_words_per_second: 3
+    scene_change_threshold: 0.7
+    preferred_transitions:
+      - crossfade
+      - hard_cut
