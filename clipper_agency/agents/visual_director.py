@@ -365,9 +365,16 @@ class VisualDirectorAgent(BaseAgent):
                 result = self._execute_action(fallback, scene_id, scenes_dir, pexels, ytdlp)
 
             if result:
-                assets.append({"scene": scene_id, **result})
+                asset = {"scene": scene_id, **result}
             else:
-                assets.append({"scene": scene_id, "source": "none", "path": ""})
+                asset = {"scene": scene_id, "source": "none", "path": ""}
+
+            # Pass through treatment metadata from LLM plan
+            for field in ("treatment", "target_duration", "transition_in", "transition_out"):
+                if field in item:
+                    asset[field] = item[field]
+
+            assets.append(asset)
 
         return assets
 

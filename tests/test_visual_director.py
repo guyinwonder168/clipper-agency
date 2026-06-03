@@ -136,3 +136,65 @@ class TestVisualDirectorArtifacts:
         )
         assert result["status"] == "completed"
         assert len(result["assets"]) == 2
+
+
+class TestTreatmentPassthrough:
+    """LLM plan treatment/duration/transition fields pass through to assets."""
+
+    def test_execute_plan_includes_treatment_metadata(self, mocker):
+        """LLM plan with treatment/duration/transition fields should pass through to assets."""
+        plan = [
+            {
+                "scene_number": 1,
+                "action": {"type": "text_card", "headline": "Test", "image_search": "test", "style": "news_card"},
+                "fallback": None,
+                "treatment": "hook_big_caption",
+                "target_duration": 3,
+                "transition_in": "hard_cut",
+                "transition_out": "crossfade",
+            },
+            {
+                "scene_number": 2,
+                "action": {"type": "pexels_image", "search_query": "concert"},
+                "fallback": None,
+                "treatment": "ken_burns_zoom_in",
+                "target_duration": 5,
+                "transition_in": "crossfade",
+                "transition_out": "crossfade",
+            },
+        ]
+        agent = VisualDirectorAgent()
+        mocker.patch.object(agent, "_execute_action", side_effect=[
+            {"source": "text_card", "path": "", "headline": "Test", "style": "news_card"},
+            {"source": "pexels_image", "path": "/tmp/scene_2_img.jpg"},
+        ])
+
+        assets = agent._execute_plan(plan, "/tmp/scenes")
+
+        assert assets[0]["treatment"] == "hook_big_caption"
+        assert assets[0]["target_duration"] == 3
+        assert assets[0]["transition_in"] == "hard_cut"
+        assert assets[0]["transition_out"] == "crossfade"
+        assert assets[1]["treatment"] == "ken_burns_zoom_in"
+        assert assets[1]["target_duration"] == 5
+
+    def test_execute_plan_no_treatment_fields_still_works(self, mocker):
+        """Plan without treatment fields still produces valid assets (backward compat)."""
+        plan = [
+            {
+                "scene_number": 1,
+                "action": {"type": "pexels_video", "search_query": "test"},
+                "fallback": None,
+            },
+        ]
+        agent = VisualDirectorAgent()
+        mocker.patch.object(agent, "_execute_action", return_value={
+            "source": "pexels_video", "path": "/tmp/scene_1.mp4"
+        })
+
+        assets = agent._execute_plan(plan, "/tmp/scenes")
+
+        assert assets[0]["scene"] == 1
+        assert assets[0]["source"] == "pexels_video"
+        # Should NOT have treatment fields (backward compat)
+        assert "treatment" not in assets[0]
