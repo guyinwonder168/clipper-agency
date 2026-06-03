@@ -246,3 +246,37 @@ class TestProbeVideo:
         info = probe_video(str(video), str(tmp_path))
         assert info is not None
         assert info.fps == 30.0
+
+    def test_probe_returns_none_when_no_video_stream(self, tmp_path, mocker):
+        """File with only audio streams (no video) returns None."""
+        video = tmp_path / "audio_only.mp3"
+        video.write_bytes(b"x" * 100)
+
+        mocker.patch("subprocess.check_output", return_value=json.dumps({
+            "streams": [{"codec_type": "audio", "codec_name": "mp3"}],
+            "format": {"duration": "3.5"},
+        }).encode())
+
+        info = probe_video(str(video), str(tmp_path))
+        assert info is None
+
+    def test_probe_defaults_fps_on_malformed_frame_rate(self, tmp_path, mocker):
+        """Malformed r_frame_rate (e.g. 'N/A') falls back to 30.0."""
+        video = tmp_path / "bad_fps.mp4"
+        video.write_bytes(b"x" * 100)
+
+        mocker.patch("subprocess.check_output", return_value=json.dumps({
+            "streams": [{
+                "codec_type": "video",
+                "width": 1920,
+                "height": 1080,
+                "codec_name": "h264",
+                "pix_fmt": "yuv420p",
+                "r_frame_rate": "N/A",
+            }],
+            "format": {"duration": "10.0"},
+        }).encode())
+
+        info = probe_video(str(video), str(tmp_path))
+        assert info is not None
+        assert info.fps == 30.0

@@ -238,6 +238,91 @@ class TestSceneNormalizer:
         mock_ffmpeg.assert_called_once()
 
 
+    def test_normalize_video_ffmpeg_not_found(self, tmp_path, mocker):
+        """FileNotFoundError from FFmpeg returns failure with clear message."""
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
+            side_effect=FileNotFoundError("ffmpeg not on PATH"),
+        )
+
+        input_file = tmp_path / "in.mp4"
+        input_file.write_bytes(b"x" * 10000)
+
+        normalizer = SceneNormalizer()
+        result = normalizer.normalize(str(input_file), str(tmp_path / "out.mp4"))
+
+        assert result.success is False
+        assert "not found" in result.error.lower()
+
+    def test_normalize_video_ffmpeg_timeout(self, tmp_path, mocker):
+        """TimeoutExpired from FFmpeg returns failure with timeout message."""
+        import subprocess
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
+            side_effect=subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=120),
+        )
+
+        input_file = tmp_path / "in.mp4"
+        input_file.write_bytes(b"x" * 10000)
+
+        normalizer = SceneNormalizer()
+        result = normalizer.normalize(str(input_file), str(tmp_path / "out.mp4"))
+
+        assert result.success is False
+        assert "timed out" in result.error.lower()
+
+    def test_normalize_image_ffmpeg_not_found(self, tmp_path, mocker):
+        """Image path: FileNotFoundError from FFmpeg returns failure."""
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
+            side_effect=FileNotFoundError("ffmpeg not on PATH"),
+        )
+
+        input_file = tmp_path / "scene.jpg"
+        input_file.write_bytes(b"\xff\xd8\xff\xe0" + b"x" * 10000)
+
+        normalizer = SceneNormalizer()
+        result = normalizer.normalize(str(input_file), str(tmp_path / "out.mp4"))
+
+        assert result.success is False
+        assert "not found" in result.error.lower()
+
+    def test_normalize_image_ffmpeg_timeout(self, tmp_path, mocker):
+        """Image path: TimeoutExpired from FFmpeg returns failure."""
+        import subprocess
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
+            side_effect=subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=300),
+        )
+
+        input_file = tmp_path / "scene.jpg"
+        input_file.write_bytes(b"\xff\xd8\xff\xe0" + b"x" * 10000)
+
+        normalizer = SceneNormalizer()
+        result = normalizer.normalize(str(input_file), str(tmp_path / "out.mp4"))
+
+        assert result.success is False
+        assert "timed out" in result.error.lower()
+
+    def test_normalize_image_ffmpeg_error(self, tmp_path, mocker):
+        """Image path: CalledProcessError returns failure with exit code."""
+        import subprocess
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
+            side_effect=subprocess.CalledProcessError(1, ["ffmpeg"], stderr="zoompan failed"),
+        )
+
+        input_file = tmp_path / "scene.jpg"
+        input_file.write_bytes(b"\xff\xd8\xff\xe0" + b"x" * 10000)
+
+        normalizer = SceneNormalizer()
+        result = normalizer.normalize(str(input_file), str(tmp_path / "out.mp4"))
+
+        assert result.success is False
+        assert "exit code" in result.error.lower()
+        assert result.stderr == "zoompan failed"
+
+
 class TestSceneNormalizerImageDetection:
     """Tests for _is_image static method."""
 
