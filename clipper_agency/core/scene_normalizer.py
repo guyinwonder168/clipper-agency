@@ -1,8 +1,15 @@
 """Scene normalization — ensures all clips are 1080x1920 h264 yuv420p."""
+import logging
 import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
+
+logger = logging.getLogger(__name__)
+
+_NORMALIZE_TIMEOUT = 120  # seconds
 
 
 @dataclass(frozen=True)
@@ -69,20 +76,23 @@ class SceneNormalizer:
         ]
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, timeout=120)
-            if proc.returncode != 0:
-                return NormalizeResult(
-                    path=input_path,
-                    success=False,
-                    error=f"FFmpeg exit code {proc.returncode}",
-                    stderr=proc.stderr.decode(errors="replace"),
-                )
-            return NormalizeResult(path=output_path, success=True)
+            logger.debug(
+                "Normalizer: scene %s → %s", Path(input_path).name, Path(output_path).name,
+            )
+            stderr_text = run_ffmpeg_streaming(cmd, timeout=_NORMALIZE_TIMEOUT, label="normalize")
+            return NormalizeResult(path=output_path, success=True, stderr=stderr_text)
         except FileNotFoundError:
             return NormalizeResult(
                 path=input_path, success=False, error="FFmpeg not found"
             )
         except subprocess.TimeoutExpired:
             return NormalizeResult(
-                path=input_path, success=False, error="FFmpeg timed out"
+                path=input_path, success=False, error=f"FFmpeg timed out ({_NORMALIZE_TIMEOUT}s)"
+            )
+        except subprocess.CalledProcessError as e:
+            return NormalizeResult(
+                path=input_path,
+                success=False,
+                error=f"FFmpeg exit code {e.returncode}",
+                stderr=e.stderr or "",
             )

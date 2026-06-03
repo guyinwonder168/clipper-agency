@@ -14,6 +14,7 @@ from clipper_agency.core.artifacts import write_json
 from clipper_agency.core.card_generator import CardGenerator, CardType
 from clipper_agency.core.card_to_video import card_to_video
 from clipper_agency.core.ffmpeg_preflight import FFmpegPreflight
+from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
 from clipper_agency.core.paths import (
     agent_input_file,
     agent_output_file,
@@ -28,6 +29,9 @@ from clipper_agency.rendering.renderers.rapid_update import build_rapid_update_p
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
+
+_FFMPEG_CONCAT_TIMEOUT = 600  # seconds
+_FFMPEG_NORMALIZE_TIMEOUT = 120  # seconds
 
 
 class ComposerAgent(BaseAgent):
@@ -83,6 +87,21 @@ class ComposerAgent(BaseAgent):
                 title=kwargs.get("title", template_name),
             )
 
+        return self._execute_assembly(
+            video_assets, voice_files, output_dir, assets_cache,
+            job_id, agent_dir,
+        )
+
+    def _execute_assembly(
+        self,
+        video_assets: list[dict],
+        voice_files: list[str],
+        output_dir: str,
+        assets_cache: str,
+        job_id: int,
+        agent_dir: str,
+    ) -> dict[str, Any]:
+        """Run the assembly pipeline: concat scenes + mix audio + thumbnail."""
         if not video_assets and not voice_files:
             logger.warning("Composer: no assets or audio — skipping")
             return {
@@ -95,45 +114,12 @@ class ComposerAgent(BaseAgent):
         thumbnail_path = f"{output_dir}/job_{job_id}/thumbnail.png"
 
         try:
-            assemble_result = self._assemble_video(
-                video_assets, voice_files, video_path,
+            return self._try_assemble(
+                video_assets, voice_files, video_path, thumbnail_path,
+                assets_cache, job_id, agent_dir,
             )
-            ffmpeg_cmd = assemble_result["cmd"]
-            card_fallback_scenes = assemble_result.get(
-                "card_fallback_scenes", [],
-            )
-            self._generate_thumbnail(video_path, thumbnail_path)
-
-            logger.info(
-                "Composer: completed — video=%s thumbnail=%s cards=%d",
-                video_path, thumbnail_path, len(card_fallback_scenes),
-            )
-
-            output = {
-                "status": "completed",
-                "video_path": video_path,
-                "thumbnail_path": thumbnail_path,
-                "card_fallback_scenes": card_fallback_scenes,
-            }
-            if agent_dir:
-                self._persist_diagnostics(agent_dir, ffmpeg_cmd, "")
-                write_json(agent_output_file(assets_cache, job_id, "composer"),
-                            output)
-            return output
         except subprocess.CalledProcessError as e:
-            stderr_raw = e.stderr or b""
-            stderr_text = stderr_raw.strip()
-            if isinstance(stderr_text, bytes):
-                stderr_text = stderr_text.decode()
-            logger.error("Composer: FFmpeg failed — %s", stderr_text[:500])
-            if agent_dir:
-                self._persist_diagnostics(agent_dir, getattr(e, 'cmd', []), stderr_text)
-            return {
-                "status": "failed",
-                "error": stderr_text or str(e),
-                "video_path": video_path,
-                "thumbnail_path": "",
-            }
+            return self._handle_ffmpeg_error(e, video_path, agent_dir)
         except Exception as e:
             logger.exception("Composer: unexpected error")
             return {
@@ -142,6 +128,79 @@ class ComposerAgent(BaseAgent):
                 "video_path": video_path,
                 "thumbnail_path": "",
             }
+
+    def _try_assemble(
+        self,
+        video_assets: list[dict],
+        voice_files: list[str],
+        video_path: str,
+        thumbnail_path: str,
+        assets_cache: str,
+        job_id: int,
+        agent_dir: str,
+    ) -> dict[str, Any]:
+        """Attempt assembly. Raises on FFmpeg or unexpected errors."""
+        assemble_result = self._assemble_video(
+            video_assets, voice_files, video_path,
+        )
+        ffmpeg_cmd = assemble_result["cmd"]
+        card_fallback_scenes = assemble_result.get(
+            "card_fallback_scenes", [],
+        )
+        if not ffmpeg_cmd:
+            logger.error(
+                "Composer: no valid scenes assembled — failing (card_fallback=%s)",
+                card_fallback_scenes,
+            )
+            output = {
+                "status": "failed",
+                "error": "No valid scenes to assemble",
+                "video_path": "",
+                "thumbnail_path": "",
+                "card_fallback_scenes": card_fallback_scenes,
+            }
+            if agent_dir:
+                write_json(agent_output_file(assets_cache, job_id, "composer"), output)
+            return output
+        self._generate_thumbnail(video_path, thumbnail_path)
+
+        logger.info(
+            "Composer: completed — video=%s thumbnail=%s cards=%d",
+            video_path, thumbnail_path, len(card_fallback_scenes),
+        )
+
+        output = {
+            "status": "completed",
+            "video_path": video_path,
+            "thumbnail_path": thumbnail_path,
+            "card_fallback_scenes": card_fallback_scenes,
+        }
+        if agent_dir:
+            self._persist_diagnostics(agent_dir, ffmpeg_cmd, "")
+            write_json(agent_output_file(assets_cache, job_id, "composer"),
+                        output)
+        return output
+
+    def _handle_ffmpeg_error(
+        self,
+        error: subprocess.CalledProcessError,
+        video_path: str,
+        agent_dir: str,
+    ) -> dict[str, Any]:
+        """Build a failure dict from an FFmpeg CalledProcessError."""
+        stderr_raw = error.stderr or b""
+        stderr_text = stderr_raw.strip()
+        if isinstance(stderr_text, bytes):
+            stderr_text = stderr_text.decode()
+        logger.error("Composer: FFmpeg failed — %s", stderr_text[:500])
+        if agent_dir:
+            self._persist_diagnostics(agent_dir, getattr(error, 'cmd', []), stderr_text)
+        return {
+            "status": "failed",
+            "error": stderr_text or str(error),
+            "video_path": video_path,
+            "thumbnail_path": "",
+        }
 
     def _render_via_template(
         self,
@@ -416,7 +475,12 @@ class ComposerAgent(BaseAgent):
                 output_path,
             ])
 
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(
+                "Composer: starting FFmpeg concat — %d video + %d audio → %s",
+                len(valid_normalized), len(audio_files), output_path,
+            )
+            run_ffmpeg_streaming(cmd, timeout=600, label="concat")
+            logger.info("Composer: FFmpeg concat completed — %s", output_path)
 
             # ── Persist card fallback metadata ──
             output_dir = Path(output_path).parent
@@ -436,4 +500,4 @@ class ComposerAgent(BaseAgent):
             "-vf", "scale=720:1280",
             thumbnail_path,
         ]
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        run_ffmpeg_streaming(cmd, timeout=60, label="thumbnail")

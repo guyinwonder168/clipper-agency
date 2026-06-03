@@ -1,6 +1,8 @@
 # Visual Director LLM Planning Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+**Status:** ✅ Completed
+
+> ~~**For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.~~
 
 **Goal:** Replace Visual Director's dumb sequential URL assignment with LLM-driven per-scene visual planning that reads research data, engagement metrics, and the research brief.
 
@@ -1146,4 +1148,16 @@ If any tests fail: STOP. Report failure. Do NOT auto-fix.
 | 6 | visual_director.py | ~80 | `_execute_plan()` + `_fetch_image()` |
 | 7 | visual_director.py + engine.py | ~30 | Wire up + engine changes |
 | 8 | — | 0 | Verification |
-| **Total** | **8 files** | **~260 new lines** | |
+| **Total** | **8 files** | **~260 new lines** |
+
+---
+
+## Completion Note
+
+All 8 tasks verified as implemented and merged into `master`. Key evidence:
+- `prompts/` — all prompt files are `.md` (Task 1), `visual_director.md` exists with action types (Task 3)
+- `pexels.py` — `search_photos()` at line 85 (Task 2)
+- `visual_director.py` — `_compact_research_data()` (L178), `_plan_with_llm()` (L222), `_execute_plan()` (L348), `_fetch_image()` (L440) (Tasks 4-6)
+- `engine.py` — resolves and passes `research_contract_path`/`research_brief_path` to Visual Director (Task 7)
+- `tests/test_agents_visual.py` — `TestCompactResearchData`, `TestPlanWithLLM`, `TestExecutePlan`, `TestLLMPlanningIntegration` all passing (Task 8)
+- **642 offline tests pass** (2 deselected, same as baseline) |

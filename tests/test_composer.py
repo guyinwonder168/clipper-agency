@@ -8,13 +8,43 @@ import pytest
 from clipper_agency.agents.composer import ComposerAgent
 
 
+def _mock_preflight_ok(mocker):
+    """Mock FFmpegPreflight.probe() to return a passing result."""
+    mock_result = mocker.MagicMock()
+    mock_result.ffmpeg_found = True
+    mock_result.ffprobe_found = True
+    mock_result.libx264_available = True
+    mock_result.aac_available = True
+    mock_result.mp3_decode_available = True
+    mock_result.all_ok.return_value = True
+    mocker.patch(
+        "clipper_agency.core.ffmpeg_preflight.FFmpegPreflight.probe",
+        return_value=mock_result,
+    )
+    mocker.patch("dataclasses.asdict", return_value={"ffmpeg_found": True})
+
+
 class TestComposerArtifacts:
     """Composer writes input/output, FFmpeg diagnostics to agent dir."""
 
     def test_output_video_named_video_mp4(self, tmp_path, mocker):
         """Output video should be video.mp4, not final.mp4."""
-        mocker.patch("subprocess.run")
-        mocker.patch("subprocess.check_output", return_value=b"libx264\naac\nmp3")
+        _mock_preflight_ok(mocker)
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
+        # Bypass scene validation/normalization (no real files on CI)
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                     return_value=mocker.MagicMock(
+                         width=1080, height=1920, codec="h264",
+                         duration=30.0, has_audio=False,
+                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mocker.MagicMock(success=True, error=""),
+        )
         agent = ComposerAgent()
         result = agent.execute(
             job_id=30,
@@ -27,8 +57,8 @@ class TestComposerArtifacts:
         assert "final.mp4" not in video_path
 
     def test_persists_input_json(self, tmp_path, mocker):
-        mocker.patch("subprocess.run")
-        mocker.patch("subprocess.check_output", return_value=b"libx264\naac\nmp3")
+        _mock_preflight_ok(mocker)
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
         agent = ComposerAgent()
         agent.execute(
             job_id=31,
@@ -46,8 +76,8 @@ class TestComposerArtifacts:
         assert data["audio_file_count"] == 1
 
     def test_persists_ffmpeg_command(self, tmp_path, mocker):
-        mock_run = mocker.patch("subprocess.run")
-        mocker.patch("subprocess.check_output", return_value=b"libx264\naac\nmp3")
+        _mock_preflight_ok(mocker)
+        mock_ffmpeg = mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
         # Bypass new scene validation/normalization chain
         mocker.patch(
             "clipper_agency.core.scene_validator.SceneValidator.validate",
@@ -79,8 +109,8 @@ class TestComposerArtifacts:
         assert "-filter_complex" in content
 
     def test_persists_output_json(self, tmp_path, mocker):
-        mocker.patch("subprocess.run")
-        mocker.patch("subprocess.check_output", return_value=b"libx264\naac\nmp3")
+        _mock_preflight_ok(mocker)
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
         mocker.patch(
             "clipper_agency.core.scene_validator.SceneValidator.validate",
             return_value=mocker.MagicMock(valid=True, issues=[]),
@@ -116,7 +146,7 @@ class TestComposerArtifacts:
 
         err = subprocess.CalledProcessError(
             1, "ffmpeg",
-            stderr=b"File not found: invalid input\n",
+            stderr="File not found: invalid input\n",
         )
         # Preflight must pass; actual ffmpeg compose fails
         mock_result = mocker.MagicMock()
@@ -131,7 +161,11 @@ class TestComposerArtifacts:
             return_value=mock_result,
         )
         mocker.patch("dataclasses.asdict", return_value={"ffmpeg_found": True})
-        mocker.patch("subprocess.run", side_effect=err)
+        # Mock run_ffmpeg_streaming to raise on concat call, succeed on thumbnail
+        mocker.patch(
+            "clipper_agency.agents.composer.run_ffmpeg_streaming",
+            side_effect=err,
+        )
         mocker.patch("subprocess.check_output", return_value=b"libx264\naac\nmp3")
         # Bypass scene validation/normalization — only concat should fail
         mocker.patch(
@@ -167,8 +201,22 @@ class TestComposerOutputNaming:
     """Video output uses video.mp4 naming convention."""
 
     def test_video_path_includes_job_id(self, mocker):
-        mocker.patch("subprocess.run")
-        mocker.patch("subprocess.check_output", return_value=b"libx264\naac\nmp3")
+        _mock_preflight_ok(mocker)
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
+        # Bypass scene validation/normalization (no real files on CI)
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                     return_value=mocker.MagicMock(
+                         width=1080, height=1920, codec="h264",
+                         duration=30.0, has_audio=False,
+                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mocker.MagicMock(success=True, error=""),
+        )
         agent = ComposerAgent()
         result = agent.execute(
             job_id=35,

@@ -1,7 +1,7 @@
 # Visual Director LLM Planning Design
 
 **Date:** 2026-05-31  
-**Status:** Approved  
+**Status:** ✅ Completed  
 **Phase:** 16 (Visual Director Intelligence)
 
 ## Problem Statement
@@ -228,3 +228,12 @@ Techniques from Infographics Show + Tribunnews Shorts analysis:
 1. **Prompt deduplication** — Remove hardcoded "Indonesian artist infotainment" from 4 existing prompt files, replace with niche config variables. Separate phase.
 2. **LLM-powered Orchestrator** — Research validated: use simplest pattern that works. Our pipeline is sequential/deterministic — don't make orchestrator smart, make agents smart. Can evolve later.
 3. **text_card rendering** — Composer template engine already supports cards. The LLM output schema aligns with existing Composer template variables. No Composer changes needed now.
+
+---
+
+## Completion Note
+
+Design fully implemented as of earlier phases (Phase 16). All deferred items remain valid for future phases:
+- Prompt deduplication → ✅ Completed in Phase 17
+- LLM-powered Orchestrator → Stays deferred
+- text_card rendering → Already supported via Composer templates
