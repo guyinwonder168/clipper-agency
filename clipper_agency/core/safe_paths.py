@@ -19,11 +19,19 @@ def resolve_existing_file_under(
     try:
         base = Path(base_dir).resolve()
         candidate_path = Path(candidate)
-        resolved = (
-            candidate_path.resolve()
-            if candidate_path.is_absolute()
-            else (base / candidate_path).resolve()
-        )
+        if candidate_path.is_absolute():
+            resolved = candidate_path.resolve()
+        else:
+            # Resolve relative candidate from CWD first (handles cases where
+            # caller passes a path like "data/outputs/job_N/video.mp4" that
+            # already contains the base_dir prefix).  Fall back to resolving
+            # from base_dir when the CWD-resolution does not sit inside base.
+            resolved = candidate_path.resolve()
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                resolved = (base / candidate_path).resolve()
+
         resolved.relative_to(base)
     except (OSError, RuntimeError, TypeError, ValueError):
         return None
