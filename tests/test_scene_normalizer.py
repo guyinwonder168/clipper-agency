@@ -9,7 +9,7 @@ class TestSceneNormalizer:
     def test_normalize_scales_to_1080x1920(self, tmp_path, mocker):
         """Non-9:16 input gets scaled/padded to 1080x1920."""
         mock_ffmpeg = mocker.patch(
-            "clipper_agency.core.scene_normalizer._run_ffmpeg_streaming",
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
             return_value="",
         )
         mocker.patch("subprocess.check_output", return_value=b"")
@@ -37,7 +37,7 @@ class TestSceneNormalizer:
                                               sample_aspect_ratio="1:1"))
 
         mock_ffmpeg = mocker.patch(
-            "clipper_agency.core.scene_normalizer._run_ffmpeg_streaming",
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
         )
         input_file = tmp_path / "in.mp4"
         input_file.write_bytes(b"x" * 10000)
@@ -51,7 +51,7 @@ class TestSceneNormalizer:
     def test_normalize_strips_audio_from_source(self, tmp_path, mocker):
         """Source audio is stripped (-an flag)."""
         mock_ffmpeg = mocker.patch(
-            "clipper_agency.core.scene_normalizer._run_ffmpeg_streaming",
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
             return_value="",
         )
 
@@ -74,7 +74,7 @@ class TestSceneNormalizer:
     def test_normalize_handles_ffmpeg_error(self, tmp_path, mocker):
         """FFmpeg non-zero exit returns failure."""
         mocker.patch(
-            "clipper_agency.core.scene_normalizer._run_ffmpeg_streaming",
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
             side_effect=subprocess.CalledProcessError(1, ["ffmpeg"], stderr="ffmpeg error"),
         )
 
@@ -89,7 +89,7 @@ class TestSceneNormalizer:
     def test_normalize_sets_sar_to_1(self, tmp_path, mocker):
         """Filter chain ends with setsar=1 for consistent concat compatibility."""
         mock_ffmpeg = mocker.patch(
-            "clipper_agency.core.scene_normalizer._run_ffmpeg_streaming",
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
             return_value="",
         )
 
@@ -105,7 +105,7 @@ class TestSceneNormalizer:
     def test_normalize_uses_force_original_aspect_ratio(self, tmp_path, mocker):
         """Scale filter includes force_original_aspect_ratio=decrease."""
         mock_ffmpeg = mocker.patch(
-            "clipper_agency.core.scene_normalizer._run_ffmpeg_streaming",
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
             return_value="",
         )
 
@@ -126,7 +126,7 @@ class TestSceneNormalizer:
                           sample_aspect_ratio="7664:7665"))
 
         mock_ffmpeg = mocker.patch(
-            "clipper_agency.core.scene_normalizer._run_ffmpeg_streaming",
+            "clipper_agency.core.scene_normalizer.run_ffmpeg_streaming",
             return_value="",
         )
 

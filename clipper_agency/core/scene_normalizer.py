@@ -2,57 +2,14 @@
 import logging
 import os
 import subprocess
-import threading
 from dataclasses import dataclass
 from pathlib import Path
+
+from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
 
 logger = logging.getLogger(__name__)
 
 _NORMALIZE_TIMEOUT = 120  # seconds
-
-
-def _run_ffmpeg_streaming(cmd: list[str], timeout: int, label: str) -> str:
-    """Run FFmpeg with streaming stderr logging and timeout.
-
-    Returns full stderr text for diagnostics.
-    """
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    stderr_lines: list[str] = []
-
-    def _drain() -> None:
-        assert proc.stderr is not None
-        for line in proc.stderr:
-            stderr_lines.append(line)
-            stripped = line.rstrip()
-            if stripped:
-                logger.debug("FFmpeg %s: %s", label, stripped)
-
-    drain = threading.Thread(target=_drain, daemon=True)
-    drain.start()
-
-    try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=10)
-        drain.join(timeout=5)
-        stderr_text = "".join(stderr_lines)
-        logger.error(
-            "FFmpeg %s timed out after %ds — stderr tail: %s",
-            label, timeout, stderr_text[-300:] if stderr_text else "(empty)",
-        )
-        raise
-    drain.join(timeout=5)
-
-    stderr_text = "".join(stderr_lines)
-    if proc.returncode != 0:
-        logger.error(
-            "FFmpeg %s failed (rc=%d) — stderr tail: %s",
-            label, proc.returncode, stderr_text[-300:] if stderr_text else "(empty)",
-        )
-        raise subprocess.CalledProcessError(proc.returncode, cmd, stderr=stderr_text)
-
-    return stderr_text
 
 
 @dataclass(frozen=True)
@@ -122,7 +79,7 @@ class SceneNormalizer:
             logger.debug(
                 "Normalizer: scene %s → %s", Path(input_path).name, Path(output_path).name,
             )
-            stderr_text = _run_ffmpeg_streaming(cmd, timeout=_NORMALIZE_TIMEOUT, label="normalize")
+            stderr_text = run_ffmpeg_streaming(cmd, timeout=_NORMALIZE_TIMEOUT, label="normalize")
             return NormalizeResult(path=output_path, success=True, stderr=stderr_text)
         except FileNotFoundError:
             return NormalizeResult(

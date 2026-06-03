@@ -255,7 +255,7 @@ class TestComposerExecute:
 
     def test_assemble_video_empty_inputs_returns_early(self, mocker):
         """Line 86: no video inputs → early return, no ffmpeg call."""
-        mock_ffmpeg = mocker.patch("clipper_agency.agents.composer._run_ffmpeg")
+        mock_ffmpeg = mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
         agent = ComposerAgent()
         agent._assemble_video([], [], "/tmp/output.mp4")
         mock_ffmpeg.assert_not_called()
@@ -392,8 +392,8 @@ class TestComposerCardFallback:
 
         mock_norm.normalize = mocker.Mock(side_effect=norm_side_effect)
 
-        # Mock _run_ffmpeg for final concat
-        mock_run = mocker.patch("clipper_agency.agents.composer._run_ffmpeg")
+        # Mock run_ffmpeg_streaming for final concat
+        mock_run = mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
 
         assets = [
             {"scene": 1, "path": ""},
@@ -458,8 +458,8 @@ class TestComposerCardFallback:
 
         mock_norm.normalize = mocker.Mock(side_effect=norm_side_effect)
 
-        # Mock _run_ffmpeg for concat
-        mocker.patch("clipper_agency.agents.composer._run_ffmpeg")
+        # Mock run_ffmpeg_streaming for concat
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
 
         assets = [
             {"scene": 1, "path": str(valid_scene)},
@@ -507,8 +507,8 @@ class TestComposerCardFallback:
 
         mock_norm.normalize = mocker.Mock(side_effect=norm_side_effect)
 
-        # Mock _run_ffmpeg for final concat — capture the command
-        mock_ffmpeg = mocker.patch("clipper_agency.agents.composer._run_ffmpeg")
+        # Mock run_ffmpeg_streaming for final concat — capture the command
+        mock_ffmpeg = mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
 
         assets = [
             {"scene": 1, "path": str(valid_scene)},
@@ -650,7 +650,7 @@ class TestComposerAudioAssembly:
             return_value=NormalizeResult(path=str(valid_scene), success=True),
         )
 
-        mock_run = mocker.patch("clipper_agency.agents.composer._run_ffmpeg")
+        mock_run = mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
 
         assets = [
             {"scene": 1, "path": str(valid_scene)},
