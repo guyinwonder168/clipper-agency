@@ -6,6 +6,7 @@ import logging
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,55 @@ from clipper_agency.rendering.renderers.rapid_update import build_rapid_update_p
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
+
+_FFMPEG_CONCAT_TIMEOUT = 600  # seconds
+_FFMPEG_NORMALIZE_TIMEOUT = 120  # seconds
+
+
+def _run_ffmpeg(cmd: list[str], timeout: int, label: str) -> str:
+    """Run an FFmpeg command with real-time progress logging and timeout.
+
+    Streams stderr (where FFmpeg writes progress) line-by-line to DEBUG log.
+    Returns the full stderr text for diagnostics.
+    """
+    logger.debug("FFmpeg %s command: %s", label, " ".join(cmd))
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stderr_lines: list[str] = []
+
+    def _drain_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            stderr_lines.append(line)
+            stripped = line.rstrip()
+            if stripped:
+                logger.debug("FFmpeg %s: %s", label, stripped)
+
+    drain_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    drain_thread.start()
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
+        drain_thread.join(timeout=5)
+        stderr_text = "".join(stderr_lines)
+        logger.error(
+            "FFmpeg %s timed out after %ds — stderr tail: %s",
+            label, timeout, stderr_text[-500:] if stderr_text else "(empty)",
+        )
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    drain_thread.join(timeout=5)
+
+    stderr_text = "".join(stderr_lines)
+    if proc.returncode != 0:
+        logger.error(
+            "FFmpeg %s failed (rc=%d) — stderr tail: %s",
+            label, proc.returncode, stderr_text[-500:] if stderr_text else "(empty)",
+        )
+        raise subprocess.CalledProcessError(proc.returncode, cmd, stderr=stderr_text)
+
+    return stderr_text
 
 
 class ComposerAgent(BaseAgent):
@@ -102,6 +152,17 @@ class ComposerAgent(BaseAgent):
             card_fallback_scenes = assemble_result.get(
                 "card_fallback_scenes", [],
             )
+            if not ffmpeg_cmd:
+                logger.warning("Composer: no FFmpeg command produced — skipping thumbnail")
+                output = {
+                    "status": "completed",
+                    "video_path": "",
+                    "thumbnail_path": "",
+                    "card_fallback_scenes": card_fallback_scenes,
+                }
+                if agent_dir:
+                    write_json(agent_output_file(assets_cache, job_id, "composer"), output)
+                return output
             self._generate_thumbnail(video_path, thumbnail_path)
 
             logger.info(
@@ -416,7 +477,12 @@ class ComposerAgent(BaseAgent):
                 output_path,
             ])
 
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(
+                "Composer: starting FFmpeg concat — %d video + %d audio → %s",
+                len(valid_normalized), len(audio_files), output_path,
+            )
+            _run_ffmpeg(cmd, timeout=600, label="concat")
+            logger.info("Composer: FFmpeg concat completed — %s", output_path)
 
             # ── Persist card fallback metadata ──
             output_dir = Path(output_path).parent
@@ -436,4 +502,4 @@ class ComposerAgent(BaseAgent):
             "-vf", "scale=720:1280",
             thumbnail_path,
         ]
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        _run_ffmpeg(cmd, timeout=60, label="thumbnail")
