@@ -343,6 +343,7 @@ class ComposerAgent(BaseAgent):
         card_gen: Any,
         scene_num: int,
         scene_path: str,
+        asset: dict | None = None,
     ) -> tuple[str | None, bool]:
         """Process a single scene: validate, normalize, or generate card fallback.
 
@@ -434,7 +435,7 @@ class ComposerAgent(BaseAgent):
                 scene_num = int(asset.get("scene", i + 1))
                 norm_path, was_card = self._process_scene(
                     temp_dir, normalizer, card_gen,
-                    scene_num, scene_path,
+                    scene_num, scene_path, asset=asset,
                 )
                 if norm_path:
                     normalized_scene_paths.append(norm_path)
@@ -447,11 +448,17 @@ class ComposerAgent(BaseAgent):
                 logger.warning("Composer: no valid scenes to assemble")
                 return {"cmd": [], "card_fallback_scenes": card_fallback_scenes}
 
-            # Build normalized asset list for filter graph
-            normalized_assets = [
-                {"scene": i + 1, "path": p}
-                for i, p in enumerate(normalized_scene_paths) if p
-            ]
+            # Build normalized asset list preserving treatment metadata
+            normalized_assets = []
+            for i, asset in enumerate(assets):
+                norm_path = normalized_scene_paths[i] if i < len(normalized_scene_paths) else None
+                if norm_path:
+                    enriched = {"scene": i + 1, "path": norm_path}
+                    # Preserve treatment metadata from visual director
+                    for field in ("treatment", "target_duration", "transition_in", "transition_out"):
+                        if field in asset:
+                            enriched[field] = asset[field]
+                    normalized_assets.append(enriched)
 
             cmd = ["ffmpeg", "-y"]
             for n in valid_normalized:

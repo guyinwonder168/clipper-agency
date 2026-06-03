@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 class VisualDirectorAgent(BaseAgent):
     """Sources video assets and plans scene layouts for video composition."""
 
+    _IMAGE_SOURCES = frozenset({"pexels_image"})
+    _VIDEO_SOURCES = frozenset({"tiktok_clip", "pexels_video", "tiktok", "pexels"})
+
     @property
     def agent_name(self) -> str:
         return "visual_director"
@@ -374,9 +377,37 @@ class VisualDirectorAgent(BaseAgent):
                 if field in item:
                     asset[field] = item[field]
 
+            asset = self._apply_default_treatment(asset)
             assets.append(asset)
 
         return assets
+
+    def _apply_default_treatment(self, asset: dict) -> dict:
+        """Fill in missing treatment metadata with sensible defaults."""
+        source = asset.get("source", "")
+
+        defaults: dict[str, Any] = {
+            "transition_in": "crossfade",
+            "transition_out": "crossfade",
+        }
+
+        if source in self._IMAGE_SOURCES:
+            defaults["treatment"] = "ken_burns_zoom_in"
+            defaults["target_duration"] = 5
+        elif source in self._VIDEO_SOURCES:
+            defaults["treatment"] = "broll_standard"
+            defaults["target_duration"] = 5
+        elif source == "text_card":
+            defaults["treatment"] = "text_card_reveal"
+            defaults["target_duration"] = 4
+        else:
+            defaults["treatment"] = "broll_standard"
+            defaults["target_duration"] = 5
+
+        for key, value in defaults.items():
+            asset.setdefault(key, value)
+
+        return asset
 
     def _execute_action(
         self, action: dict, scene_id: int, scenes_dir: str,

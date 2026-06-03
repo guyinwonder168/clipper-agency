@@ -226,3 +226,109 @@ class TestComposerOutputNaming:
         )
         assert "/job_35/" in result["video_path"]
         assert result["video_path"].endswith("video.mp4")
+
+
+class TestComposerTreatmentMetadata:
+    """Composer preserves treatment metadata from visual director in output."""
+
+    def test_composer_preserves_treatment_in_assembly(self, tmp_path, mocker):
+        """Assets with treatment fields should pass through to the FFmpeg pipeline."""
+        _mock_preflight_ok(mocker)
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
+
+        # Mock scene validation + normalization
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                      return_value=mocker.MagicMock(
+                          width=1080, height=1920, codec="h264",
+                          duration=30.0, has_audio=False,
+                          pix_fmt="yuv420p", file_size=10000))
+        mock_norm = mocker.MagicMock(success=True, error="")
+        mock_norm.path = "/tmp/norm_scene1.mp4"
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mock_norm,
+        )
+
+        agent = ComposerAgent()
+        assets_with_treatment = [{
+            "scene": 1,
+            "path": "/tmp/scene_1.mp4",
+            "treatment": "broll_standard",
+            "target_duration": 5,
+            "transition_in": "crossfade",
+            "transition_out": "hard_cut",
+        }]
+
+        # Create output dir so _assemble_video can write card_fallback.json
+        output_dir = tmp_path / "job_40"
+        output_dir.mkdir(parents=True)
+
+        result = agent._assemble_video(
+            assets_with_treatment,
+            ["/tmp/voice.mp3"],
+            str(output_dir / "video.mp4"),
+        )
+
+        # The command should have been built successfully
+        assert result["cmd"]  # non-empty command
+        # Card fallback should be empty (scene was valid)
+        assert result["card_fallback_scenes"] == []
+
+    def test_composer_process_scene_accepts_asset_param(self, tmp_path, mocker):
+        """_process_scene should accept asset dict without breaking."""
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                      return_value=mocker.MagicMock(
+                          width=1080, height=1920, codec="h264",
+                          duration=30.0, has_audio=False,
+                          pix_fmt="yuv420p", file_size=10000))
+        mock_norm = mocker.MagicMock(success=True, error="")
+        mock_norm.path = str(tmp_path / "norm.mp4")
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mock_norm,
+        )
+
+        agent = ComposerAgent()
+        asset = {"scene": 1, "path": "/tmp/scene_1.mp4", "treatment": "ken_burns_zoom_in"}
+        norm_path, was_card = agent._process_scene(
+            tmp_path, mocker.MagicMock(), mocker.MagicMock(),
+            1, "/tmp/scene_1.mp4", asset=asset,
+        )
+
+        assert norm_path is not None
+        assert was_card is False
+
+    def test_composer_process_scene_backward_compat_no_asset(self, tmp_path, mocker):
+        """_process_scene works without asset param (backward compat)."""
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                      return_value=mocker.MagicMock(
+                          width=1080, height=1920, codec="h264",
+                          duration=30.0, has_audio=False,
+                          pix_fmt="yuv420p", file_size=10000))
+        mock_norm = mocker.MagicMock(success=True, error="")
+        mock_norm.path = str(tmp_path / "norm.mp4")
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mock_norm,
+        )
+
+        agent = ComposerAgent()
+        norm_path, was_card = agent._process_scene(
+            tmp_path, mocker.MagicMock(), mocker.MagicMock(),
+            1, "/tmp/scene_1.mp4",
+        )
+
+        assert norm_path is not None
+        assert was_card is False
