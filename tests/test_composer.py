@@ -31,6 +31,20 @@ class TestComposerArtifacts:
         """Output video should be video.mp4, not final.mp4."""
         _mock_preflight_ok(mocker)
         mocker.patch("clipper_agency.agents.composer._run_ffmpeg")
+        # Bypass scene validation/normalization (no real files on CI)
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                     return_value=mocker.MagicMock(
+                         width=1080, height=1920, codec="h264",
+                         duration=30.0, has_audio=False,
+                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mocker.MagicMock(success=True, error=""),
+        )
         agent = ComposerAgent()
         result = agent.execute(
             job_id=30,
@@ -189,6 +203,20 @@ class TestComposerOutputNaming:
     def test_video_path_includes_job_id(self, mocker):
         _mock_preflight_ok(mocker)
         mocker.patch("clipper_agency.agents.composer._run_ffmpeg")
+        # Bypass scene validation/normalization (no real files on CI)
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                     return_value=mocker.MagicMock(
+                         width=1080, height=1920, codec="h264",
+                         duration=30.0, has_audio=False,
+                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mocker.MagicMock(success=True, error=""),
+        )
         agent = ComposerAgent()
         result = agent.execute(
             job_id=35,
