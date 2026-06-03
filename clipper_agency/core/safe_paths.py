@@ -22,15 +22,31 @@ def resolve_existing_file_under(
         if candidate_path.is_absolute():
             resolved = candidate_path.resolve()
         else:
-            # Resolve relative candidate from CWD first (handles cases where
-            # caller passes a path like "data/outputs/job_N/video.mp4" that
-            # already contains the base_dir prefix).  Fall back to resolving
-            # from base_dir when the CWD-resolution does not sit inside base.
-            resolved = candidate_path.resolve()
+            # Primary: resolve relative to base_dir (documented contract).
+            resolved = (base / candidate_path).resolve()
             try:
                 resolved.relative_to(base)
             except ValueError:
-                resolved = (base / candidate_path).resolve()
+                resolved = None
+
+            # Fallback: when base-relative fails or doesn't exist, try
+            # resolving from CWD.  This handles callers like G10 that pass
+            # a full relative path (e.g. "data/outputs/job_N/video.mp4")
+            # whose prefix already traces to base_dir.  CWD-resolution
+            # never overrides a valid base-relative result so the Packager
+            # contract (base = output_dir, candidate = "video.mp4") is
+            # unaffected.
+            if resolved is None or not resolved.is_file():
+                from_cwd = candidate_path.resolve()
+                try:
+                    from_cwd.relative_to(base)
+                    if from_cwd.is_file():
+                        resolved = from_cwd
+                except ValueError:
+                    pass
+
+            if resolved is None:
+                return None
 
         resolved.relative_to(base)
     except (OSError, RuntimeError, TypeError, ValueError):
