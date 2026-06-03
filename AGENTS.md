@@ -4,8 +4,8 @@ Project-specific instructions for AI agents working in this repository.
 
 ## Repository State
 
-- **Greenfield project** — early implementation phase (Phases 0-17 complete).
-- All 642 offline tests pass (2 pre-existing `integration`-marked tests deselected — `test_full_pipeline_smoke` requires FFmpeg + paid API keys, 1 other requires API keys). 7 agents built + Orchestrator engine + CLI interface + Web dashboard + data-driven config/prompt files + Docker deployment + pydantic-settings .env config system + structured logging + per-agent model config + test-agent CLI + configurable TTS provider (ElevenLabs/Gemini TTS/Fish Audio fallback) + artifact workspace contract + job debug dashboard/CLI + job manifest + gated pipeline hard-fail enforcement + agent state DB transitions + retry/resume/cache-reuse via dashboard/CLI + CSRF-protected retry/resume routes + FFmpeg preflight diagnostics + media probing + scene validation/normalization + clip provenance tracking + generated card fallback (Pillow) + G10 deterministic validation + fixed-contract packager (S6549 safe) + template-driven rendering engine (YAML templates, 3 adapters, FFmpeg filter chains with fade/crossfade transitions, drawtext captions, Pillow thumbnails) + Composer template routing with diagnostics + E2E pipeline bugfixes (voice producer partial completion, Gemini TTS 429 backoff, SAR normalization, agent failure status checks for voice_producer/visual_director/composer, _fail_agent deduplication) + LLM-driven Visual Director (compact research data, per-scene visual planning, 3-tier image fallback Pexels→Firecrawl→gradient, text cards with relevant images) + prompt files .txt→.md + search_photos() for PexelsService + prompt deduplication + NicheConfig schema cleanup (content_angle, search_terms, max_hashtags) + niche wiring through orchestrator + safety_rules from niche YAML + CLI niche validation + individual niche fields as prompt vars + repetitive failure patterns doc (docs/repetitive-failure-patterns.md) + 93% test coverage.
+- **Greenfield project** — early implementation phase (Phases 0-18 complete).
+- All 695 offline tests pass (2 pre-existing `integration`-marked tests deselected — `test_full_pipeline_smoke` requires FFmpeg + paid API keys, 1 other requires API keys). 7 agents built + Orchestrator engine + CLI interface + Web dashboard + data-driven config/prompt files + Docker deployment + pydantic-settings .env config system + structured logging + per-agent model config + test-agent CLI + configurable TTS provider (ElevenLabs/Gemini TTS/Fish Audio fallback) + artifact workspace contract + job debug dashboard/CLI + job manifest + gated pipeline hard-fail enforcement + agent state DB transitions + retry/resume/cache-reuse via dashboard/CLI + CSRF-protected retry/resume routes + FFmpeg preflight diagnostics + media probing + scene validation/normalization (30fps target, Ken Burns zoompan for images) + clip provenance tracking + generated card fallback (Pillow) + G10 deterministic validation + fixed-contract packager (S6549 safe) + template-driven rendering engine (YAML templates, 3 adapters, FFmpeg filter chains with fade/crossfade transitions, drawtext captions, Pillow thumbnails) + Composer template routing with diagnostics + E2E pipeline bugfixes (voice producer partial completion, Gemini TTS 429 backoff, SAR normalization, agent failure status checks for voice_producer/visual_director/composer, _fail_agent deduplication) + LLM-driven Visual Director (compact research data, per-scene visual planning, 3-tier image fallback Pexels→Firecrawl→gradient, text cards with relevant images, **enhanced with video production expertise — FPS rules, pacing, treatment selection, transitions, default treatment routing**) + treatment template YAML definitions (9 treatments, 5 transitions) + prompt files .txt→.md + search_photos() for PexelsService + prompt deduplication + NicheConfig schema cleanup (content_angle, search_terms, max_hashtags) + niche wiring through orchestrator + safety_rules from niche YAML + CLI niche validation + individual niche fields as prompt vars + repetitive failure patterns doc (docs/repetitive-failure-patterns.md) + 93% test coverage.
 
 ## Python Commands
 
@@ -45,6 +45,30 @@ What succeeded:
 - ✅ For unavoidable relative artifact paths, use `pathlib.Path.resolve()` plus `relative_to()` containment in `clipper_agency/core/safe_paths.py`, then pass the resolved path to shell-free subprocess calls.
 - ✅ Add regression tests proving outside paths are ignored/rejected and fixed job-owned paths are used.
 - ✅ Re-run full offline tests and wait for both GitHub `SonarCloud` and `SonarCloud Code Analysis` checks to pass before merging.
+
+## Engineering Lessons (Phases 12–17)
+
+Ten recurring failure patterns documented in `docs/repetitive-failure-patterns.md`. The condensed rules below must prevent re-introduction.
+
+### Agent Pipeline Integrity
+- ❌ Never advance pipeline after a failed agent. Check `output.get("status")=="failed"` BEFORE `_complete_agent()`.
+- ❌ Never copy-paste agent failure handlers. Extract `_fail_agent()`, reuse everywhere.
+- ✅ Every agent's output must be validated before next agent consumes it (normalization boundary).
+
+### Error Handling & API Calls
+- ❌ Never silently default to unsafe state on exceptions. Fail hard with `{"status":"failed","reason":...}`.
+- ✅ Every external API call needs retry + exponential backoff + jitter. Non-negotiable.
+
+### Configuration & Retry
+- ✅ Config loaded at pipeline start must be frozen. Retries read `config_snapshot`, not disk.
+
+### Code Quality Guardrails
+- ❌ Extract helpers before `cognitive_complexity > 15`.
+- ❌ Bundle >5 scalar params into dict/dataclass.
+- ❌ Error string used >1x = module constant.
+
+### Pre-PR Checklist
+Before `git push`: `.venv/bin/python3 -m pytest -m "not external and not integration" -q` (all pass); `--cov=clipper_agency --cov-report=term-missing` (≥93%). Fix uncovered spots. Wait for SonarCloud ✅ before merging.
 
 ## Git Branching & PR Workflow
 
