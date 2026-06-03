@@ -56,7 +56,7 @@ class SceneNormalizer:
 
             info = probe_video(input_path, Path(input_path).parent)
             sar_ok = info.sample_aspect_ratio == "1:1"
-            fps_ok = getattr(info, "fps", 30) == 30
+            fps_ok = abs(getattr(info, "fps", 30.0) - 30.0) < 0.01
             if (
                 info
                 and info.width == self.TARGET_WIDTH
