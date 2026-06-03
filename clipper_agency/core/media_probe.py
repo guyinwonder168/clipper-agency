@@ -22,6 +22,7 @@ class VideoInfo:
     has_audio: bool = False
     file_size: int = 0
     sample_aspect_ratio: str = "1:1"
+    fps: int = 30
 
 
 def probe_video(
@@ -78,6 +79,16 @@ def probe_video(
     if not sar_raw or sar_raw == "0:1":
         sar_raw = "1:1"
 
+    # --- framerate ---
+    fps = 30  # default
+    r_frame_rate = video_stream.get("r_frame_rate", "30/1")
+    try:
+        num, den = r_frame_rate.split("/")
+        if int(den) > 0:
+            fps = int(int(num) / int(den))
+    except (ValueError, ZeroDivisionError):
+        fps = 30
+
     # --- audio stream ---
     has_audio = _find_stream(streams, "audio") is not None
 
@@ -105,6 +116,7 @@ def probe_video(
         has_audio=has_audio,
         file_size=file_size,
         sample_aspect_ratio=sar_raw,
+        fps=fps,
     )
 
 
