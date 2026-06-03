@@ -153,9 +153,13 @@ class ComposerAgent(BaseAgent):
                 "card_fallback_scenes", [],
             )
             if not ffmpeg_cmd:
-                logger.warning("Composer: no FFmpeg command produced — skipping thumbnail")
+                logger.error(
+                    "Composer: no valid scenes assembled — failing (card_fallback=%s)",
+                    card_fallback_scenes,
+                )
                 output = {
-                    "status": "completed",
+                    "status": "failed",
+                    "error": "No valid scenes to assemble",
                     "video_path": "",
                     "thumbnail_path": "",
                     "card_fallback_scenes": card_fallback_scenes,
