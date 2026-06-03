@@ -278,8 +278,8 @@ class TestComposerTreatmentMetadata:
         # Card fallback should be empty (scene was valid)
         assert result["card_fallback_scenes"] == []
 
-    def test_composer_process_scene_accepts_asset_param(self, tmp_path, mocker):
-        """_process_scene should accept asset dict without breaking."""
+    def test_composer_process_scene_valid_normalization(self, tmp_path, mocker):
+        """_process_scene normalizes a valid scene path and returns result."""
         mocker.patch(
             "clipper_agency.core.scene_validator.SceneValidator.validate",
             return_value=mocker.MagicMock(valid=True, issues=[]),
@@ -297,10 +297,9 @@ class TestComposerTreatmentMetadata:
         )
 
         agent = ComposerAgent()
-        asset = {"scene": 1, "path": "/tmp/scene_1.mp4", "treatment": "ken_burns_zoom_in"}
         norm_path, was_card = agent._process_scene(
             tmp_path, mocker.MagicMock(), mocker.MagicMock(),
-            1, "/tmp/scene_1.mp4", asset=asset,
+            1, "/tmp/scene_1.mp4",
         )
 
         assert norm_path is not None

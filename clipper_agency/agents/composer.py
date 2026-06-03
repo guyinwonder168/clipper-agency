@@ -343,7 +343,6 @@ class ComposerAgent(BaseAgent):
         card_gen: Any,
         scene_num: int,
         scene_path: str,
-        asset: dict | None = None,
     ) -> tuple[str | None, bool]:
         """Process a single scene: validate, normalize, or generate card fallback.
 
@@ -435,7 +434,7 @@ class ComposerAgent(BaseAgent):
                 scene_num = int(asset.get("scene", i + 1))
                 norm_path, was_card = self._process_scene(
                     temp_dir, normalizer, card_gen,
-                    scene_num, scene_path, asset=asset,
+                    scene_num, scene_path,
                 )
                 if norm_path:
                     normalized_scene_paths.append(norm_path)
@@ -448,39 +447,13 @@ class ComposerAgent(BaseAgent):
                 logger.warning("Composer: no valid scenes to assemble")
                 return {"cmd": [], "card_fallback_scenes": card_fallback_scenes}
 
-            # Build normalized asset list preserving treatment metadata
-            normalized_assets = []
-            for i, asset in enumerate(assets):
-                norm_path = normalized_scene_paths[i] if i < len(normalized_scene_paths) else None
-                if norm_path:
-                    enriched = {"scene": i + 1, "path": norm_path}
-                    # Preserve treatment metadata from visual director
-                    for field in ("treatment", "target_duration", "transition_in", "transition_out"):
-                        if field in asset:
-                            enriched[field] = asset[field]
-                    normalized_assets.append(enriched)
-
-            cmd = ["ffmpeg", "-y"]
-            for n in valid_normalized:
-                cmd.extend(["-i", n])
-            for af in audio_files:
-                cmd.extend(["-i", af])
-
-            filter_graph = self._build_filter(
-                normalized_assets, audio_files,
+            normalized_assets = self._enrich_normalized_assets(
+                assets, normalized_scene_paths,
             )
-            cmd.extend([
-                "-filter_complex", filter_graph,
-                "-map", "[outv]",
-                "-map", "[outa]",
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-shortest",
-                output_path,
-            ])
+
+            cmd = self._build_assembly_cmd(
+                valid_normalized, normalized_assets, audio_files, output_path,
+            )
 
             logger.info(
                 "Composer: starting FFmpeg concat — %d video + %d audio → %s",
@@ -497,6 +470,75 @@ class ComposerAgent(BaseAgent):
             return {"cmd": cmd, "card_fallback_scenes": card_fallback_scenes}
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _enrich_normalized_assets(
+        self, assets: list[dict], normalized_scene_paths: list[str],
+    ) -> list[dict]:
+        """Build enriched asset list preserving treatment metadata."""
+        enriched: list[dict] = []
+        for i, asset in enumerate(assets):
+            norm_path = (
+                normalized_scene_paths[i]
+                if i < len(normalized_scene_paths)
+                else None
+            )
+            if norm_path:
+                item = {"scene": i + 1, "path": norm_path}
+                for field in (
+                    "treatment", "target_duration",
+                    "transition_in", "transition_out",
+                ):
+                    if field in asset:
+                        item[field] = asset[field]
+                enriched.append(item)
+        return enriched
+
+    @staticmethod
+    def _build_assembly_cmd(
+        valid_normalized: list[str],
+        normalized_assets: list[dict],
+        audio_files: list[str],
+        output_path: str,
+    ) -> list[str]:
+        """Build the FFmpeg assembly command from normalized assets."""
+        cmd = ["ffmpeg", "-y"]
+        for n in valid_normalized:
+            cmd.extend(["-i", n])
+        for af in audio_files:
+            cmd.extend(["-i", af])
+
+        # Build filter graph inline (avoids circular dependency on _build_filter)
+        num_videos = len([a for a in normalized_assets if a.get("path")])
+        concat_inputs = "".join(
+            f"[{i}:v]" for i in range(num_videos)
+        )
+        concat_filter = (
+            f"{concat_inputs}concat=n={num_videos}:v=1[outv]"
+        )
+        if audio_files:
+            audio_inputs = "".join(
+                f"[{num_videos + i}:a]" for i in range(len(audio_files))
+            )
+            concat_filter += (
+                f";{audio_inputs}"
+                f"amix=inputs={len(audio_files)}:duration=first[outa]"
+            )
+        else:
+            concat_filter += ";anullsrc[outa]"
+
+        cmd.extend([
+            "-filter_complex", concat_filter,
+            "-map", "[outv]",
+            "-map", "[outa]",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-shortest",
+            output_path,
+        ])
+        return cmd
 
     def _generate_thumbnail(self, video_path: str, thumbnail_path: str) -> None:
         cmd = [

@@ -394,13 +394,11 @@ class VisualDirectorAgent(BaseAgent):
         if source in self._IMAGE_SOURCES:
             defaults["treatment"] = "ken_burns_zoom_in"
             defaults["target_duration"] = 5
-        elif source in self._VIDEO_SOURCES:
-            defaults["treatment"] = "broll_standard"
-            defaults["target_duration"] = 5
         elif source == "text_card":
             defaults["treatment"] = "text_card_reveal"
             defaults["target_duration"] = 4
         else:
+            # video sources and unknown sources default to standard broll
             defaults["treatment"] = "broll_standard"
             defaults["target_duration"] = 5
 
