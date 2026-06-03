@@ -331,3 +331,39 @@ class TestComposerTreatmentMetadata:
 
         assert norm_path is not None
         assert was_card is False
+
+    def test_build_assembly_cmd_applies_trim_from_target_duration(self):
+        """_build_assembly_cmd includes trim=duration filters matching asset target_duration."""
+        valid_normalized = ["/tmp/scene_1.mp4", "/tmp/scene_2.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 4},
+            {"scene": 2, "path": "/tmp/scene_2.mp4", "target_duration": 7},
+        ]
+        audio_files: list[str] = []
+        output_path = "/tmp/output.mp4"
+
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized, normalized_assets, audio_files, output_path,
+        )
+
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "trim=duration=4" in filter_complex
+        assert "trim=duration=7" in filter_complex
+        assert "concat=n=2:v=1[outv]" in filter_complex
+
+    def test_build_assembly_cmd_defaults_trim_to_5(self):
+        """_build_assembly_cmd defaults trim to 5 when target_duration is missing."""
+        valid_normalized = ["/tmp/scene_1.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4"},
+        ]
+        audio_files: list[str] = []
+        output_path = "/tmp/output.mp4"
+
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized, normalized_assets, audio_files, output_path,
+        )
+
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "trim=duration=5" in filter_complex
+        assert "concat=n=1:v=1[outv]" in filter_complex

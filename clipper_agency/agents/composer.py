@@ -507,12 +507,21 @@ class ComposerAgent(BaseAgent):
         for af in audio_files:
             cmd.extend(["-i", af])
 
-        # Build filter graph inline (avoids circular dependency on _build_filter)
+        # Build per-input trim + concat filter graph from asset metadata.
+        # Each asset's target_duration controls the trim length; defaults to 5.
         num_videos = len([a for a in normalized_assets if a.get("path")])
-        concat_inputs = "".join(
-            f"[{i}:v]" for i in range(num_videos)
-        )
+        trim_parts: list[str] = []
+        video_labels: list[str] = []
+        for i in range(num_videos):
+            duration = normalized_assets[i].get("target_duration", 5)
+            label = f"t{i}"
+            video_labels.append(label)
+            trim_parts.append(
+                f"[{i}:v]trim=duration={duration},setpts=PTS-STARTPTS[{label}]"
+            )
+        concat_inputs = "".join(f"[{label}]" for label in video_labels)
         concat_filter = (
+            f"{';'.join(trim_parts)};"
             f"{concat_inputs}concat=n={num_videos}:v=1[outv]"
         )
         if audio_files:
