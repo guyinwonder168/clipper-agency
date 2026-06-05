@@ -1,9 +1,9 @@
 # Clipper Agency — Product Requirements Document
 
-**Version:** 2.6
-**Date:** 2026-05-31
-**Status:** MVP Phase 16 Complete — Visual Director LLM Planning
-**Related:** `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`, `docs/plans/2026-05-31-visual-director-llm-planning-design.md`, `docs/plans/2026-05-31-visual-director-llm-planning-impl-plan.md`
+**Version:** 2.7
+**Date:** 2026-06-05
+**Status:** MVP Phases 0-18 Complete — Treatment System, Scene Normalizer, LLM Visual Director
+**Related:** `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
 
@@ -101,6 +101,8 @@ Intermediate execution material is not part of the final upload package. Each jo
 | PR-23 | Structured logging for all external API calls, agent executions, and pipeline state transitions | P0 | MVP |
 | PR-24 | `test-agent` CLI subcommand for independent agent testing/debugging | P1 | MVP |
 | PR-25 | Configurable TTS provider fallback: ElevenLabs first, Google AI Studio Gemini TTS second, Fish Audio third, then fail clearly with provider attempts recorded | P0 | MVP |
+| PR-26 | Treatment system: YAML-defined visual treatments (Ken Burns zoom/pan, cinematic crop, B-roll, slow-motion, lower-third slide, text card reveal, hook caption, fade-to-black) with transitions (crossfade, hard cut, wipe left, dissolve, circle open) and FPS/pacing rules, applied automatically by Visual Director and Composer without code changes | P0 | MVP |
+| PR-27 | Scene normalizer: unify mixed-asset framerates to 30fps target, normalize SAR to 1:1, apply Ken Burns zoompan for static images, validate clip duration bounds (1-5s), enforce consistent encoding parameters across all scenes before composition | P0 | MVP |
 
 ---
 

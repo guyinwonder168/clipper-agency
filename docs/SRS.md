@@ -1,9 +1,9 @@
 # Clipper Agency — Software Requirements Specification
 
-**Version:** 2.6
-**Date:** 2026-05-31
-**Status:** MVP Phase 16 Complete — Visual Director LLM Planning
-**Related:** `docs/PRD.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`, `docs/plans/2026-05-31-visual-director-llm-planning-design.md`, `docs/plans/2026-05-31-visual-director-llm-planning-impl-plan.md`
+**Version:** 2.7
+**Date:** 2026-06-05
+**Status:** MVP Phases 0-18 Complete — Treatment System, Scene Normalizer, LLM Visual Director
+**Related:** `docs/PRD.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
 
@@ -48,6 +48,8 @@
 | FR-29 | FFmpeg preflight diagnostic: before any render work, check `ffmpeg exists`, `ffprobe exists`, libx264 available, aac support, mp3 decode; fail clearly with diagnostic message if any missing | P0 | MVP |
 | FR-30 | Generated card fallback: when no video clips or stock footage are available for a scene, generate 1080x1920 text-based PNG cards (headline, fact, context, CTA) using Pillow, styled from niche template; usage-only-cards condition escalates risk warning to Reviewer | P1 | MVP |
 | FR-31 | Deterministic video validation (G10): before Reviewer multimodal spend, validate `video.mp4` exists, non-zero, 9:16 aspect ratio, 1080x1920, duration 20-60s, audio track present, h264/aac codec, metadata stripped | P0 | MVP |
+| FR-32 | Treatment system: YAML-defined treatments in `templates/treatments.yaml` providing 9 visual treatments (ken_burns_zoom_in, ken_burns_pan_left, cinematic_crop, broll_standard, slow_motion, lower_third_slide, text_card_reveal, hook_big_caption, fade_to_black) + 5 transitions (crossfade, hard_cut, wipe_left, dissolve, circle_open) + FPS rules (30fps target) + pacing rules. Visual Director selects treatments per-scene; Composer applies via template-driven rendering engine. Adding new treatments requires YAML only, no code changes | P0 | MVP |
+| FR-33 | Scene normalizer: unify mixed-asset framerates to 30fps target, normalize SAR to 1:1, apply Ken Burns zoompan for static images (2.5s zoom cycle), validate clip duration bounds (1-5s), enforce consistent encoding parameters (h264/aac) across all scenes before composition. Rejects flash-frame clips (<1s) and clips exceeding 5s | P0 | MVP |
 
 ### 2.2 User Interfaces
 

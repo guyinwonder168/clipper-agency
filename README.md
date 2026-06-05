@@ -21,8 +21,8 @@
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue?logo=python">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-248%20passing-brightgreen">
-  <img alt="Coverage" src="https://img.shields.io/badge/coverage-85%25-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-699%20passing-brightgreen">
+  <img alt="Coverage" src="https://img.shields.io/badge/coverage-93%25-brightgreen">
   <img alt="FFmpeg" src="https://img.shields.io/badge/FFmpeg-5.0%2B-orange?logo=ffmpeg">
   <img alt="SonarCloud" src="https://img.shields.io/badge/SonarCloud-passing-brightgreen?logo=sonarcloud">
   <a href="docs/PRD.md"><img alt="Docs" src="https://img.shields.io/badge/docs-PRD-blue"></a>
@@ -114,7 +114,7 @@ docker compose up --build
 | Video | FFmpeg 5.0+ (CPU-only) |
 | Database | SQLite (WAL mode, advisory locks) |
 | LLM | OpenRouter API (multi-model routing) |
-| Voice | ElevenLabs |
+| Voice | ElevenLabs / Gemini TTS / Fish Audio (fallback chain) |
 | Media | yt-dlp (primary), Pexels (fallback) |
 | Research | ScrapeCreators + Firecrawl |
 | Auth | Basic auth (2 groups: privileged, creative/ops) |
@@ -130,6 +130,7 @@ clipper_agency/
 ├── __init__.py
 ├── __main__.py              # Entry point: python3 -m clipper_agency
 ├── config/                  # Pydantic config loader & hierarchy
+├── core/                    # Shared utilities, logging, safe paths
 ├── db/                      # SQLite schema, queries, connection
 ├── orchestrator/            # Gated state machine & pipeline engine
 │   ├── engine.py
@@ -151,6 +152,13 @@ clipper_agency/
 │   ├── ytdlp.py
 │   ├── firecrawl.py
 │   └── scrapecreators.py
+├── rendering/               # Template-driven video rendering engine
+│   ├── templates.py         # YAML template loading & validation
+│   ├── contracts.py         # Typed render plan dataclasses
+│   ├── primitives.py        # FFmpeg filter chain builders
+│   ├── engine.py            # FFmpeg render orchestrator
+│   ├── thumbnails.py        # Pillow thumbnail generation
+│   └── renderers/           # Per-template adapters (News Card, B-Roll, Rapid Update)
 ├── output/                  # Video packaging & thumbnail
 └── dashboard/               # Flask web UI (basic auth)
 ```
@@ -183,7 +191,8 @@ niches/           # Language, tone, platform rules, safety config
 templates/        # Scene structure, duration, overlay config
   ├── news_card.yaml
   ├── b_roll_narration.yaml
-  └── rapid_update.yaml
+  ├── rapid_update.yaml
+  └── treatments.yaml       # 9 visual treatments + 5 transitions + FPS/pacing rules
 ```
 
 ---
@@ -207,7 +216,7 @@ python3 -m pytest -m "not integration and not external"
 python3 -m pytest -m integration
 ```
 
-Tests live in `tests/` mirroring the package structure. Currently **248 tests** at **85%+ line coverage**.
+Tests live in `tests/` mirroring the package structure. Currently **699 tests** at **93%+ line coverage**.
 
 ---
 
@@ -226,6 +235,6 @@ Tests live in `tests/` mirroring the package structure. Currently **248 tests** 
 
 ## Status
 
-**✅ MVP Complete** — All 10 phases (0-9) implemented. Ready for staging and production testing.
+**✅ MVP Complete** — Phases 0-18 implemented. Treatment system, scene normalizer, LLM-driven visual director, template rendering engine.
 
-248 tests passing · 85%+ line coverage · Docker-ready · SonarCloud quality gate passing
+699 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing

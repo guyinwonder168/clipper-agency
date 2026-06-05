@@ -1,9 +1,9 @@
 # Clipper Agency — Technical Design Document
 
-**Version:** 3.7
-**Date:** 2026-05-31
-**Status:** MVP Phase 16 Complete — Visual Director LLM Planning
-**Related:** `docs/PRD.md`, `docs/SRS.md`, `docs/requirements_traceability.md`, `docs/plans/2026-05-31-visual-director-llm-planning-design.md`, `docs/plans/2026-05-31-visual-director-llm-planning-impl-plan.md`
+**Version:** 3.8
+**Date:** 2026-06-05
+**Status:** MVP Phases 0-18 Complete — Treatment System, Scene Normalizer, LLM Visual Director
+**Related:** `docs/PRD.md`, `docs/SRS.md`, `docs/requirements_traceability.md`
 
 ---
 
@@ -307,22 +307,24 @@ Required before enabling those commands:
 | **Researcher** | Gathers context + source URLs + music candidates. MVP: ScrapeCreators (`trim=true` + field extraction via `_extract_fields()` handling both `aweme_info`-wrapped and flat trimmed responses, max 20 results) + Firecrawl (lean url/title/desc only). Cache-first: reads/writes raw responses, `research_brief.md`, `research_contract.json`, and normalized files under `ASSETS_CACHE/job_{id}/agents/researcher/`. Token guard: `MAX_SOURCE_CHARS=40000` prevents LLM overflow. Returns structured data with entities, tags, risk_flags, cache_key. | Budget East | TTL-based + job workspace file cache |
 | **Scriptwriter** | Writes script + caption in niche tone. Rotates angle from creative history. Always fresh. | Budget East | Never |
 | **Voice Producer** | Generates voiceover via provider fallback: ElevenLabs → Google AI Studio Gemini TTS → Fish Audio → fail clearly. `GeminiTTSService` uses `gemini-2.5-flash-preview-tts` with configured voice (default `Kore`) and wraps PCM audio as WAV when needed. `FishAudioService` uses `s2-pro` model, `POST /v1/tts`, `reference_id` for voice model. Voice files and sanitized `provider_attempts.json` are saved under `ASSETS_CACHE/job_{id}/agents/voice_producer/`. Always fresh. | API cost | Never |
-| **Visual Director** | LLM-driven visual planning: compacts research data, uses LLM (`visual_director_model`) to plan per-scene visual strategy, executes via dispatch table (tiktok_clip, pexels_video, pexels_image, text_card). 3-tier image fallback for text cards (Pexels photo → Firecrawl article image → gradient). Falls back to legacy sequential planning on LLM failure. | Budget East | Never |
-| **Composer** | FFmpeg assembly: scenes, transitions, captions, audio mixing, thumbnail. Template-driven rendering via `clipper_agency/rendering/` with per-template adapters. | N/A | Never |
+| **Visual Director** | LLM-driven visual planning with video production expertise: compacts research data, uses LLM to plan per-scene visual strategy (treatment selection, FPS rules, pacing, transitions), executes via dispatch table (tiktok_clip, pexels_video, pexels_image, text_card). Treatment-aware: selects from 9 YAML-defined treatments (Ken Burns zoom/pan, cinematic crop, B-roll, slow-motion, lower-third, text card reveal, hook caption, fade-to-black) with appropriate transitions. 3-tier image fallback for text cards (Pexels photo → Firecrawl article image → gradient). Falls back to legacy sequential planning on LLM failure. | Budget East | Never |
+| **Composer** | FFmpeg assembly: scenes, transitions, captions, audio mixing, thumbnail. Template-driven rendering via `clipper_agency/rendering/` with per-template adapters. Treatment-aware: applies treatment-specific FFmpeg filter chains (zoompan for Ken Burns, speed for slow-motion, fade for transitions) from `templates/treatments.yaml`. Scene normalizer unifies framerates to 30fps, normalizes SAR to 1:1, validates clip bounds before composition. | N/A | Never |
 | **Reviewer** | Quality + safety + duplicate check. Multimodal (video + text). Max 2 human-triggered retries. | Moderate | Never |
 | **Creative Director** | Stage 2. Proposes new angles/templates when variation exhausted. | Agentic East | Triggered |
 
-### Visual Director LLM Planning (Phase 16)
+### Visual Director LLM Planning (Phase 16–18)
 
-The Visual Director uses LLM-driven planning to intelligently select visual assets per scene, replacing the original blind sequential URL assignment.
+The Visual Director uses LLM-driven planning with video production expertise to intelligently select visual assets and treatments per scene, replacing the original blind sequential URL assignment.
 
 **Flow:**
 
 1. **`_compact_research_data()`** — reads `research_contract.json` + `research_brief.md`, strips noise (raw HTML, boilerplate), sorts sources by engagement relevance, returns compact text block (~2K chars) for LLM context.
-2. **`_plan_with_llm()`** — sends compact research + script scenes + niche config to LLM with structured output schema. LLM returns per-scene plan with `action.type` (enum: `tiktok_clip`, `pexels_video`, `pexels_image`, `text_card`), `reasoning` (free text), and action-specific parameters. Returns `None` on failure.
+2. **`_plan_with_llm()`** — sends compact research + script scenes + niche config + available treatments (from `templates/treatments.yaml`) to LLM with structured output schema. LLM returns per-scene plan with `action.type` (enum: `tiktok_clip`, `pexels_video`, `pexels_image`, `text_card`), `treatment` (selected from 9 treatment types), `transition` (selected from 5 transition types), `reasoning` (free text), and action-specific parameters. LLM applies video production expertise: FPS rules (30fps target), pacing (scene duration matches narration), treatment selection based on content type (e.g., hook for intro, Ken Burns for static images, B-roll for narration). Returns `None` on failure.
 3. **`_execute_plan()`** + **`_execute_action()`** — dispatch table routes each action to handler (`_exec_tiktok_clip`, `_exec_pexels_video`, `_exec_pexels_image`, `_exec_text_card`). Each handler downloads/generates the visual asset.
 4. **3-tier image fallback** (for `text_card` actions): `_fetch_image()` tries Pexels photo search (`search_photos()`) → Firecrawl article og:image → gradient card background.
 5. **Legacy fallback**: `_run_legacy_planning()` uses the original sequential URL assignment + Pexels fallback when LLM planning fails or returns `None`.
+
+**Default treatment routing:** When LLM is unavailable or returns no treatment, Visual Director applies sensible defaults: `text_card_reveal` for text_card scenes, `broll_standard` for video clips, `ken_burns_zoom_in` for static images.
 
 **Design principle:** "Orchestrator dumb, agents smart." The engine passes research file paths to Visual Director; the agent decides how to use them.
 
@@ -490,21 +492,24 @@ A deterministic preflight check runs before any render work (in the Orchestrator
 
 If any check fails, the pipeline stops with a clear diagnostic message before spending time on expensive render operations. Results are logged and persisted in the job workspace.
 
-### Scene Normalization
+### Scene Normalization (Phase 18)
 
-Every visual scene is normalized before concatenation to ensure deterministic output quality:
+Every visual scene is normalized before concatenation to ensure deterministic output quality and consistent playback:
 
 | Property | Requirement |
 |----------|-------------|
 | Resolution | 1080x1920 (9:16 vertical) |
+| Framerate | 30fps target (unified from mixed sources — PAL 25fps, NTSC 24/29.97fps, variable-rate downloads) |
+| SAR | 1:1 (normalized — prevents FFmpeg concat demuxer aspect ratio mismatches) |
 | Codec | H.264 (libx264) |
 | Pixel format | yuv420p |
 | Clip duration | 1-5 seconds (clips <1s rejected as flash frames; >5s trimmed) |
+| Static images | Ken Burns zoompan applied (2.5s zoom cycle, `zoompan=z+'min(zoom+0.0015,1.5)':d={frames}:s=1080x1920:fps=30`) to create motion from stills |
 | Audio from source clips | Stripped unless the clip is intentionally retained safe stock media |
 | Metadata | Stripped (neutral platform-native appearance) |
-| Transformation applied | Re-encode → micro-crop if aspect ratio differs → brightness/hue shift → metadata strip |
+| Transformation applied | Re-encode → micro-crop if aspect ratio differs → framerate unification → brightness/hue shift → metadata strip |
 
-Normalization is performed by the Composer via FFmpeg filter chains before the concat demuxer. Each clip's transformation is recorded in `provenance.json` for audit.
+Normalization is performed by the Composer via FFmpeg filter chains before the concat demuxer. Each clip's transformation is recorded in `provenance.json` for audit. The scene normalizer module (`clipper_agency/rendering/normalizer.py`) handles framerate detection, SAR normalization, and zoompan generation for static assets.
 
 ### Generated Cards
 
@@ -546,6 +551,52 @@ clipper_agency/rendering/
 **Composer integration:** `ComposerAgent._render_via_template()` is called as an early return in `clipper_agency/agents/composer.py`. When a template is configured in the scene plan, Composer delegates all rendering to the template engine. When no template is set, the legacy Composer FFmpeg assembly path is preserved unchanged.
 
 **Diagnostics:** Template rendering diagnostics (template config, render plan, FFmpeg filtergraph, command log, stderr) are persisted under `ASSETS_CACHE/job_{id}/agents/composer/` for debug-first observability.
+
+### Treatment System (Phase 17)
+
+The treatment system provides a data-driven way to define visual effects and transitions without code changes. Treatments are defined in `templates/treatments.yaml` and applied by the Composer's rendering engine based on Visual Director's per-scene treatment selections.
+
+**Available Treatments (9):**
+
+| Treatment | Effect | Use Case |
+|-----------|--------|----------|
+| `ken_burns_zoom_in` | Slow zoom into center (zoompan filter) | Static images, establishing shots |
+| `ken_burns_pan_left` | Slow left pan (zoompan filter) | Wide shots, landscape images |
+| `cinematic_crop` | 2.39:1 crop with letterbox bars | Dramatic moments, premium feel |
+| `broll_standard` | No special effect, clean playback | Standard B-roll footage |
+| `slow_motion` | 0.5x speed with frame interpolation | Emotional highlights, impact moments |
+| `lower_third_slide` | Animated lower-third overlay | Name/title/context overlays |
+| `text_card_reveal` | Fade-in text card with background | Facts, headlines, transitions |
+| `hook_big_caption` | Large animated caption overlay | Video hooks, attention grabbers |
+| `fade_to_black` | Fade to/from black | Scene transitions, dramatic pauses |
+
+**Available Transitions (5):**
+
+| Transition | Duration | Effect |
+|------------|----------|--------|
+| `crossfade` | 0.5s | Smooth blend between scenes |
+| `hard_cut` | 0s | Instant cut (default for fast pacing) |
+| `wipe_left` | 0.3s | Left-to-right wipe effect |
+| `dissolve` | 0.8s | Slow dissolve between scenes |
+| `circle_open` | 0.5s | Circular reveal transition |
+
+**FPS & Pacing Rules:**
+
+```yaml
+fps_rules:
+  target_fps: 30
+  acceptable_range: [24, 60]
+  force_constant_fps: true
+
+pacing_rules:
+  min_scene_duration: 2.0
+  max_scene_duration: 8.0
+  preferred_scene_duration: 3.5
+  hook_max_duration: 3.0
+  cta_max_duration: 4.0
+```
+
+**Extensibility:** Adding a new treatment requires only a YAML entry in `treatments.yaml` plus a corresponding FFmpeg filter chain builder in `primitives.py`. No changes to Visual Director, Composer, or Orchestrator code needed.
 
 ---
 
@@ -669,7 +720,7 @@ Each agent has a configurable autonomy level that controls how the orchestrator 
 | **B-Roll Narration** | Voiceover + clips + dynamic captions | Context-rich stories |
 | **Rapid Update** | Fast cuts + punchy captions | Trending gossip |
 
-FFmpeg-based. Layout in config (positions, fonts, colors, animations). 1080x1920 vertical. Template mode: `manual | agent_select | hybrid`.
+FFmpeg-based. Layout in config (positions, fonts, colors, animations). 1080x1920 vertical. Template mode: `manual | agent_select | hybrid`. Visual treatments and transitions defined in `templates/treatments.yaml` (see §7 Treatment System).
 
 ---
 
@@ -724,11 +775,12 @@ SQLite for MVP (same schema migrates to PostgreSQL). Multi-tenant from day one.
 
 ## 13. MVP Deliverables
 
-1. **7 MVP Agents** — Safety, Researcher, Scriptwriter, Voice Producer, Visual Director, Composer, Reviewer
+1. **7 MVP Agents** — Safety, Researcher, Scriptwriter, Voice Producer, Visual Director (LLM-driven with treatment selection + video production expertise), Composer (treatment-aware rendering + scene normalization), Reviewer
 2. **Orchestrator** — Gated state machine with human-triggered retry
 3. **Creative Memory** — Pre-generation check, variation rotation
 4. **Web Dashboard** — Agent observability, config editing, basic auth + 2 groups
 5. **CLI** — `python3 cli.py run --topic "..." --niche indonesian_artists`; `test-agent` subcommand for independent agent debugging; `--log-level` option
-6. **3 Templates** — News Card, B-Roll Narration, Rapid Update
-7. **Config System** — Agent → Niche → Account → Job hierarchy with versioning
-8. **Output Packager** — `video.mp4` + `caption.txt` + `thumbnail.png` + `metadata.json`
+6. **3 Templates + Treatment System** — News Card, B-Roll Narration, Rapid Update + 9 treatments + 5 transitions in `templates/treatments.yaml`
+7. **Scene Normalizer** — Framerate unification (30fps), SAR normalization, Ken Burns zoompan for static images, clip duration validation
+8. **Config System** — Agent → Niche → Account → Job hierarchy with versioning
+9. **Output Packager** — `video.mp4` + `caption.txt` + `thumbnail.png` + `metadata.json`

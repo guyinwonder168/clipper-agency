@@ -1,8 +1,8 @@
 # Clipper Agency — Requirements Traceability Matrix
 
-**Version:** 2.7
-**Date:** 2026-05-31
-**Status:** MVP Phase 16 Complete — Visual Director LLM Planning
+**Version:** 2.8
+**Date:** 2026-06-05
+**Status:** MVP Phases 0-18 Complete — Treatment System, Scene Normalizer, LLM Visual Director
 
 ---
 
@@ -178,6 +178,26 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 111 | Prompt files renamed `.txt` → `.md` for better editor support (safety, researcher, scriptwriter, reviewer); new `prompts/visual_director.md` for LLM planning prompt | Design §2, SRS §2 FR-07 |
 | 112 | `search_photos()` added to PexelsService for photo search (query, orientation, per_page) — enables text card image enrichment | SRS §4, Design §4 |
 
+### From Phase 17 Treatment System
+
+| # | Fact | New Location |
+|---|------|-------------|
+| 113 | Treatment definitions in `templates/treatments.yaml`: 9 visual treatments (ken_burns_zoom_in, ken_burns_pan_left, cinematic_crop, broll_standard, slow_motion, lower_third_slide, text_card_reveal, hook_big_caption, fade_to_black) + 5 transitions (crossfade, hard_cut, wipe_left, dissolve, circle_open) + fps_rules + pacing_rules | PRD §5 PR-26, SRS §2 FR-32, Design §7 |
+| 114 | Treatments are data-driven: adding a new treatment requires YAML entry + FFmpeg filter chain builder in `primitives.py`, no agent/orchestrator code changes | PRD §5 PR-26, Design §7 |
+| 115 | FPS rules: 30fps target, acceptable range 24-60fps, force constant framerate for all scenes | PRD §5 PR-26, Design §7 |
+| 116 | Pacing rules: min 2s, max 8s, preferred 3.5s per scene; hook max 3s, CTA max 4s | PRD §5 PR-26, Design §7 |
+| 117 | Visual Director selects treatment per-scene via LLM; Composer applies treatment-specific FFmpeg filter chains (zoompan for Ken Burns, speed for slow-motion, fade for transitions) | PRD §5 PR-26, SRS §2 FR-32, Design §4, Design §7 |
+
+### From Phase 18 Scene Normalizer
+
+| # | Fact | New Location |
+|---|------|-------------|
+| 118 | Scene normalizer unifies mixed-asset framerates to 30fps target (PAL 25fps, NTSC 24/29.97fps, variable-rate downloads all normalized) | PRD §5 PR-27, SRS §2 FR-33, Design §7 |
+| 119 | SAR normalized to 1:1 to prevent FFmpeg concat demuxer aspect ratio mismatches | PRD §5 PR-27, SRS §2 FR-33, Design §7 |
+| 120 | Ken Burns zoompan applied to static images (2.5s zoom cycle) to create motion from stills | PRD §5 PR-27, SRS §2 FR-33, Design §7 |
+| 121 | Flash-frame clips (<1s) rejected; clips >5s trimmed to 5s max | PRD §5 PR-27, SRS §2 FR-33, Design §7 |
+| 122 | Default treatment routing when LLM unavailable: text_card_reveal for text cards, broll_standard for video clips, ken_burns_zoom_in for static images | Design §4 |
+
 ---
 
 ## Requirements Traceability Matrix
@@ -198,6 +218,8 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | PR-22 | FR-24 | §9 Config, §9 Env Layer | N/A | Missing model env var | Default to `mimo-v2-flash` |
 | PR-23 | FR-25, NFR-10 | §2 Logging | N/A | Log level misconfigured | Default to INFO |
 | PR-25 | FR-06 | §4 Voice Provider, §9 Env Layer | G8 | ElevenLabs missing/fails, Gemini missing/fails, Fish Audio missing/fails | Try fallback order, persist attempts, then clear error/stop pipeline |
+| PR-26 | FR-32 | §7 Treatment System, §10 Templates | N/A | Invalid treatment YAML, unknown treatment type, missing FFmpeg filter | `templates/treatments.yaml` validated at load time; unknown treatments fall back to `broll_standard` |
+| PR-27 | FR-33 | §7 Scene Normalization | G9 | Mixed framerates, non-1:1 SAR, static images, flash frames | Scene normalizer in Composer pipeline: framerate→30fps, SAR→1:1, zoompan for images, reject <1s clips |
 
 ### MVP P1 Requirements
 
@@ -266,6 +288,8 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | E21c | Visual Director LLM returns empty plan (0 actions) | Treated as LLM failure, falls back to legacy sequential planning | SRS §2 FR-07, Design §4 |
 | E21d | Visual Director dispatch encounters unknown action type | `_execute_action()` logs warning, skips unknown action, scene gets text_card fallback | SRS §2 FR-07, Design §4 |
 | E21e | All 3-tier image fallbacks fail for a text card (Pexels down, Firecrawl fails, gradient generator error) | Text card generated with plain colored background (no image); provenance records all failures | SRS §2 FR-07, Design §4 |
+| E21f | Treatment YAML missing or invalid (malformed, missing required fields) | Composer falls back to `broll_standard` treatment for all scenes; warning logged; `provenance.json` records fallback | PRD §5 PR-26, SRS §2 FR-32 |
+| E21g | Visual Director selects unknown treatment type | Default routing applied (text_card→text_card_reveal, video→broll_standard, image→ken_burns_zoom_in); provenance records original and fallback | PRD §5 PR-26, Design §4 |
 
 ### Composer Edge Cases
 
@@ -277,6 +301,9 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | E24a | Rendered video is 0 bytes | G10 hard-fail (file size > 1KB check) | Design §3 G10 |
 | E25 | Rendered video too long/short | G10 checks 20-60s range | Design §3 G10 |
 | E25a | FFmpeg preflight diagnostic fails (missing ffmpeg, libx264, aac, or mp3) | Pipeline stops before any render work with clear diagnostic message. Admin/Creative Lead must fix system environment. | SRS §2 FR-29, Design §7 |
+| E25b | Scene normalizer encounters variable-framerate clip (VFR) | FFmpeg `-fps_mode cfr` forces constant 30fps; provenance records original and target fps | PRD §5 PR-27, SRS §2 FR-33 |
+| E25c | Scene normalizer encounters SAR ≠ 1:1 (e.g., 4:3 display aspect with 16:9 storage) | `setsar=1:1` filter applied; provenance records original SAR | PRD §5 PR-27, SRS §2 FR-33 |
+| E25d | Static image needs conversion to video segment | Ken Burns zoompan applied (2.5s zoom cycle, max zoom 1.5x); output at 30fps, 1080x1920 | PRD §5 PR-27, SRS §2 FR-33 |
 
 ### Reviewer Edge Cases
 
@@ -417,3 +444,5 @@ Use this checklist to verify the documentation set is airtight. Any reviewer (hu
 | **Render Engine** | FFmpeg filter graph orchestrator (`clipper_agency/rendering/engine.py`) — assembles primitives into a two-pass render pipeline |
 | **Rendering Primitives** | Shared FFmpeg filter chain builders (`clipper_agency/rendering/primitives.py`) — concat, fade, crossfade, drawtext, audio mix |
 | **Template Adapter** | Per-template renderer that translates YAML spec + scene data into a `RenderContract` (News Card, B-Roll, Rapid Update) |
+| **Treatment** | Data-driven visual effect definition (Ken Burns, slow-motion, etc.) in `templates/treatments.yaml`, applied by Composer via FFmpeg filter chains |
+| **Scene Normalizer** | Pipeline stage that unifies mixed-asset framerates, SAR, and encoding parameters before concat; part of Composer rendering flow |
