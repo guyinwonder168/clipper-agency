@@ -1,9 +1,13 @@
-"""Tests for subtitle_engine — build_subtitle_overlays pure function."""
+"""Tests for subtitle_engine — build_subtitle_overlays, build_hook_overlay, validate_tiktok_output."""
 
 import pytest
 
 from clipper_agency.rendering.contracts import CaptionOverlay
-from clipper_agency.rendering.subtitle_engine import build_subtitle_overlays
+from clipper_agency.rendering.subtitle_engine import (
+    build_hook_overlay,
+    build_subtitle_overlays,
+    validate_tiktok_output,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -144,3 +148,102 @@ def test_single_word_produces_overlay():
     assert result[0].text == "lonely"
     assert result[0].start_seconds == 0.0
     assert result[0].end_seconds == 2.0
+
+
+# ---------------------------------------------------------------------------
+# build_hook_overlay
+# ---------------------------------------------------------------------------
+
+
+def test_hook_overlay_first_3_seconds():
+    """Standard case: overlay spans [0, 3.0] with center position and hook style."""
+    scenes = [{"text": "Breaking news today", "duration": 5.0}]
+
+    result = build_hook_overlay(scenes)
+
+    assert result is not None
+    assert result.start_seconds == 0.0
+    assert result.end_seconds == 3.0
+    assert result.position == "center"
+    assert result.style == "hook"
+
+
+def test_hook_overlay_uses_first_scene_text():
+    """Hook overlay text matches the first scene's headline."""
+    scenes = [
+        {"text": "Headline text here", "duration": 5.0},
+        {"text": "Second scene text", "duration": 4.0},
+    ]
+
+    result = build_hook_overlay(scenes)
+
+    assert result is not None
+    assert result.text == "Headline text here"
+
+
+def test_hook_overlay_none_when_no_scenes():
+    """Empty scene list returns None."""
+    result = build_hook_overlay([])
+
+    assert result is None
+
+
+def test_hook_overlay_clamps_to_short_scene():
+    """Scene shorter than hook window clamps end to scene duration."""
+    scenes = [{"text": "Short scene", "duration": 1.5}]
+
+    result = build_hook_overlay(scenes, hook_window_seconds=3.0)
+
+    assert result is not None
+    assert result.end_seconds == 1.5
+
+
+# ---------------------------------------------------------------------------
+# validate_tiktok_output
+# ---------------------------------------------------------------------------
+
+
+def test_tiktok_validation_passes_valid_output():
+    """Valid FFmpeg command with all TikTok flags → all True."""
+    cmd = [
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-b:a", "128k",
+        "-shortest",
+    ]
+
+    result = validate_tiktok_output(cmd)
+
+    assert all(result.values()), f"Expected all True, got: {result}"
+
+
+def test_tiktok_validation_flags_missing_faststart():
+    """Missing -movflags → faststart=False, rest may pass."""
+    cmd = [
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-pix_fmt", "yuv420p",
+        "-b:a", "128k",
+        "-shortest",
+    ]
+
+    result = validate_tiktok_output(cmd)
+
+    assert result["faststart"] is False
+
+
+def test_tiktok_validation_flags_missing_pix_fmt():
+    """Missing -pix_fmt → pix_fmt_yuv420p=False."""
+    cmd = [
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        "-b:a", "128k",
+        "-shortest",
+    ]
+
+    result = validate_tiktok_output(cmd)
+
+    assert result["pix_fmt_yuv420p"] is False
