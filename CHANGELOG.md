@@ -44,6 +44,100 @@ Complete overhaul of the Composer agent's video assembly pipeline — replacing 
 
 ## [1.1.0] — 2026-06-04
 
+### Phase 13: Retry/Resume + Cache Reuse
+
+- CLI `job-retry <id> --from <agent>` and `job-resume <id>` for human-triggered retry from any agent.
+- Dashboard POST `/jobs/<id>/retry` and `/jobs/<id>/resume` with CSRF protection.
+- Job config snapshot frozen at creation; retries use same snapshot.
+- `validate_agent_cache()` skips paid provider calls when valid cached artifacts exist.
+
+### Phase 12: Artifact Contracts + Debug Observability
+
+- Canonical job workspace paths (`ASSETS_CACHE/job_{id}/agents/{agent}/`).
+- Artifact writer helpers for persisting agent input.json, output.json, gate results.
+- Safety, Researcher, Scriptwriter, Voice Producer, Visual Director artifacts all persisted.
+- Job manifest for full reproducibility.
+
+### Phase 11: Logging, Model Config, ScrapeCreators Cache
+
+- Structured logging for all agents, services, and LLM client (model, tokens, cost, latency).
+- Per-agent model configuration via environment variables (`SAFETY_MODEL`, `RESEARCHER_MODEL`, etc.).
+- ScrapeCreators response caching with `trim=true` + `_extract_fields()`.
+- `test-agent` CLI subcommand for independent agent debugging.
+- All 14 SonarCloud issues resolved (log injection, exception logging, complexity).
+
+### Phase 10: .env Config Fix
+
+- `pydantic-settings` `AppSettings` for typed config access.
+- `load_dotenv()` called at CLI entry (`__main__.py`).
+- Test isolation with `AppSettings(_env_file=None)` + `patch.dict(os.environ, clear=True)`.
+
+### Phase 9: Docker Deployment
+
+- Dockerfile + docker-compose.yml for VPS deployment.
+- Integration smoke test for full pipeline.
+- CI push trigger for master branch SonarCloud analysis.
+
+### Phase 8: Configurable Prompts & Templates
+
+- YAML-based prompt and template configuration.
+- Configurable niche profiles, video templates, agent prompts.
+
+### Phase 7: Web Dashboard
+
+- Flask web dashboard with basic auth (2 groups: privileged, creative/ops).
+- Job listing, agent observability, configuration editing.
+- CSRF-protected POST routes.
+
+### Phase 6: Orchestrator Engine
+
+- Gated state machine with 10 gates (G1-G10) — pass/soft-fail/hard-fail at every transition.
+- CLI interface: `python3 -m clipper_agency run --topic "..." --niche indonesian_artists`.
+- 216 tests, 97% line coverage.
+
+### Phase 5: Individual Agents
+
+- 7 agents: Safety, Researcher, Scriptwriter, Voice Producer, Visual Director, Composer, Reviewer.
+- Output Packager: `video.mp4` + `caption.txt` + `thumbnail.png` + `metadata.json`.
+- Base agent class with DB state tracking.
+
+### Phase 4: Agent Framework
+
+- Base agent class with lifecycle management.
+- Job state machine with transition validation.
+- All 10 gate definitions (G1-G10).
+
+### Phase 3: External Service Integrations
+
+- OpenRouter LLM client with model routing.
+- ElevenLabs voice generation service.
+- yt-dlp media download service.
+- Pexels stock media service.
+- Firecrawl web search service.
+- ScrapeCreators TikTok data service.
+
+### Phase 2: Database Layer
+
+- SQLite schema with 15 tables (WAL mode, advisory locks).
+- Connection management, CRUD queries.
+- Multi-tenant schema from day one.
+
+### Phase 1: Configuration System
+
+- Config hierarchy: Agent → Niche → Account → Job-level overrides.
+- YAML-based niche and account configuration.
+
+### Phase 0: Project Scaffolding
+
+- Package skeleton with CLI entry point.
+- Test infrastructure with conftest.
+- CI/CD: GitHub Actions + SonarCloud + GitGuardian.
+- Product documentation (PRD, SRS, technical design, traceability matrix).
+
+---
+
+## [1.1.0] — 2026-06-04
+
 ### Phase 18: Visual Director Enhancement
 
 - Treatment metadata pipeline: Visual Director selects per-scene treatments and transitions from `templates/treatments.yaml`.
