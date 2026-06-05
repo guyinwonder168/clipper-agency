@@ -44,6 +44,7 @@ _DEFAULT_TRANSITION = "crossfade"
 _SAFETY_MARGIN = 0.1
 _MIN_CLIP_HEADROOM = 0.15
 _MIN_TRANSITION_DUR = 0.05
+_OUTV = "[outv]"
 
 
 def _get_treatment_builder():
@@ -83,7 +84,7 @@ def _build_transition_chain(
         # Single scene: rename trimmed output directly to [outv].
         single = trim_parts[0]
         label = video_labels[0]
-        return single.replace(f"[{label}]", "[outv]")
+        return single.replace(f"[{label}]", _OUTV)
 
     config = _get_treatment_config()
     transition_parts: list[str] = []
@@ -155,6 +156,27 @@ def _has_xfade_transitions(normalized_assets: list[dict]) -> bool:
         if trans_def is not None and trans_def.ffmpeg_filter is not None:
             return True
     return False
+
+
+def _build_subtitle_chain(video_filter: str, script_scenes: list[dict]) -> str:
+    """Append subtitle drawtext overlays to the video filter chain."""
+    overlays = build_subtitle_overlays(script_scenes)
+    if not overlays:
+        return video_filter
+    video_filter = video_filter.replace(_OUTV, "[vsub_in]", 1)
+    current_label = "vsub_in"
+    for i, ov in enumerate(overlays):
+        next_label = "outv" if i == len(overlays) - 1 else f"sub{i}"
+        escaped = escape_drawtext(ov.text)
+        video_filter += (
+            f";[{current_label}]drawtext=text='{escaped}'"
+            f":enable='between(t,{ov.start_seconds},{ov.end_seconds})'"
+            f":fontsize=36:fontcolor=white"
+            f":borderw=2:bordercolor=black"
+            f":x=(w-tw)/2:y=h-th-60[{next_label}]"
+        )
+        current_label = next_label
+    return video_filter
 
 
 class ComposerAgent(BaseAgent):
@@ -639,26 +661,11 @@ class ComposerAgent(BaseAgent):
 
         # ── Subtitle overlay chain (from script_scenes) ──
         if script_scenes:
-            overlays = build_subtitle_overlays(script_scenes)
-            if overlays:
-                video_filter = video_filter.replace("[outv]", "[vsub_in]", 1)
-                current_label = "vsub_in"
-                for i, ov in enumerate(overlays):
-                    next_label = "outv" if i == len(overlays) - 1 else f"sub{i}"
-                    escaped = escape_drawtext(ov.text)
-                    video_filter += (
-                        f";[{current_label}]drawtext=text='{escaped}'"
-                        f":enable='between(t,{ov.start_seconds},{ov.end_seconds})'"
-                        f":fontsize=36:fontcolor=white"
-                        f":borderw=2:bordercolor=black"
-                        f":x=(w-tw)/2:y=h-th-60[{next_label}]"
-                    )
-                    current_label = next_label
+            video_filter = _build_subtitle_chain(video_filter, script_scenes)
 
         # Use audio_sequencer for per-scene audio pairing (replaces broken amix).
         # Transition chain already handles video output to [outv], so we only
         # need the audio concat from audio_sequencer (Mode B / has_xfade=True).
-        has_xfade = _has_xfade_transitions(normalized_assets)
         audio_filter, _outv, _outa = build_audio_video_concat(
             scene_labels=video_labels,
             num_video_inputs=num_videos,
@@ -672,7 +679,7 @@ class ComposerAgent(BaseAgent):
 
         cmd.extend([
             "-filter_complex", video_filter,
-            "-map", "[outv]",
+            "-map", _OUTV,
             "-map", "[outa]",
             "-c:v", "libx264",
             "-preset", "fast",
