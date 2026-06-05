@@ -367,3 +367,104 @@ class TestComposerTreatmentMetadata:
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
         assert "trim=duration=5" in filter_complex
         assert "concat=n=1:v=1[outv]" in filter_complex
+
+
+class TestComposerTreatmentFilters:
+    """Treatment filters from TreatmentFilterBuilder are applied in assembly."""
+
+    def test_build_assembly_cmd_applies_treatment_filter(self):
+        """cinematic_crop treatment prepends crop+scale filter before trim."""
+        valid_normalized = ["/tmp/scene_1.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5,
+             "treatment": "cinematic_crop", "type": "video"},
+        ]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized, normalized_assets, [], "/tmp/output.mp4",
+        )
+
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        # cinematic_crop YAML: crop=ih*9/16:ih,scale=1080:1920
+        # TreatmentFilterBuilder appends setsar=1/1 for scale/crop
+        assert "crop=ih*9/16:ih,scale=1080:1920,setsar=1/1,trim=duration=5" in filter_complex
+        assert "-pix_fmt" in cmd
+        assert "yuv420p" in cmd
+        assert "-movflags" in cmd
+        assert "+faststart" in cmd
+
+    def test_build_assembly_cmd_null_treatment_no_extra_filter(self):
+        """broll_standard (null filter) produces same filter as no treatment."""
+        valid_normalized = ["/tmp/scene_1.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5,
+             "treatment": "broll_standard", "type": "video"},
+        ]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized, normalized_assets, [], "/tmp/output.mp4",
+        )
+
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        # No treatment filter — just trim+setpts, exactly like before
+        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS[t0]" in filter_complex
+        assert "crop=" not in filter_complex
+        assert "scale=" not in filter_complex
+        assert "-pix_fmt" in cmd
+        assert "yuv420p" in cmd
+        assert "-movflags" in cmd
+        assert "+faststart" in cmd
+
+    def test_build_assembly_cmd_treatment_respects_duration(self):
+        """Treatment doesn't alter the target_duration used in trim."""
+        valid_normalized = ["/tmp/scene_1.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 3,
+             "treatment": "cinematic_crop", "type": "video"},
+        ]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized, normalized_assets, [], "/tmp/output.mp4",
+        )
+
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "trim=duration=3" in filter_complex
+        assert "trim=duration=5" not in filter_complex
+        assert "-pix_fmt" in cmd
+        assert "yuv420p" in cmd
+        assert "-movflags" in cmd
+        assert "+faststart" in cmd
+
+    def test_build_assembly_cmd_text_treatment_substitutes_vars(self):
+        """hook_big_caption substitutes {text} with headline value."""
+        valid_normalized = ["/tmp/scene_1.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5,
+             "treatment": "hook_big_caption", "type": "text",
+             "headline": "Test Headline"},
+        ]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized, normalized_assets, [], "/tmp/output.mp4",
+        )
+
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "drawtext=text='Test Headline'" in filter_complex
+        assert "{text}" not in filter_complex
+        assert "-pix_fmt" in cmd
+        assert "yuv420p" in cmd
+        assert "-movflags" in cmd
+        assert "+faststart" in cmd
+
+    def test_build_assembly_cmd_no_treatment_metadata_still_works(self):
+        """Asset without treatment key works like before (backward compat)."""
+        valid_normalized = ["/tmp/scene_1.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5},
+        ]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized, normalized_assets, [], "/tmp/output.mp4",
+        )
+
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS[t0]" in filter_complex
+        assert "-pix_fmt" in cmd
+        assert "yuv420p" in cmd
+        assert "-movflags" in cmd
+        assert "+faststart" in cmd

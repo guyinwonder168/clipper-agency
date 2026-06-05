@@ -33,6 +33,19 @@ logger = logging.getLogger(__name__)
 _FFMPEG_CONCAT_TIMEOUT = 600  # seconds
 _FFMPEG_NORMALIZE_TIMEOUT = 120  # seconds
 
+# Lazy singleton for TreatmentFilterBuilder — avoids per-call YAML re-parsing.
+_treatment_builder: "TreatmentFilterBuilder | None" = None  # type: ignore[name-defined]  # noqa: F821
+
+
+def _get_treatment_builder():
+    """Return the module-level TreatmentFilterBuilder singleton."""
+    global _treatment_builder
+    if _treatment_builder is None:
+        from clipper_agency.rendering.treatment_config import TreatmentConfig
+        from clipper_agency.rendering.treatment_filters import TreatmentFilterBuilder
+        _treatment_builder = TreatmentFilterBuilder(TreatmentConfig())
+    return _treatment_builder
+
 
 class ComposerAgent(BaseAgent):
     """Assembles final video from assets and audio using FFmpeg."""
@@ -512,13 +525,21 @@ class ComposerAgent(BaseAgent):
         num_videos = len([a for a in normalized_assets if a.get("path")])
         trim_parts: list[str] = []
         video_labels: list[str] = []
+        builder = _get_treatment_builder()
         for i in range(num_videos):
-            duration = normalized_assets[i].get("target_duration", 5)
+            asset = normalized_assets[i]
+            duration = asset.get("target_duration", 5)
+            treatment_filter = builder.build(asset)
             label = f"t{i}"
             video_labels.append(label)
-            trim_parts.append(
-                f"[{i}:v]trim=duration={duration},setpts=PTS-STARTPTS[{label}]"
-            )
+            if treatment_filter != "null":
+                trim_parts.append(
+                    f"[{i}:v]{treatment_filter},trim=duration={duration},setpts=PTS-STARTPTS[{label}]"
+                )
+            else:
+                trim_parts.append(
+                    f"[{i}:v]trim=duration={duration},setpts=PTS-STARTPTS[{label}]"
+                )
         concat_inputs = "".join(f"[{label}]" for label in video_labels)
         concat_filter = (
             f"{';'.join(trim_parts)};"
@@ -544,6 +565,8 @@ class ComposerAgent(BaseAgent):
             "-crf", "23",
             "-c:a", "aac",
             "-b:a", "128k",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
             "-shortest",
             output_path,
         ])
