@@ -3,6 +3,7 @@
 > Phase 12 ✅ Complete (merged `c001685` on master via PR #15).
 > Phase 13 ✅ Complete (merged `497aa3c` on master via PR #16).
 > Phase 14 ✅ Complete (merged `1f36918` on master via PR #17).
+> Phase 15a ✅ Complete (all 3 PRs merged to master).
 
 **Goal:** Repair the MVP pipeline across Phases 12-15a so it matches the PRD/SRS/technical design: restartable job workspaces, persisted agent/gate contracts, retry/resume, correct media composition, and template-driven rendering.
 

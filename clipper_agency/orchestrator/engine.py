@@ -293,6 +293,7 @@ class Orchestrator:
         compose_output = self._run_composer(
             job_id=job_id, assets=visual_output.get("assets", []),
             audio_files=voice_output.get("audio_files", []),
+            script_scenes=script_output.get("script", []),
             output_dir=output_dir, assets_cache=assets_cache,
         )
 

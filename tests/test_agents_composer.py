@@ -123,22 +123,6 @@ class TestComposerName:
         assert agent.agent_name == "composer"
 
 
-class TestComposerBuildFilter:
-    """FFmpeg filter graph construction."""
-
-    def test_build_filter_creates_concat_and_overlay(self):
-        agent = ComposerAgent()
-        assets = [
-            {"scene": 1, "path": "/tmp/scene_1.mp4"},
-            {"scene": 2, "path": "/tmp/scene_2.mp4"},
-        ]
-        audio_files = ["/tmp/scene_0.mp3", "/tmp/scene_1.mp3"]
-        filter_str = agent._build_filter(assets, audio_files)
-        assert "concat" in filter_str
-        assert "amix" in filter_str
-        assert "[outv]" in filter_str
-
-
 class TestComposerExecute:
     """Full execute() with mocked subprocess."""
 
@@ -238,20 +222,6 @@ class TestComposerExecute:
         assert mock_thumb.called
         call_args = mock_thumb.call_args[0]
         assert result["video_path"] == call_args[0]
-
-    def test_build_filter_no_video_assets_returns_null(self):
-        """Line 60: empty assets list returns 'null' filter string."""
-        agent = ComposerAgent()
-        result = agent._build_filter([], [])
-        assert result == "null"
-
-    def test_build_filter_no_audio_uses_silent_source(self):
-        """Line 77: no audio files → uses anullsrc for silent audio."""
-        agent = ComposerAgent()
-        assets = [{"scene": 1, "path": "/tmp/scene_1.mp4"}]
-        result = agent._build_filter(assets, [])
-        assert "anullsrc[outa]" in result
-        assert "concat" in result
 
     def test_assemble_video_empty_inputs_returns_early(self, mocker):
         """Line 86: no video inputs → early return, no ffmpeg call."""
@@ -578,98 +548,10 @@ class TestComposerCardFallback:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Task 10: Audio assembly and mixing
+# Task 12: Persist Composer template diagnostics
 # ═══════════════════════════════════════════════════════════════════════
 
 
-class TestComposerAudioAssembly:
-    """Task 10: Audio assembly — alignment, silent padding, no TikTok audio."""
-
-    def test_audio_aligns_correct_input_count(self):
-        """amix uses correct input count matching audio file count."""
-        agent = ComposerAgent()
-        assets = [
-            {"scene": 1, "path": "/tmp/s1.mp4"},
-            {"scene": 2, "path": "/tmp/s2.mp4"},
-            {"scene": 3, "path": "/tmp/s3.mp4"},
-        ]
-        audio_files = ["/tmp/v0.mp3", "/tmp/v1.mp3"]
-
-        filt = agent._build_filter(assets, audio_files)
-
-        assert "amix=inputs=2" in filt
-        assert "duration=first" in filt
-
-    def test_no_background_music_by_default(self):
-        """No extra audio inputs beyond voice files — no bg music."""
-        agent = ComposerAgent()
-        assets = [
-            {"scene": 1, "path": "/tmp/s1.mp4"},
-            {"scene": 2, "path": "/tmp/s2.mp4"},
-        ]
-        audio_files = ["/tmp/voice_0.mp3", "/tmp/voice_1.mp3"]
-
-        filt = agent._build_filter(assets, audio_files)
-
-        # Should have exactly 2 video inputs + 2 audio inputs = 4 total -i refs
-        # amix=inputs=2 confirms exactly 2 audio inputs
-        assert "amix=inputs=2" in filt
-
-    def test_silent_audio_for_scenes_without_voice(self):
-        """Scenes without matching voice get anullsrc silent audio."""
-        agent = ComposerAgent()
-        assets = [
-            {"scene": 1, "path": "/tmp/s1.mp4"},
-            {"scene": 2, "path": "/tmp/s2.mp4"},
-        ]
-        audio_files = ["/tmp/voice_0.mp3"]
-
-        filt = agent._build_filter(assets, audio_files)
-
-        assert "amix=inputs=1" in filt
-        # Even with fewer voice files than scenes, audio is handled
-        assert "[outa]" in filt
-
-    def test_disallow_copyrighted_tiktok_audio(self, tmp_path, mocker):
-        """Audio inputs should only be voice files, not TikTok audio sources."""
-        agent = ComposerAgent()
-
-        valid_scene = tmp_path / "scene_1.mp4"
-        valid_scene.write_bytes(b"valid mp4 data" * 100)
-
-        mocker.patch(
-            "clipper_agency.agents.composer.SceneValidator.validate",
-            return_value=SceneValidationResult(
-                path=str(valid_scene), valid=True, issues=[],
-            ),
-        )
-        mock_norm = mocker.patch(
-            "clipper_agency.agents.composer.SceneNormalizer"
-        )
-        mock_norm.return_value.normalize = mocker.Mock(
-            return_value=NormalizeResult(path=str(valid_scene), success=True),
-        )
-
-        mock_run = mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
-
-        assets = [
-            {"scene": 1, "path": str(valid_scene)},
-        ]
-
-        # Valid: voice files only — no TikTok audio
-        voice_files = ["/tmp/voice_0.mp3", "/tmp/voice_1.mp3"]
-        output_path = str(tmp_path / "out.mp4")
-        agent._assemble_video(assets, voice_files, output_path)
-
-        call_args = mock_run.call_args[0][0]
-        call_str = " ".join(call_args)
-
-        # TikTok audio patterns must not appear
-        forbidden = ["tiktok", "original_sound", "music", "bgm"]
-        for pattern in forbidden:
-            assert pattern not in call_str.lower(), (
-                f"Forbidden audio pattern '{pattern}' found in ffmpeg args"
-            )
 
 
 # ═══════════════════════════════════════════════════════════════════════

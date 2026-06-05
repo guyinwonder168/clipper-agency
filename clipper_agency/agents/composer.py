@@ -22,16 +22,161 @@ from clipper_agency.core.paths import (
 )
 from clipper_agency.core.scene_normalizer import SceneNormalizer
 from clipper_agency.core.scene_validator import SceneValidator
+from clipper_agency.rendering.audio_sequencer import build_audio_video_concat
 from clipper_agency.rendering.engine import render_plan
+from clipper_agency.rendering.primitives import escape_drawtext
 from clipper_agency.rendering.renderers.b_roll_narration import build_b_roll_narration_plan
 from clipper_agency.rendering.renderers.news_card import build_news_card_plan
 from clipper_agency.rendering.renderers.rapid_update import build_rapid_update_plan
+from clipper_agency.rendering.subtitle_engine import build_subtitle_overlays
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
 
 _FFMPEG_CONCAT_TIMEOUT = 600  # seconds
 _FFMPEG_NORMALIZE_TIMEOUT = 120  # seconds
+
+# Lazy singletons — avoid per-call YAML re-parsing.
+_treatment_builder: "TreatmentFilterBuilder | None" = None  # type: ignore[name-defined]  # noqa: F821
+_treatment_config: "TreatmentConfig | None" = None  # type: ignore[name-defined]  # noqa: F821
+
+_DEFAULT_TRANSITION = "crossfade"
+_SAFETY_MARGIN = 0.1
+_MIN_CLIP_HEADROOM = 0.15
+_MIN_TRANSITION_DUR = 0.05
+_OUTV = "[outv]"
+
+
+def _get_treatment_builder():
+    """Return the module-level TreatmentFilterBuilder singleton."""
+    global _treatment_builder
+    if _treatment_builder is None:
+        from clipper_agency.rendering.treatment_config import TreatmentConfig
+        from clipper_agency.rendering.treatment_filters import TreatmentFilterBuilder
+        _treatment_builder = TreatmentFilterBuilder(TreatmentConfig())
+    return _treatment_builder
+
+
+def _get_treatment_config():
+    """Return the module-level TreatmentConfig singleton for transition lookups."""
+    global _treatment_config
+    if _treatment_config is None:
+        from clipper_agency.rendering.treatment_config import TreatmentConfig
+        _treatment_config = TreatmentConfig()
+    return _treatment_config
+
+
+def _build_transition_chain(
+    trim_parts: list[str],
+    video_labels: list[str],
+    normalized_assets: list[dict],
+    num_videos: int,
+) -> str:
+    """Build the video filter section: trim parts + transition chain.
+
+    For single-scene outputs, the trimmed label maps directly to [outv].
+    For multi-scene, scenes are joined via xfade or concat transitions
+    based on each scene's ``transition_out`` metadata.
+
+    Returns the complete video filter string (without audio).
+    """
+    if num_videos == 1:
+        # Single scene: rename trimmed output directly to [outv].
+        single = trim_parts[0]
+        label = video_labels[0]
+        return single.replace(f"[{label}]", _OUTV)
+
+    config = _get_treatment_config()
+    transition_parts: list[str] = []
+    current_label = video_labels[0]
+    cumulative_duration = float(
+        normalized_assets[0].get("target_duration", 5)
+    )
+
+    for i in range(1, num_videos):
+        prev_asset = normalized_assets[i - 1]
+        next_dur = float(normalized_assets[i].get("target_duration", 5))
+        is_last = i == num_videos - 1
+
+        # Resolve transition definition; unknown → crossfade fallback.
+        trans_name = prev_asset.get("transition_out", _DEFAULT_TRANSITION)
+        trans_def = config.get_transition(trans_name)
+        if trans_def is None:
+            trans_def = config.get_transition(_DEFAULT_TRANSITION)
+
+        # Per-asset override for transition duration.
+        trans_duration = float(
+            prev_asset.get("transition_duration", trans_def.default_duration)
+        )
+
+        if trans_def.ffmpeg_filter is not None:
+            # ── xfade transition ──
+            prev_dur = float(prev_asset.get("target_duration", 5))
+            max_dur = min(prev_dur, next_dur) - _MIN_CLIP_HEADROOM
+            trans_duration = min(
+                trans_duration, max(_MIN_TRANSITION_DUR, max_dur)
+            )
+            offset = max(
+                0.0, cumulative_duration - trans_duration - _SAFETY_MARGIN
+            )
+
+            filter_str = (
+                trans_def.ffmpeg_filter
+                .replace("{duration}", f"{trans_duration}")
+                .replace("{offset}", f"{offset}")
+            )
+            out_label = "outv" if is_last else f"x{i}"
+            transition_parts.append(
+                f"[{current_label}][{video_labels[i]}]"
+                f"{filter_str}[{out_label}]"
+            )
+            current_label = out_label
+            cumulative_duration += next_dur - trans_duration
+        else:
+            # ── hard cut → concat ──
+            out_label = "outv" if is_last else f"c{i}"
+            transition_parts.append(
+                f"[{current_label}][{video_labels[i]}]"
+                f"concat=n=2:v=1[{out_label}]"
+            )
+            current_label = out_label
+            cumulative_duration += next_dur
+
+    return ";".join(trim_parts + transition_parts)
+
+
+def _has_xfade_transitions(normalized_assets: list[dict]) -> bool:
+    """Return True if any asset uses an xfade-based transition (not hard_cut)."""
+    config = _get_treatment_config()
+    for asset in normalized_assets:
+        name = asset.get("transition_out")
+        if name is None:
+            continue
+        trans_def = config.get_transition(name)
+        if trans_def is not None and trans_def.ffmpeg_filter is not None:
+            return True
+    return False
+
+
+def _build_subtitle_chain(video_filter: str, script_scenes: list[dict]) -> str:
+    """Append subtitle drawtext overlays to the video filter chain."""
+    overlays = build_subtitle_overlays(script_scenes)
+    if not overlays:
+        return video_filter
+    video_filter = video_filter.replace(_OUTV, "[vsub_in]", 1)
+    current_label = "vsub_in"
+    for i, ov in enumerate(overlays):
+        next_label = "outv" if i == len(overlays) - 1 else f"sub{i}"
+        escaped = escape_drawtext(ov.text)
+        video_filter += (
+            f";[{current_label}]drawtext=text='{escaped}'"
+            f":enable='between(t,{ov.start_seconds},{ov.end_seconds})'"
+            f":fontsize=36:fontcolor=white"
+            f":borderw=2:bordercolor=black"
+            f":x=(w-tw)/2:y=h-th-60[{next_label}]"
+        )
+        current_label = next_label
+    return video_filter
 
 
 class ComposerAgent(BaseAgent):
@@ -57,6 +202,7 @@ class ComposerAgent(BaseAgent):
     ) -> dict[str, Any]:
         video_assets = assets or []
         voice_files = audio_files or []
+        script_scenes = kwargs.get("script_scenes", [])
 
         # ── FFmpeg preflight diagnostics ──
         preflight_result = self._run_preflight(output_dir, job_id)
@@ -89,7 +235,7 @@ class ComposerAgent(BaseAgent):
 
         return self._execute_assembly(
             video_assets, voice_files, output_dir, assets_cache,
-            job_id, agent_dir,
+            job_id, agent_dir, script_scenes=script_scenes,
         )
 
     def _execute_assembly(
@@ -100,6 +246,7 @@ class ComposerAgent(BaseAgent):
         assets_cache: str,
         job_id: int,
         agent_dir: str,
+        script_scenes: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Run the assembly pipeline: concat scenes + mix audio + thumbnail."""
         if not video_assets and not voice_files:
@@ -117,6 +264,7 @@ class ComposerAgent(BaseAgent):
             return self._try_assemble(
                 video_assets, voice_files, video_path, thumbnail_path,
                 assets_cache, job_id, agent_dir,
+                script_scenes=script_scenes,
             )
         except subprocess.CalledProcessError as e:
             return self._handle_ffmpeg_error(e, video_path, agent_dir)
@@ -138,10 +286,12 @@ class ComposerAgent(BaseAgent):
         assets_cache: str,
         job_id: int,
         agent_dir: str,
+        script_scenes: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Attempt assembly. Raises on FFmpeg or unexpected errors."""
         assemble_result = self._assemble_video(
             video_assets, voice_files, video_path,
+            script_scenes=script_scenes,
         )
         ffmpeg_cmd = assemble_result["cmd"]
         card_fallback_scenes = assemble_result.get(
@@ -380,37 +530,9 @@ class ComposerAgent(BaseAgent):
         )
         return None, True
 
-    def _build_filter(
-        self, assets: list[dict], audio_files: list[str]
-    ) -> str:
-        video_inputs = [a for a in assets if a.get("path")]
-        num_videos = len(video_inputs)
-
-        if num_videos == 0:
-            return "null"
-
-        # Build concat filter for video streams
-        concat_inputs = "".join(f"[{i}:v]" for i in range(num_videos))
-        concat_filter = (
-            f"{concat_inputs}concat=n={num_videos}:v=1[outv]"
-        )
-
-        # Build amix filter for audio streams — voice files only (no bg music)
-        if audio_files:
-            audio_inputs = "".join(
-                f"[{num_videos + i}:a]" for i in range(len(audio_files))
-            )
-            concat_filter += (
-                f";{audio_inputs}"
-                f"amix=inputs={len(audio_files)}:duration=first[outa]"
-            )
-        else:
-            concat_filter += ";anullsrc[outa]"
-
-        return concat_filter
-
     def _assemble_video(
-        self, assets: list[dict], audio_files: list[str], output_path: str
+        self, assets: list[dict], audio_files: list[str], output_path: str,
+        script_scenes: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Assemble final video from assets with scene normalization and card fallback.
 
@@ -453,6 +575,7 @@ class ComposerAgent(BaseAgent):
 
             cmd = self._build_assembly_cmd(
                 valid_normalized, normalized_assets, audio_files, output_path,
+                script_scenes=script_scenes,
             )
 
             logger.info(
@@ -499,6 +622,7 @@ class ComposerAgent(BaseAgent):
         normalized_assets: list[dict],
         audio_files: list[str],
         output_path: str,
+        script_scenes: list[dict] | None = None,
     ) -> list[str]:
         """Build the FFmpeg assembly command from normalized assets."""
         cmd = ["ffmpeg", "-y"]
@@ -507,43 +631,63 @@ class ComposerAgent(BaseAgent):
         for af in audio_files:
             cmd.extend(["-i", af])
 
-        # Build per-input trim + concat filter graph from asset metadata.
+        # Build per-input trim + transition chain filter graph.
         # Each asset's target_duration controls the trim length; defaults to 5.
         num_videos = len([a for a in normalized_assets if a.get("path")])
         trim_parts: list[str] = []
         video_labels: list[str] = []
+        builder = _get_treatment_builder()
         for i in range(num_videos):
-            duration = normalized_assets[i].get("target_duration", 5)
+            asset = normalized_assets[i]
+            duration = asset.get("target_duration", 5)
+            treatment_filter = builder.build(asset)
             label = f"t{i}"
             video_labels.append(label)
-            trim_parts.append(
-                f"[{i}:v]trim=duration={duration},setpts=PTS-STARTPTS[{label}]"
-            )
-        concat_inputs = "".join(f"[{label}]" for label in video_labels)
-        concat_filter = (
-            f"{';'.join(trim_parts)};"
-            f"{concat_inputs}concat=n={num_videos}:v=1[outv]"
+            if treatment_filter != "null":
+                trim_parts.append(
+                    f"[{i}:v]{treatment_filter},"
+                    f"trim=duration={duration},"
+                    f"setpts=PTS-STARTPTS[{label}]"
+                )
+            else:
+                trim_parts.append(
+                    f"[{i}:v]trim=duration={duration},"
+                    f"setpts=PTS-STARTPTS[{label}]"
+                )
+
+        video_filter = _build_transition_chain(
+            trim_parts, video_labels, normalized_assets, num_videos,
         )
-        if audio_files:
-            audio_inputs = "".join(
-                f"[{num_videos + i}:a]" for i in range(len(audio_files))
-            )
-            concat_filter += (
-                f";{audio_inputs}"
-                f"amix=inputs={len(audio_files)}:duration=first[outa]"
-            )
+
+        # ── Subtitle overlay chain (from script_scenes) ──
+        if script_scenes:
+            video_filter = _build_subtitle_chain(video_filter, script_scenes)
+
+        # Use audio_sequencer for per-scene audio pairing (replaces broken amix).
+        # Transition chain already handles video output to [outv], so we only
+        # need the audio concat from audio_sequencer (Mode B / has_xfade=True).
+        audio_filter, _outv, _outa = build_audio_video_concat(
+            scene_labels=video_labels,
+            num_video_inputs=num_videos,
+            audio_file_count=len(audio_files) if audio_files else 0,
+            has_xfade=True,
+        )
+        if audio_filter == "anullsrc":
+            video_filter += ";anullsrc[outa]"
         else:
-            concat_filter += ";anullsrc[outa]"
+            video_filter += ";" + audio_filter
 
         cmd.extend([
-            "-filter_complex", concat_filter,
-            "-map", "[outv]",
+            "-filter_complex", video_filter,
+            "-map", _OUTV,
             "-map", "[outa]",
             "-c:v", "libx264",
             "-preset", "fast",
             "-crf", "23",
             "-c:a", "aac",
             "-b:a", "128k",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
             "-shortest",
             output_path,
         ])

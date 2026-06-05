@@ -1,6 +1,6 @@
-# Phase 14: Media Composer Correctness — Implementation Plan
+# Phase 14: Media Composer Correctness — Implementation Plan ✅ COMPLETED
 
-> **For Claude:** Use this plan task-by-task. TDD: write failing test first, then implement.
+> **Status:** Completed — merged via PR #17 (`1f36918`) on master. All 12 subtasks implemented: FFmpeg preflight, media probing, scene validation/normalization, clip provenance, generated card fallback, card-to-video, composer assembly, output packaging validation, deterministic G10, fixed-contract packager with S6549-safe path sandbox.
 
 **Goal:** Make generated videos satisfy MVP media requirements reliably — correct resolution, valid clips, generated card fallback, proper audio mixing, and deterministic output validation.
 
@@ -516,15 +516,15 @@ git commit -m "feat: deterministic G10 video validation with ffprobe checks"
 
 ## Acceptance Criteria (all 12 tasks complete)
 
-- [ ] Composer no longer fails on mixed source dimensions
-- [ ] Valid source clips normalized to 1080x1920 before concat
-- [ ] Invalid/too-short clips rejected or replaced with generated cards
-- [ ] Final `video.mp4` passes G10 deterministic validation
-- [ ] `thumbnail.png`, `caption.txt`, and `metadata.json` generated consistently
-- [ ] FFmpeg stderr and command logs persisted for failed renders
-- [ ] Preflight diagnostics persisted per job
-- [ ] Clip provenance tracked (source, original dimensions, download timestamp)
-- [ ] No copyrighted TikTok audio embedded in output
+- [x] Composer no longer fails on mixed source dimensions
+- [x] Valid source clips normalized to 1080x1920 before concat
+- [x] Invalid/too-short clips rejected or replaced with generated cards
+- [x] Final `video.mp4` passes G10 deterministic validation
+- [x] `thumbnail.png`, `caption.txt`, and `metadata.json` generated consistently
+- [x] FFmpeg stderr and command logs persisted for failed renders
+- [x] Preflight diagnostics persisted per job
+- [x] Clip provenance tracked (source, original dimensions, download timestamp)
+- [x] No copyrighted TikTok audio embedded in output
 
 ## Explicit Deferrals to Phase 15
 
