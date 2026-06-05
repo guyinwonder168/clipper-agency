@@ -11,7 +11,7 @@
 ███████║██║  ███╗█████╗  ██╔██╗ ██║██║      ╚████╔╝ 
 ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║██║       ╚██╔╝  
 ██║  ██║╚██████╔╝███████╗██║ ╚████║╚██████╗   ██║   
-╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═════╝ ╚═════╝   ╚═╝   
+╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝ ╚═════╝   ╚═╝   
 ```
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue?logo=python">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-699%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-783%20passing-brightgreen">
   <img alt="Coverage" src="https://img.shields.io/badge/coverage-93%25-brightgreen">
   <img alt="FFmpeg" src="https://img.shields.io/badge/FFmpeg-5.0%2B-orange?logo=ffmpeg">
   <img alt="SonarCloud" src="https://img.shields.io/badge/SonarCloud-passing-brightgreen?logo=sonarcloud">
@@ -157,6 +157,10 @@ clipper_agency/
 │   ├── contracts.py         # Typed render plan dataclasses
 │   ├── primitives.py        # FFmpeg filter chain builders
 │   ├── engine.py            # FFmpeg render orchestrator
+│   ├── treatment_config.py  # YAML loader for treatment/transition definitions
+│   ├── treatment_filters.py # Per-scene FFmpeg filter string builder
+│   ├── audio_sequencer.py   # Per-scene audio+video concat filter builder
+│   ├── subtitle_engine.py   # Script text → timed CaptionOverlay + TikTok validation
 │   ├── thumbnails.py        # Pillow thumbnail generation
 │   └── renderers/           # Per-template adapters (News Card, B-Roll, Rapid Update)
 ├── output/                  # Video packaging & thumbnail
@@ -216,7 +220,7 @@ python3 -m pytest -m "not integration and not external"
 python3 -m pytest -m integration
 ```
 
-Tests live in `tests/` mirroring the package structure. Currently **699 tests** at **93%+ line coverage**.
+Tests live in `tests/` mirroring the package structure. Currently **783 tests** at **93%+ line coverage**.
 
 ---
 
@@ -235,6 +239,6 @@ Tests live in `tests/` mirroring the package structure. Currently **699 tests** 
 
 ## Status
 
-**✅ MVP Complete** — Phases 0-18 implemented. Treatment system, scene normalizer, LLM-driven visual director, template rendering engine.
+**✅ MVP Complete** — Phases 0-19 implemented. Treatment system, scene normalizer, LLM-driven visual director, template rendering engine, audio sequencing, subtitle overlays, xfade transitions.
 
-699 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing
+783 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing
