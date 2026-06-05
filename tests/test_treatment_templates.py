@@ -57,3 +57,43 @@ class TestTreatmentTemplates:
         data = yaml.safe_load(TEMPLATES_PATH.read_text())
         assert "pacing_rules" in data
         assert "tiktok_standard" in data["pacing_rules"]
+
+    def test_xfade_transitions_have_duration_and_offset_vars(self):
+        data = yaml.safe_load(TEMPLATES_PATH.read_text())
+        for name, transition in data["transitions"].items():
+            filt = transition.get("ffmpeg_filter")
+            if filt is None:
+                continue
+            assert "{duration}" in filt, (
+                f"Transition '{name}' filter missing {{duration}} var"
+            )
+            assert "{offset}" in filt, (
+                f"Transition '{name}' filter missing {{offset}} var"
+            )
+
+    def test_image_treatments_use_zoompan(self):
+        data = yaml.safe_load(TEMPLATES_PATH.read_text())
+        for name, treatment in data["treatments"].items():
+            if treatment.get("input_type") != "image":
+                continue
+            filt = treatment.get("ffmpeg_filter")
+            assert filt is not None, f"Image treatment '{name}' missing ffmpeg_filter"
+            assert "zoompan" in filt, f"Image treatment '{name}' must use zoompan"
+
+    def test_fps_rules_has_target_fps(self):
+        data = yaml.safe_load(TEMPLATES_PATH.read_text())
+        fps = data["fps_rules"]
+        assert fps["target_fps"] == 30
+        assert isinstance(fps["rules"], list)
+        assert len(fps["rules"]) >= 3, "fps_rules.rules must have at least 3 items"
+
+    def test_pacing_rules_have_hook_window(self):
+        data = yaml.safe_load(TEMPLATES_PATH.read_text())
+        profiles = data["pacing_rules"]
+        has_hook = False
+        for _name, profile in profiles.items():
+            if "hook_window_seconds" in profile:
+                val = profile["hook_window_seconds"]
+                assert val > 0, "hook_window_seconds must be positive"
+                has_hook = True
+        assert has_hook, "At least one pacing profile must define hook_window_seconds"
