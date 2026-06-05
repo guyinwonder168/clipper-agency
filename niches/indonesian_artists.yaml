@@ -6,7 +6,7 @@ video_length:
   hard_limit: 60
 voice:
   provider: elevenlabs
-  default_voice_id: "NPDHDOOQCSyifTJZOe6J"  # Configure via env ELEVENLABS_VOICE_ID
+  default_voice_id: "JBFqnCBsd6RMkjVDRZzb"  # Configure via env ELEVENLABS_VOICE_ID
 thumbnail:
   template: headline_frame
   resolution: 1080x1920

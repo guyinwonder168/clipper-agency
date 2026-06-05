@@ -508,35 +508,6 @@ class ComposerAgent(BaseAgent):
         )
         return None, True
 
-    def _build_filter(
-        self, assets: list[dict], audio_files: list[str]
-    ) -> str:
-        video_inputs = [a for a in assets if a.get("path")]
-        num_videos = len(video_inputs)
-
-        if num_videos == 0:
-            return "null"
-
-        # Build concat filter for video streams
-        concat_inputs = "".join(f"[{i}:v]" for i in range(num_videos))
-        concat_filter = (
-            f"{concat_inputs}concat=n={num_videos}:v=1[outv]"
-        )
-
-        # Build amix filter for audio streams — voice files only (no bg music)
-        if audio_files:
-            audio_inputs = "".join(
-                f"[{num_videos + i}:a]" for i in range(len(audio_files))
-            )
-            concat_filter += (
-                f";{audio_inputs}"
-                f"amix=inputs={len(audio_files)}:duration=first[outa]"
-            )
-        else:
-            concat_filter += ";anullsrc[outa]"
-
-        return concat_filter
-
     def _assemble_video(
         self, assets: list[dict], audio_files: list[str], output_path: str,
         script_scenes: list[dict] | None = None,

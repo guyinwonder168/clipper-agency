@@ -811,3 +811,193 @@ class TestComposerSubtitles:
         filter_complex = concat_cmd[filter_idx + 1]
         assert "drawtext" in filter_complex
         assert "Full chain threading test" in filter_complex
+
+
+class TestComposerUnifiedPipeline:
+    """Integration tests for the unified Composer assembly pipeline.
+
+    Validates that treatment filters, audio concat, subtitle drawtext,
+    and transition logic all compose correctly in _build_assembly_cmd.
+    """
+
+    @staticmethod
+    def _build_two_scene_unified(
+        scene0_extra: dict,
+        scene1_extra: dict,
+        audio_files: list[str] | None = None,
+        script_scenes: list[dict] | None = None,
+    ) -> tuple[list[str], str]:
+        """Helper: build 2-scene assembly cmd, return (cmd, filter_complex)."""
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
+        assets = [
+            {"scene": 1, "path": valid[0], "target_duration": 5.0, **scene0_extra},
+            {"scene": 2, "path": valid[1], "target_duration": 5.0, **scene1_extra},
+        ]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid,
+            assets,
+            audio_files or [],
+            "/tmp/out.mp4",
+            script_scenes=script_scenes,
+        )
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        return cmd, fc
+
+    # ── Test 1: treatment + audio + subtitles all present ──
+
+    def test_full_pipeline_treatment_audio_subtitles(self):
+        """2 scenes, cinematic_crop + audio + script → treatment, audio concat, drawtext."""
+        # Arrange
+        audio = ["/tmp/a0.mp3", "/tmp/a1.mp3"]
+        script = [
+            {"text": "Hello world this is a test", "duration": 5.0},
+            {"text": "Second scene narration", "duration": 5.0},
+        ]
+
+        # Act
+        cmd, fc = self._build_two_scene_unified(
+            {"treatment": "cinematic_crop", "transition_out": "hard_cut"},
+            {},
+            audio_files=audio,
+            script_scenes=script,
+        )
+
+        # Assert — treatment filter (crop=)
+        assert "crop=" in fc
+        # Assert — audio concat for 2 scenes
+        assert "concat=n=2:a=1[outa]" in fc
+        # Assert — subtitle drawtext
+        assert "drawtext" in fc
+        assert "Hello world this is a test" in fc
+        # Assert — no broken amix
+        assert "amix" not in fc
+
+    # ── Test 2: audio but no subtitles ──
+
+    def test_pipeline_audio_no_subtitles(self):
+        """2 scenes + audio, no script → audio concat, NO drawtext."""
+        # Arrange
+        audio = ["/tmp/a0.mp3", "/tmp/a1.mp3"]
+
+        # Act
+        cmd, fc = self._build_two_scene_unified(
+            {"transition_out": "hard_cut"},
+            {},
+            audio_files=audio,
+            script_scenes=None,
+        )
+
+        # Assert — audio concat present
+        assert "concat=n=2:a=1[outa]" in fc
+        # Assert — no subtitle drawtext
+        assert "drawtext" not in fc
+        assert "amix" not in fc
+
+    # ── Test 3: subtitles but no audio ──
+
+    def test_pipeline_subtitles_no_audio(self):
+        """2 scenes + script, no audio → drawtext present, anullsrc for audio."""
+        # Arrange
+        script = [
+            {"text": "Narration for scene one", "duration": 5.0},
+            {"text": "Narration for scene two", "duration": 5.0},
+        ]
+
+        # Act
+        cmd, fc = self._build_two_scene_unified(
+            {"transition_out": "hard_cut"},
+            {},
+            audio_files=[],
+            script_scenes=script,
+        )
+
+        # Assert — subtitle drawtext present
+        assert "drawtext" in fc
+        assert "Narration for scene one" in fc
+        # Assert — anullsrc for missing audio
+        assert "anullsrc" in fc
+        # Assert — no audio concat
+        assert "amix" not in fc
+
+    # ── Test 4: xfade transition + audio + subtitles ──
+
+    def test_pipeline_xfade_with_audio_and_subtitles(self):
+        """2 scenes, crossfade + audio + script → xfade, audio concat, drawtext."""
+        # Arrange
+        audio = ["/tmp/a0.mp3", "/tmp/a1.mp3"]
+        script = [
+            {"text": "Crossfade scene one", "duration": 5.0},
+            {"text": "Crossfade scene two", "duration": 5.0},
+        ]
+
+        # Act
+        cmd, fc = self._build_two_scene_unified(
+            {"transition_out": "crossfade"},
+            {},
+            audio_files=audio,
+            script_scenes=script,
+        )
+
+        # Assert — xfade filter present
+        assert "xfade=transition=fade" in fc
+        # Assert — audio concat
+        assert "concat=n=2:a=1[outa]" in fc
+        # Assert — subtitle drawtext
+        assert "drawtext" in fc
+        assert "Crossfade scene one" in fc
+        # Assert — no broken amix
+        assert "amix" not in fc
+
+    # ── Test 5: hard_cut transition + audio + subtitles ──
+
+    def test_pipeline_hard_cut_with_audio_and_subtitles(self):
+        """2 scenes, hard_cut + audio + script → concat video, audio, drawtext."""
+        # Arrange
+        audio = ["/tmp/a0.mp3", "/tmp/a1.mp3"]
+        script = [
+            {"text": "Hard cut first line", "duration": 5.0},
+            {"text": "Hard cut second line", "duration": 5.0},
+        ]
+
+        # Act
+        cmd, fc = self._build_two_scene_unified(
+            {"transition_out": "hard_cut"},
+            {},
+            audio_files=audio,
+            script_scenes=script,
+        )
+
+        # Assert — video concat (not xfade)
+        assert "concat=n=2:v=1" in fc
+        assert "xfade=" not in fc
+        # Assert — audio concat
+        assert "concat=n=2:a=1[outa]" in fc
+        # Assert — subtitle drawtext
+        assert "drawtext" in fc
+        assert "Hard cut first line" in fc
+        assert "amix" not in fc
+
+    # ── Test 6: backward compat, no audio, no script ──
+
+    def test_pipeline_backward_compat_no_audio_no_script(self):
+        """2 scenes, no audio, no script → anullsrc, no drawtext, basic trim+transition."""
+        # Arrange & Act
+        cmd, fc = self._build_two_scene_unified(
+            {"transition_out": "hard_cut"},
+            {},
+            audio_files=[],
+            script_scenes=None,
+        )
+
+        # Assert — anullsrc for audio
+        assert "anullsrc" in fc
+        # Assert — no subtitle drawtext
+        assert "drawtext" not in fc
+        # Assert — basic trim+setpts present
+        assert "trim=duration=" in fc
+        assert "setpts=PTS-STARTPTS" in fc
+        # Assert — video output label
+        assert "[outv]" in fc
+        assert "[outa]" in fc
+        # Assert — no broken amix
+        assert "amix" not in fc

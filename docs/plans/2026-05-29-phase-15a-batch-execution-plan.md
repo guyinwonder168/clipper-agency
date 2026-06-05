@@ -1,4 +1,6 @@
-# Phase 15a Batch Execution Plan
+# Phase 15a Batch Execution Plan ✅ COMPLETED
+
+> **Status:** All 3 PRs merged to master. 17 tasks executed across 3 sequential PRs with parallel batches.
 
 > Companion to `docs/plans/2026-05-29-phase-15a-template-rendering-implementation-plan.md`.  
 > Groups the 17 TDD tasks into parallel batches per PR to reduce sequential wall-clock time.
