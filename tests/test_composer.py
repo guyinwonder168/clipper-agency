@@ -349,7 +349,8 @@ class TestComposerTreatmentMetadata:
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
         assert "trim=duration=4" in filter_complex
         assert "trim=duration=7" in filter_complex
-        assert "concat=n=2:v=1[outv]" in filter_complex
+        # Default transition is crossfade (xfade), not flat concat.
+        assert "xfade=transition=fade" in filter_complex
 
     def test_build_assembly_cmd_defaults_trim_to_5(self):
         """_build_assembly_cmd defaults trim to 5 when target_duration is missing."""
@@ -366,7 +367,8 @@ class TestComposerTreatmentMetadata:
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
         assert "trim=duration=5" in filter_complex
-        assert "concat=n=1:v=1[outv]" in filter_complex
+        # Single scene: no transitions, label maps directly to [outv].
+        assert "[outv]" in filter_complex
 
 
 class TestComposerTreatmentFilters:
@@ -404,8 +406,8 @@ class TestComposerTreatmentFilters:
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
-        # No treatment filter — just trim+setpts, exactly like before
-        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS[t0]" in filter_complex
+        # No treatment filter — just trim+setpts, mapped to [outv] for single scene
+        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS[outv]" in filter_complex
         assert "crop=" not in filter_complex
         assert "scale=" not in filter_complex
         assert "-pix_fmt" in cmd
@@ -463,8 +465,116 @@ class TestComposerTreatmentFilters:
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
-        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS[t0]" in filter_complex
+        # Single scene: trim output maps directly to [outv].
+        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS[outv]" in filter_complex
         assert "-pix_fmt" in cmd
         assert "yuv420p" in cmd
         assert "-movflags" in cmd
         assert "+faststart" in cmd
+
+
+def _build_two_scene_cmd(scene0: dict, scene1: dict) -> list[str]:
+    """Helper: build assembly cmd for two scenes with sensible defaults."""
+    valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
+    assets = [
+        {"scene": 1, "path": valid[0], "target_duration": 5, **scene0},
+        {"scene": 2, "path": valid[1], "target_duration": 5, **scene1},
+    ]
+    cmd = ComposerAgent._build_assembly_cmd(valid, assets, [], "/tmp/out.mp4")
+    return cmd
+
+
+def _filter_complex(cmd: list[str]) -> str:
+    return cmd[cmd.index("-filter_complex") + 1]
+
+
+class TestComposerTransitions:
+    """Transition chain: xfade, hard_cut, mixed, clamping, fallbacks."""
+
+    def test_xfade_transition_applied(self):
+        """2 scenes, crossfade → xfade in filter, no flat concat."""
+        cmd = _build_two_scene_cmd(
+            {"transition_out": "crossfade"},
+            {},
+        )
+        fc = _filter_complex(cmd)
+        assert "xfade=transition=fade" in fc
+        assert "concat=n=2:v=1" not in fc
+
+    def test_hard_cut_uses_concat(self):
+        """2 scenes, hard_cut → concat in filter, no xfade."""
+        cmd = _build_two_scene_cmd(
+            {"transition_out": "hard_cut"},
+            {},
+        )
+        fc = _filter_complex(cmd)
+        assert "concat=n=2:v=1" in fc
+        assert "xfade=" not in fc
+
+    def test_mixed_transitions(self):
+        """3 scenes: crossfade then hard_cut → both xfade and concat present."""
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4", "/tmp/s2.mp4"]
+        assets = [
+            {"scene": 1, "path": valid[0], "target_duration": 5,
+             "transition_out": "crossfade"},
+            {"scene": 2, "path": valid[1], "target_duration": 5,
+             "transition_out": "hard_cut"},
+            {"scene": 3, "path": valid[2], "target_duration": 5},
+        ]
+        cmd = ComposerAgent._build_assembly_cmd(valid, assets, [], "/tmp/o.mp4")
+        fc = _filter_complex(cmd)
+        assert "xfade=transition=fade" in fc
+        assert "concat=n=2:v=1" in fc
+
+    def test_xfade_offset_calculated_correctly(self):
+        """scene[0] dur=5, crossfade dur=0.3 → offset=5-0.3-0.1=4.6."""
+        cmd = _build_two_scene_cmd(
+            {"target_duration": 5, "transition_out": "crossfade"},
+            {"target_duration": 5},
+        )
+        fc = _filter_complex(cmd)
+        assert "offset=4.6" in fc
+
+    def test_xfade_uses_custom_transition_duration(self):
+        """Asset with transition_duration override uses that value."""
+        cmd = _build_two_scene_cmd(
+            {"target_duration": 5, "transition_out": "crossfade",
+             "transition_duration": 0.8},
+            {"target_duration": 5},
+        )
+        fc = _filter_complex(cmd)
+        assert "duration=0.8" in fc
+
+    def test_last_scene_no_transition_out(self):
+        """Only 1 transition pair for 2 scenes; last scene has no transition."""
+        cmd = _build_two_scene_cmd(
+            {"transition_out": "crossfade"},
+            {},
+        )
+        fc = _filter_complex(cmd)
+        # Exactly one xfade between scene 0 and 1.
+        assert fc.count("xfade=") == 1
+        assert "[outv]" in fc
+
+    def test_transition_duration_clamped_for_short_clip(self):
+        """Short next clip: trans duration clamped to min(dur, min(a,b)-0.15)."""
+        # scene[0] dur=1.5, scene[1] dur=0.3, crossfade default=0.3
+        # clamp = min(0.3, min(1.5, 0.3) - 0.15) = min(0.3, 0.15) = 0.15
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
+        assets = [
+            {"scene": 1, "path": valid[0], "target_duration": 1.5,
+             "transition_out": "crossfade"},
+            {"scene": 2, "path": valid[1], "target_duration": 0.3},
+        ]
+        cmd = ComposerAgent._build_assembly_cmd(valid, assets, [], "/tmp/o.mp4")
+        fc = _filter_complex(cmd)
+        assert "duration=0.15" in fc
+
+    def test_unknown_transition_falls_back_to_crossfade(self):
+        """Unknown transition name → treated as crossfade."""
+        cmd = _build_two_scene_cmd(
+            {"transition_out": "nonexistent"},
+            {},
+        )
+        fc = _filter_complex(cmd)
+        assert "xfade=transition=fade" in fc

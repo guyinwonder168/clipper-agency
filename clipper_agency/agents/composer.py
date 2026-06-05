@@ -33,8 +33,14 @@ logger = logging.getLogger(__name__)
 _FFMPEG_CONCAT_TIMEOUT = 600  # seconds
 _FFMPEG_NORMALIZE_TIMEOUT = 120  # seconds
 
-# Lazy singleton for TreatmentFilterBuilder — avoids per-call YAML re-parsing.
+# Lazy singletons — avoid per-call YAML re-parsing.
 _treatment_builder: "TreatmentFilterBuilder | None" = None  # type: ignore[name-defined]  # noqa: F821
+_treatment_config: "TreatmentConfig | None" = None  # type: ignore[name-defined]  # noqa: F821
+
+_DEFAULT_TRANSITION = "crossfade"
+_SAFETY_MARGIN = 0.1
+_MIN_CLIP_HEADROOM = 0.15
+_MIN_TRANSITION_DUR = 0.05
 
 
 def _get_treatment_builder():
@@ -45,6 +51,94 @@ def _get_treatment_builder():
         from clipper_agency.rendering.treatment_filters import TreatmentFilterBuilder
         _treatment_builder = TreatmentFilterBuilder(TreatmentConfig())
     return _treatment_builder
+
+
+def _get_treatment_config():
+    """Return the module-level TreatmentConfig singleton for transition lookups."""
+    global _treatment_config
+    if _treatment_config is None:
+        from clipper_agency.rendering.treatment_config import TreatmentConfig
+        _treatment_config = TreatmentConfig()
+    return _treatment_config
+
+
+def _build_transition_chain(
+    trim_parts: list[str],
+    video_labels: list[str],
+    normalized_assets: list[dict],
+    num_videos: int,
+) -> str:
+    """Build the video filter section: trim parts + transition chain.
+
+    For single-scene outputs, the trimmed label maps directly to [outv].
+    For multi-scene, scenes are joined via xfade or concat transitions
+    based on each scene's ``transition_out`` metadata.
+
+    Returns the complete video filter string (without audio).
+    """
+    if num_videos == 1:
+        # Single scene: rename trimmed output directly to [outv].
+        single = trim_parts[0]
+        label = video_labels[0]
+        return single.replace(f"[{label}]", "[outv]")
+
+    config = _get_treatment_config()
+    transition_parts: list[str] = []
+    current_label = video_labels[0]
+    cumulative_duration = float(
+        normalized_assets[0].get("target_duration", 5)
+    )
+
+    for i in range(1, num_videos):
+        prev_asset = normalized_assets[i - 1]
+        next_dur = float(normalized_assets[i].get("target_duration", 5))
+        is_last = i == num_videos - 1
+
+        # Resolve transition definition; unknown → crossfade fallback.
+        trans_name = prev_asset.get("transition_out", _DEFAULT_TRANSITION)
+        trans_def = config.get_transition(trans_name)
+        if trans_def is None:
+            trans_def = config.get_transition(_DEFAULT_TRANSITION)
+
+        # Per-asset override for transition duration.
+        trans_duration = float(
+            prev_asset.get("transition_duration", trans_def.default_duration)
+        )
+
+        if trans_def.ffmpeg_filter is not None:
+            # ── xfade transition ──
+            prev_dur = float(prev_asset.get("target_duration", 5))
+            max_dur = min(prev_dur, next_dur) - _MIN_CLIP_HEADROOM
+            trans_duration = min(
+                trans_duration, max(_MIN_TRANSITION_DUR, max_dur)
+            )
+            offset = max(
+                0.0, cumulative_duration - trans_duration - _SAFETY_MARGIN
+            )
+
+            filter_str = (
+                trans_def.ffmpeg_filter
+                .replace("{duration}", f"{trans_duration}")
+                .replace("{offset}", f"{offset}")
+            )
+            out_label = "outv" if is_last else f"x{i}"
+            transition_parts.append(
+                f"[{current_label}][{video_labels[i]}]"
+                f"{filter_str}[{out_label}]"
+            )
+            current_label = out_label
+            cumulative_duration += next_dur - trans_duration
+        else:
+            # ── hard cut → concat ──
+            out_label = "outv" if is_last else f"c{i}"
+            transition_parts.append(
+                f"[{current_label}][{video_labels[i]}]"
+                f"concat=n=2:v=1[{out_label}]"
+            )
+            current_label = out_label
+            cumulative_duration += next_dur
+
+    return ";".join(trim_parts + transition_parts)
 
 
 class ComposerAgent(BaseAgent):
@@ -520,7 +614,7 @@ class ComposerAgent(BaseAgent):
         for af in audio_files:
             cmd.extend(["-i", af])
 
-        # Build per-input trim + concat filter graph from asset metadata.
+        # Build per-input trim + transition chain filter graph.
         # Each asset's target_duration controls the trim length; defaults to 5.
         num_videos = len([a for a in normalized_assets if a.get("path")])
         trim_parts: list[str] = []
@@ -534,30 +628,33 @@ class ComposerAgent(BaseAgent):
             video_labels.append(label)
             if treatment_filter != "null":
                 trim_parts.append(
-                    f"[{i}:v]{treatment_filter},trim=duration={duration},setpts=PTS-STARTPTS[{label}]"
+                    f"[{i}:v]{treatment_filter},"
+                    f"trim=duration={duration},"
+                    f"setpts=PTS-STARTPTS[{label}]"
                 )
             else:
                 trim_parts.append(
-                    f"[{i}:v]trim=duration={duration},setpts=PTS-STARTPTS[{label}]"
+                    f"[{i}:v]trim=duration={duration},"
+                    f"setpts=PTS-STARTPTS[{label}]"
                 )
-        concat_inputs = "".join(f"[{label}]" for label in video_labels)
-        concat_filter = (
-            f"{';'.join(trim_parts)};"
-            f"{concat_inputs}concat=n={num_videos}:v=1[outv]"
+
+        video_filter = _build_transition_chain(
+            trim_parts, video_labels, normalized_assets, num_videos,
         )
+
         if audio_files:
             audio_inputs = "".join(
                 f"[{num_videos + i}:a]" for i in range(len(audio_files))
             )
-            concat_filter += (
+            video_filter += (
                 f";{audio_inputs}"
                 f"amix=inputs={len(audio_files)}:duration=first[outa]"
             )
         else:
-            concat_filter += ";anullsrc[outa]"
+            video_filter += ";anullsrc[outa]"
 
         cmd.extend([
-            "-filter_complex", concat_filter,
+            "-filter_complex", video_filter,
             "-map", "[outv]",
             "-map", "[outa]",
             "-c:v", "libx264",
