@@ -40,7 +40,7 @@ def test_audio_only_concat_mode_b():
 
     # Assert
     filter_str, outv, outa = result
-    assert "[3:a][4:a][5:a]concat=n=3:a=1[outa]" == filter_str
+    assert "[3:a][4:a][5:a]concat=n=3:v=0:a=1[outa]" == filter_str
     assert outv == ""
     assert outa == "outa"
 

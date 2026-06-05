@@ -70,6 +70,6 @@ def build_audio_video_concat(
     filter_str = (
         preamble
         + "".join(audio_refs)
-        + f"concat=n={num_scenes}:a=1[outa]"
+        + f"concat=n={num_scenes}:v=0:a=1[outa]"
     )
     return (filter_str, "", "outa")

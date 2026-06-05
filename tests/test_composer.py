@@ -599,7 +599,7 @@ class TestComposerAudioSequencer:
         fc = _filter_complex(cmd)
 
         # Should use concat for audio, not amix
-        assert "concat=n=2:a=1[outa]" in fc
+        assert "concat=n=2:v=0:a=1[outa]" in fc
         assert "amix" not in fc
 
     def test_no_audio_uses_anullsrc(self):
@@ -633,7 +633,7 @@ class TestComposerAudioSequencer:
 
         # 3-scene audio concat with silence padding for scenes 1 and 2
         assert "anullsrc=r=44100" in fc
-        assert "concat=n=3:a=1[outa]" in fc
+        assert "concat=n=3:v=0:a=1[outa]" in fc
         assert "amix" not in fc
 
     def test_audio_concat_appended_to_video(self):
@@ -672,7 +672,7 @@ class TestComposerAudioSequencer:
         fc = _filter_complex(cmd)
 
         assert "amix" not in fc
-        assert "concat=n=2:a=1[outa]" in fc
+        assert "concat=n=2:v=0:a=1[outa]" in fc
 
     def test_has_xfade_transitions_helper(self):
         """_has_xfade_transitions detects xfade vs hard_cut correctly."""
@@ -865,7 +865,7 @@ class TestComposerUnifiedPipeline:
         # Assert — treatment filter (crop=)
         assert "crop=" in fc
         # Assert — audio concat for 2 scenes
-        assert "concat=n=2:a=1[outa]" in fc
+        assert "concat=n=2:v=0:a=1[outa]" in fc
         # Assert — subtitle drawtext
         assert "drawtext" in fc
         assert "Hello world this is a test" in fc
@@ -888,7 +888,7 @@ class TestComposerUnifiedPipeline:
         )
 
         # Assert — audio concat present
-        assert "concat=n=2:a=1[outa]" in fc
+        assert "concat=n=2:v=0:a=1[outa]" in fc
         # Assert — no subtitle drawtext
         assert "drawtext" not in fc
         assert "amix" not in fc
@@ -941,7 +941,7 @@ class TestComposerUnifiedPipeline:
         # Assert — xfade filter present
         assert "xfade=transition=fade" in fc
         # Assert — audio concat
-        assert "concat=n=2:a=1[outa]" in fc
+        assert "concat=n=2:v=0:a=1[outa]" in fc
         # Assert — subtitle drawtext
         assert "drawtext" in fc
         assert "Crossfade scene one" in fc
@@ -971,7 +971,7 @@ class TestComposerUnifiedPipeline:
         assert "concat=n=2:v=1" in fc
         assert "xfade=" not in fc
         # Assert — audio concat
-        assert "concat=n=2:a=1[outa]" in fc
+        assert "concat=n=2:v=0:a=1[outa]" in fc
         # Assert — subtitle drawtext
         assert "drawtext" in fc
         assert "Hard cut first line" in fc
@@ -1258,6 +1258,6 @@ class TestComposerEdgeCases:
         fc = _filter_complex(cmd)
 
         # Assert — 4-scene audio concat with silence padding
-        assert "concat=n=4:a=1[outa]" in fc
+        assert "concat=n=4:v=0:a=1[outa]" in fc
         assert "anullsrc=r=44100" in fc
         assert "amix" not in fc
