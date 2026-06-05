@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from clipper_agency.agents.composer import ComposerAgent, _has_xfade_transitions
+from clipper_agency.rendering.primitives import escape_drawtext
 
 
 def _mock_preflight_ok(mocker):
@@ -700,3 +701,113 @@ class TestComposerAudioSequencer:
         assert _has_xfade_transitions([
             {"transition_out": "wipe_left"},
         ]) is True
+
+
+class TestComposerSubtitles:
+    """Subtitle overlay integration: script_scenes → drawtext in FFmpeg filter."""
+
+    def _build_cmd_with_subtitles(
+        self, script_scenes: list[dict] | None,
+    ) -> tuple[list[str], str]:
+        """Helper: build assembly cmd with one scene and return (cmd, filter_complex)."""
+        valid = ["/tmp/scene_1.mp4"]
+        assets = [{"scene": 1, "path": valid[0], "target_duration": 5}]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+            script_scenes=script_scenes,
+        )
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        return cmd, fc
+
+    def test_subtitle_drawtext_in_filter(self):
+        """script_scenes with text produces drawtext in filter_complex."""
+        script_scenes = [{"text": "Hello world", "duration": 5}]
+        cmd, fc = self._build_cmd_with_subtitles(script_scenes)
+
+        assert "drawtext" in fc
+        assert "Hello world" in fc
+        assert "[outv]" in fc
+        assert "-map" in cmd
+
+    def test_subtitle_timing_matches_scenes(self):
+        """2 scenes × 5s each → captions at 0-5 and 5-10."""
+        script_scenes = [
+            {"text": "First scene narration", "duration": 5},
+            {"text": "Second scene narration", "duration": 5},
+        ]
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
+        assets = [
+            {"scene": 1, "path": valid[0], "target_duration": 5},
+            {"scene": 2, "path": valid[1], "target_duration": 5},
+        ]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+            script_scenes=script_scenes,
+        )
+        fc = cmd[cmd.index("-filter_complex") + 1]
+
+        assert "between(t,0.0,5.0)" in fc
+        assert "between(t,5.0,10.0)" in fc
+
+    def test_no_script_no_subtitle(self):
+        """script_scenes=None → no drawtext in filter_complex."""
+        cmd, fc = self._build_cmd_with_subtitles(None)
+
+        assert "drawtext" not in fc
+        assert "vsub_in" not in fc
+        assert "[outv]" in fc
+
+    def test_subtitle_special_chars_escaped(self):
+        """Text with colons, quotes, percent → properly escaped in drawtext."""
+        raw_text = "It's 50% off: deal!"
+        script_scenes = [{"text": raw_text, "duration": 5}]
+        cmd, fc = self._build_cmd_with_subtitles(script_scenes)
+
+        escaped = escape_drawtext(raw_text)
+        assert escaped in fc
+        # Verify special chars are backslash-escaped
+        assert "\\:" in fc
+        assert "\\'" in fc
+        assert "\\%" in fc
+
+    def test_script_scenes_threaded_to_assembly(self, tmp_path, mocker):
+        """script_scenes threaded through full execute chain → drawtext in FFmpeg cmd."""
+        _mock_preflight_ok(mocker)
+        mock_run = mocker.patch(
+            "clipper_agency.agents.composer.run_ffmpeg_streaming",
+        )
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080, height=1920, codec="h264",
+                duration=30.0, has_audio=False,
+                pix_fmt="yuv420p", file_size=10000,
+            ),
+        )
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mocker.MagicMock(
+                success=True, error="", path="/tmp/norm.mp4",
+            ),
+        )
+
+        agent = ComposerAgent()
+        scenes = [{"text": "Full chain threading test", "duration": 5}]
+        agent.execute(
+            job_id=99,
+            assets=[{"scene": 1, "path": "/tmp/a.mp4"}],
+            audio_files=[],
+            output_dir=str(tmp_path),
+            script_scenes=scenes,
+        )
+
+        # First call is the concat command (second is thumbnail)
+        concat_cmd = mock_run.call_args_list[0][0][0]
+        filter_idx = concat_cmd.index("-filter_complex")
+        filter_complex = concat_cmd[filter_idx + 1]
+        assert "drawtext" in filter_complex
+        assert "Full chain threading test" in filter_complex

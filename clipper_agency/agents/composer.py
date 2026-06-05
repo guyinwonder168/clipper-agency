@@ -24,9 +24,11 @@ from clipper_agency.core.scene_normalizer import SceneNormalizer
 from clipper_agency.core.scene_validator import SceneValidator
 from clipper_agency.rendering.audio_sequencer import build_audio_video_concat
 from clipper_agency.rendering.engine import render_plan
+from clipper_agency.rendering.primitives import escape_drawtext
 from clipper_agency.rendering.renderers.b_roll_narration import build_b_roll_narration_plan
 from clipper_agency.rendering.renderers.news_card import build_news_card_plan
 from clipper_agency.rendering.renderers.rapid_update import build_rapid_update_plan
+from clipper_agency.rendering.subtitle_engine import build_subtitle_overlays
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
@@ -240,6 +242,7 @@ class ComposerAgent(BaseAgent):
             return self._try_assemble(
                 video_assets, voice_files, video_path, thumbnail_path,
                 assets_cache, job_id, agent_dir,
+                script_scenes=script_scenes,
             )
         except subprocess.CalledProcessError as e:
             return self._handle_ffmpeg_error(e, video_path, agent_dir)
@@ -261,10 +264,12 @@ class ComposerAgent(BaseAgent):
         assets_cache: str,
         job_id: int,
         agent_dir: str,
+        script_scenes: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Attempt assembly. Raises on FFmpeg or unexpected errors."""
         assemble_result = self._assemble_video(
             video_assets, voice_files, video_path,
+            script_scenes=script_scenes,
         )
         ffmpeg_cmd = assemble_result["cmd"]
         card_fallback_scenes = assemble_result.get(
@@ -533,7 +538,8 @@ class ComposerAgent(BaseAgent):
         return concat_filter
 
     def _assemble_video(
-        self, assets: list[dict], audio_files: list[str], output_path: str
+        self, assets: list[dict], audio_files: list[str], output_path: str,
+        script_scenes: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Assemble final video from assets with scene normalization and card fallback.
 
@@ -576,6 +582,7 @@ class ComposerAgent(BaseAgent):
 
             cmd = self._build_assembly_cmd(
                 valid_normalized, normalized_assets, audio_files, output_path,
+                script_scenes=script_scenes,
             )
 
             logger.info(
@@ -622,6 +629,7 @@ class ComposerAgent(BaseAgent):
         normalized_assets: list[dict],
         audio_files: list[str],
         output_path: str,
+        script_scenes: list[dict] | None = None,
     ) -> list[str]:
         """Build the FFmpeg assembly command from normalized assets."""
         cmd = ["ffmpeg", "-y"]
@@ -657,6 +665,24 @@ class ComposerAgent(BaseAgent):
         video_filter = _build_transition_chain(
             trim_parts, video_labels, normalized_assets, num_videos,
         )
+
+        # ── Subtitle overlay chain (from script_scenes) ──
+        if script_scenes:
+            overlays = build_subtitle_overlays(script_scenes)
+            if overlays:
+                video_filter = video_filter.replace("[outv]", "[vsub_in]", 1)
+                current_label = "vsub_in"
+                for i, ov in enumerate(overlays):
+                    next_label = "outv" if i == len(overlays) - 1 else f"sub{i}"
+                    escaped = escape_drawtext(ov.text)
+                    video_filter += (
+                        f";[{current_label}]drawtext=text='{escaped}'"
+                        f":enable='between(t,{ov.start_seconds},{ov.end_seconds})'"
+                        f":fontsize=36:fontcolor=white"
+                        f":borderw=2:bordercolor=black"
+                        f":x=(w-tw)/2:y=h-th-60[{next_label}]"
+                    )
+                    current_label = next_label
 
         # Use audio_sequencer for per-scene audio pairing (replaces broken amix).
         # Transition chain already handles video output to [outv], so we only
