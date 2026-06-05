@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from clipper_agency.agents.composer import ComposerAgent
+from clipper_agency.agents.composer import ComposerAgent, _has_xfade_transitions
 
 
 def _mock_preflight_ok(mocker):
@@ -578,3 +578,125 @@ class TestComposerTransitions:
         )
         fc = _filter_complex(cmd)
         assert "xfade=transition=fade" in fc
+
+
+class TestComposerAudioSequencer:
+    """Audio is paired per-scene via audio_sequencer (replaces broken amix)."""
+
+    def test_audio_pairs_per_scene(self):
+        """2 scenes + 2 audio → audio concat (NOT amix) in filter."""
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
+        assets = [
+            {"scene": 1, "path": valid[0], "target_duration": 5},
+            {"scene": 2, "path": valid[1], "target_duration": 5},
+        ]
+        audio = ["/tmp/voice_0.mp3", "/tmp/voice_1.mp3"]
+
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, audio, "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Should use concat for audio, not amix
+        assert "concat=n=2:a=1[outa]" in fc
+        assert "amix" not in fc
+
+    def test_no_audio_uses_anullsrc(self):
+        """0 audio files → anullsrc[outa] in filter."""
+        valid = ["/tmp/s0.mp4"]
+        assets = [{"scene": 1, "path": valid[0], "target_duration": 5}]
+
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        assert "anullsrc[outa]" in fc
+        assert "amix" not in fc
+        assert "concat" not in fc.split("anullsrc")[0]  # no audio concat
+
+    def test_fewer_audio_pads_silence(self):
+        """3 scenes + 1 audio → silence padding for missing audio."""
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4", "/tmp/s2.mp4"]
+        assets = [
+            {"scene": 1, "path": valid[0], "target_duration": 5},
+            {"scene": 2, "path": valid[1], "target_duration": 5},
+            {"scene": 3, "path": valid[2], "target_duration": 5},
+        ]
+        audio = ["/tmp/voice_0.mp3"]
+
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, audio, "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # 3-scene audio concat with silence padding for scenes 1 and 2
+        assert "anullsrc=r=44100" in fc
+        assert "concat=n=3:a=1[outa]" in fc
+        assert "amix" not in fc
+
+    def test_audio_concat_appended_to_video(self):
+        """Audio filter is appended AFTER video filter with semicolon."""
+        valid = ["/tmp/s0.mp4"]
+        assets = [{"scene": 1, "path": valid[0], "target_duration": 5}]
+        audio = ["/tmp/voice_0.mp3"]
+
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, audio, "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Video filter ([outv]) comes first, audio appended after semicolon
+        assert "[outv]" in fc
+        # Single scene: video part ends with [outv], audio starts after ;
+        parts = fc.split(";")
+        assert len(parts) >= 2
+        # First part has the video, last part has the audio
+        assert "[outv]" in parts[0] or any("[outv]" in p for p in parts[:-1])
+        assert "[outa]" in parts[-1]
+
+    def test_amix_not_used(self):
+        """No amix filter should appear in any assembly command."""
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
+        assets = [
+            {"scene": 1, "path": valid[0], "target_duration": 5,
+             "transition_out": "crossfade"},
+            {"scene": 2, "path": valid[1], "target_duration": 5},
+        ]
+        audio = ["/tmp/voice_0.mp3", "/tmp/voice_1.mp3"]
+
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, audio, "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        assert "amix" not in fc
+        assert "concat=n=2:a=1[outa]" in fc
+
+    def test_has_xfade_transitions_helper(self):
+        """_has_xfade_transitions detects xfade vs hard_cut correctly."""
+        # crossfade → xfade present
+        assert _has_xfade_transitions([
+            {"transition_out": "crossfade"},
+        ]) is True
+
+        # hard_cut only → no xfade
+        assert _has_xfade_transitions([
+            {"transition_out": "hard_cut"},
+        ]) is False
+
+        # No transition_out → no xfade
+        assert _has_xfade_transitions([
+            {"scene": 1, "path": "/tmp/a.mp4"},
+        ]) is False
+
+        # Mixed: crossfade + hard_cut → xfade present
+        assert _has_xfade_transitions([
+            {"transition_out": "hard_cut"},
+            {"transition_out": "crossfade"},
+        ]) is True
+
+        # wipe_left is also xfade-based
+        assert _has_xfade_transitions([
+            {"transition_out": "wipe_left"},
+        ]) is True

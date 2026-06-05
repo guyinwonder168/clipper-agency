@@ -22,6 +22,7 @@ from clipper_agency.core.paths import (
 )
 from clipper_agency.core.scene_normalizer import SceneNormalizer
 from clipper_agency.core.scene_validator import SceneValidator
+from clipper_agency.rendering.audio_sequencer import build_audio_video_concat
 from clipper_agency.rendering.engine import render_plan
 from clipper_agency.rendering.renderers.b_roll_narration import build_b_roll_narration_plan
 from clipper_agency.rendering.renderers.news_card import build_news_card_plan
@@ -141,6 +142,19 @@ def _build_transition_chain(
     return ";".join(trim_parts + transition_parts)
 
 
+def _has_xfade_transitions(normalized_assets: list[dict]) -> bool:
+    """Return True if any asset uses an xfade-based transition (not hard_cut)."""
+    config = _get_treatment_config()
+    for asset in normalized_assets:
+        name = asset.get("transition_out")
+        if name is None:
+            continue
+        trans_def = config.get_transition(name)
+        if trans_def is not None and trans_def.ffmpeg_filter is not None:
+            return True
+    return False
+
+
 class ComposerAgent(BaseAgent):
     """Assembles final video from assets and audio using FFmpeg."""
 
@@ -164,6 +178,7 @@ class ComposerAgent(BaseAgent):
     ) -> dict[str, Any]:
         video_assets = assets or []
         voice_files = audio_files or []
+        script_scenes = kwargs.get("script_scenes", [])
 
         # ── FFmpeg preflight diagnostics ──
         preflight_result = self._run_preflight(output_dir, job_id)
@@ -196,7 +211,7 @@ class ComposerAgent(BaseAgent):
 
         return self._execute_assembly(
             video_assets, voice_files, output_dir, assets_cache,
-            job_id, agent_dir,
+            job_id, agent_dir, script_scenes=script_scenes,
         )
 
     def _execute_assembly(
@@ -207,6 +222,7 @@ class ComposerAgent(BaseAgent):
         assets_cache: str,
         job_id: int,
         agent_dir: str,
+        script_scenes: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Run the assembly pipeline: concat scenes + mix audio + thumbnail."""
         if not video_assets and not voice_files:
@@ -642,16 +658,20 @@ class ComposerAgent(BaseAgent):
             trim_parts, video_labels, normalized_assets, num_videos,
         )
 
-        if audio_files:
-            audio_inputs = "".join(
-                f"[{num_videos + i}:a]" for i in range(len(audio_files))
-            )
-            video_filter += (
-                f";{audio_inputs}"
-                f"amix=inputs={len(audio_files)}:duration=first[outa]"
-            )
-        else:
+        # Use audio_sequencer for per-scene audio pairing (replaces broken amix).
+        # Transition chain already handles video output to [outv], so we only
+        # need the audio concat from audio_sequencer (Mode B / has_xfade=True).
+        has_xfade = _has_xfade_transitions(normalized_assets)
+        audio_filter, _outv, _outa = build_audio_video_concat(
+            scene_labels=video_labels,
+            num_video_inputs=num_videos,
+            audio_file_count=len(audio_files) if audio_files else 0,
+            has_xfade=True,
+        )
+        if audio_filter == "anullsrc":
             video_filter += ";anullsrc[outa]"
+        else:
+            video_filter += ";" + audio_filter
 
         cmd.extend([
             "-filter_complex", video_filter,
