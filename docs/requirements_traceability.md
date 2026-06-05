@@ -1,8 +1,8 @@
 # Clipper Agency — Requirements Traceability Matrix
 
-**Version:** 2.8
+**Version:** 2.9
 **Date:** 2026-06-05
-**Status:** MVP Phases 0-18 Complete — Treatment System, Scene Normalizer, LLM Visual Director
+**Status:** MVP Phases 0-19 Complete — Composer Treatment & Transition Engine
 
 ---
 
@@ -198,6 +198,18 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 121 | Flash-frame clips (<1s) rejected; clips >5s trimmed to 5s max | PRD §5 PR-27, SRS §2 FR-33, Design §7 |
 | 122 | Default treatment routing when LLM unavailable: text_card_reveal for text cards, broll_standard for video clips, ken_burns_zoom_in for static images | Design §4 |
 
+### From Phase 19 Composer Treatment & Transition Engine
+
+| # | Fact | New Location |
+|---|------|-------------|
+| 123 | Audio sequencer replaces broken `amix=inputs=N` with per-scene `concat` filter — Mode A (paired video+audio) and Mode B (audio-only when xfade handles video); missing audio padded with `anullsrc` silence | PRD §5 PR-28, SRS §2 FR-34, Design §7 |
+| 124 | Subtitle engine converts script scene text to timed `CaptionOverlay` objects with absolute timestamps; `build_hook_overlay()` creates center-positioned hook caption for first 3s | PRD §5 PR-28, SRS §2 FR-35, Design §7 |
+| 125 | xfade/concat mixed transition chain with offset calculation (`cumulative_duration - trans_duration - 0.1`), duration clamping (`min(trans_duration, min(prev_dur, next_dur) - 0.15)`), safety margins; unknown transitions fallback to crossfade | PRD §5 PR-28, SRS §2 FR-36, Design §7 |
+| 126 | Production output flags: `-pix_fmt yuv420p` (player compatibility), `-movflags +faststart` (streaming-ready MP4), H.264/AAC codecs enforced | PRD §5 PR-28, SRS §2 FR-36, Design §7 |
+| 127 | Treatment filter builder with variable substitution (`{frames}`, `{text}`, `{duration}`, `{start_time}`), input-type rules (image+zoompan → prepend scale, after scale/crop → append setsar), null/unknown → `"null"` | PRD §5 PR-26, SRS §2 FR-32, Design §7 |
+| 128 | Treatment config YAML loader with frozen dataclasses (`TreatmentDef`, `TransitionDef`) for immutable access; `TreatmentConfig` exposes `get_treatment()`, `get_transition()`, `target_fps`, `pacing` properties | PRD §5 PR-26, SRS §2 FR-32, Design §7 |
+| 129 | Orchestrator threads `script_scenes` from scriptwriter output to Composer for subtitle generation; Composer chains drawtext filters with `enable='between(t,start,end)'` and `escape_drawtext()` | PRD §5 PR-28, SRS §2 FR-35, Design §4 |
+
 ---
 
 ## Requirements Traceability Matrix
@@ -220,6 +232,7 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | PR-25 | FR-06 | §4 Voice Provider, §9 Env Layer | G8 | ElevenLabs missing/fails, Gemini missing/fails, Fish Audio missing/fails | Try fallback order, persist attempts, then clear error/stop pipeline |
 | PR-26 | FR-32 | §7 Treatment System, §10 Templates | N/A | Invalid treatment YAML, unknown treatment type, missing FFmpeg filter | `templates/treatments.yaml` validated at load time; unknown treatments fall back to `broll_standard` |
 | PR-27 | FR-33 | §7 Scene Normalization | G9 | Mixed framerates, non-1:1 SAR, static images, flash frames | Scene normalizer in Composer pipeline: framerate→30fps, SAR→1:1, zoompan for images, reject <1s clips |
+| PR-28 | FR-34, FR-35, FR-36 | §7 Audio/Subtitle/Transition, §4 Composer | G9, G10 | Audio silence padding, missing script text, xfade on short clips, special chars in drawtext | Audio sequencer + subtitle engine + xfade chain + production flags |
 
 ### MVP P1 Requirements
 
@@ -304,6 +317,10 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | E25b | Scene normalizer encounters variable-framerate clip (VFR) | FFmpeg `-fps_mode cfr` forces constant 30fps; provenance records original and target fps | PRD §5 PR-27, SRS §2 FR-33 |
 | E25c | Scene normalizer encounters SAR ≠ 1:1 (e.g., 4:3 display aspect with 16:9 storage) | `setsar=1:1` filter applied; provenance records original SAR | PRD §5 PR-27, SRS §2 FR-33 |
 | E25d | Static image needs conversion to video segment | Ken Burns zoompan applied (2.5s zoom cycle, max zoom 1.5x); output at 30fps, 1080x1920 | PRD §5 PR-27, SRS §2 FR-33 |
+| E26a | All voice files missing for audio concat | Audio sequencer returns `anullsrc` silent track; video renders without narration | PRD §8, Design §7 |
+| E26b | xfade transition duration exceeds clip duration | Duration clamped to `min(trans_duration, min(prev_dur, next_dur) - 0.15)` with `MIN_TRANSITION_DUR=0.01` floor | PRD §5 PR-28, Design §7 |
+| E26c | Script text contains special characters (colons, quotes, percent signs) | `escape_drawtext()` escapes `\`, `'`, `:`, `%` for FFmpeg drawtext filter | PRD §5 PR-28, Design §7 |
+| E26d | Unknown transition type in asset metadata | Falls back to crossfade with default 0.3s duration; warning logged | PRD §5 PR-28, Design §7 |
 
 ### Reviewer Edge Cases
 
@@ -446,3 +463,7 @@ Use this checklist to verify the documentation set is airtight. Any reviewer (hu
 | **Template Adapter** | Per-template renderer that translates YAML spec + scene data into a `RenderContract` (News Card, B-Roll, Rapid Update) |
 | **Treatment** | Data-driven visual effect definition (Ken Burns, slow-motion, etc.) in `templates/treatments.yaml`, applied by Composer via FFmpeg filter chains |
 | **Scene Normalizer** | Pipeline stage that unifies mixed-asset framerates, SAR, and encoding parameters before concat; part of Composer rendering flow |
+| **Audio Sequencer** | Per-scene audio+video concat filter builder (`clipper_agency/rendering/audio_sequencer.py`) — pairs voice files with video clips, pads missing audio with silence |
+| **Subtitle Engine** | Script text → timed CaptionOverlay converter (`clipper_agency/rendering/subtitle_engine.py`) — generates drawtext filter parameters with absolute timestamps |
+| **Treatment Filter Builder** | Per-scene FFmpeg filter string builder (`clipper_agency/rendering/treatment_filters.py`) — variable substitution and input-type-aware filter generation |
+| **Treatment Config** | YAML loader for treatment/transition definitions (`clipper_agency/rendering/treatment_config.py`) — frozen dataclasses for immutable config access |

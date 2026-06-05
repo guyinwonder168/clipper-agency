@@ -1,8 +1,8 @@
 # Clipper Agency — Product Requirements Document
 
-**Version:** 2.7
+**Version:** 2.8
 **Date:** 2026-06-05
-**Status:** MVP Phases 0-18 Complete — Treatment System, Scene Normalizer, LLM Visual Director
+**Status:** MVP Phases 0-19 Complete — Composer Treatment & Transition Engine
 **Related:** `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
@@ -103,6 +103,7 @@ Intermediate execution material is not part of the final upload package. Each jo
 | PR-25 | Configurable TTS provider fallback: ElevenLabs first, Google AI Studio Gemini TTS second, Fish Audio third, then fail clearly with provider attempts recorded | P0 | MVP |
 | PR-26 | Treatment system: YAML-defined visual treatments (Ken Burns zoom/pan, cinematic crop, B-roll, slow-motion, lower-third slide, text card reveal, hook caption, fade-to-black) with transitions (crossfade, hard cut, wipe left, dissolve, circle open) and FPS/pacing rules, applied automatically by Visual Director and Composer without code changes | P0 | MVP |
 | PR-27 | Scene normalizer: unify mixed-asset framerates to 30fps target, normalize SAR to 1:1, apply Ken Burns zoompan for static images, validate clip duration bounds (1-5s), enforce consistent encoding parameters across all scenes before composition | P0 | MVP |
+| PR-28 | Per-scene audio sequencing with silence padding, timed subtitle overlays from script text via drawtext, xfade/concat mixed transition chain with duration clamping and safety margins, and TikTok-ready production output flags (yuv420p, faststart, H.264/AAC) | P0 | MVP |
 
 ---
 

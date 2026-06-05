@@ -1,8 +1,8 @@
 # Clipper Agency — Technical Design Document
 
-**Version:** 3.8
+**Version:** 3.9
 **Date:** 2026-06-05
-**Status:** MVP Phases 0-18 Complete — Treatment System, Scene Normalizer, LLM Visual Director
+**Status:** MVP Phases 0-19 Complete — Composer Treatment & Transition Engine
 **Related:** `docs/PRD.md`, `docs/SRS.md`, `docs/requirements_traceability.md`
 
 ---
@@ -308,7 +308,7 @@ Required before enabling those commands:
 | **Scriptwriter** | Writes script + caption in niche tone. Rotates angle from creative history. Always fresh. | Budget East | Never |
 | **Voice Producer** | Generates voiceover via provider fallback: ElevenLabs → Google AI Studio Gemini TTS → Fish Audio → fail clearly. `GeminiTTSService` uses `gemini-2.5-flash-preview-tts` with configured voice (default `Kore`) and wraps PCM audio as WAV when needed. `FishAudioService` uses `s2-pro` model, `POST /v1/tts`, `reference_id` for voice model. Voice files and sanitized `provider_attempts.json` are saved under `ASSETS_CACHE/job_{id}/agents/voice_producer/`. Always fresh. | API cost | Never |
 | **Visual Director** | LLM-driven visual planning with video production expertise: compacts research data, uses LLM to plan per-scene visual strategy (treatment selection, FPS rules, pacing, transitions), executes via dispatch table (tiktok_clip, pexels_video, pexels_image, text_card). Treatment-aware: selects from 9 YAML-defined treatments (Ken Burns zoom/pan, cinematic crop, B-roll, slow-motion, lower-third, text card reveal, hook caption, fade-to-black) with appropriate transitions. 3-tier image fallback for text cards (Pexels photo → Firecrawl article image → gradient). Falls back to legacy sequential planning on LLM failure. | Budget East | Never |
-| **Composer** | FFmpeg assembly: scenes, transitions, captions, audio mixing, thumbnail. Template-driven rendering via `clipper_agency/rendering/` with per-template adapters. Treatment-aware: applies treatment-specific FFmpeg filter chains (zoompan for Ken Burns, speed for slow-motion, fade for transitions) from `templates/treatments.yaml`. Scene normalizer unifies framerates to 30fps, normalizes SAR to 1:1, validates clip bounds before composition. | N/A | Never |
+| **Composer** | FFmpeg assembly: scenes, transitions, captions, audio, thumbnail. Treatment-aware: applies treatment-specific FFmpeg filter chains (zoompan for Ken Burns, speed for slow-motion, fade for transitions) from `templates/treatments.yaml`. Scene normalizer unifies framerates to 30fps, normalizes SAR to 1:1, validates clip bounds before composition. Audio sequencer pairs per-scene voice files with video clips via concat (Mode A: paired audio+video, Mode B: audio-only when xfade handles video). Subtitle engine converts script text to timed drawtext overlays with absolute timestamps. xfade/concat mixed transition chain with offset calculation, duration clamping, and safety margins. Production flags: `-pix_fmt yuv420p`, `-movflags +faststart`. Dead `amix` and `_build_filter` code removed. | N/A | Never |
 | **Reviewer** | Quality + safety + duplicate check. Multimodal (video + text). Max 2 human-triggered retries. | Moderate | Never |
 | **Creative Director** | Stage 2. Proposes new angles/templates when variation exhausted. | Agentic East | Triggered |
 
@@ -598,6 +598,44 @@ pacing_rules:
 
 **Extensibility:** Adding a new treatment requires only a YAML entry in `treatments.yaml` plus a corresponding FFmpeg filter chain builder in `primitives.py`. No changes to Visual Director, Composer, or Orchestrator code needed.
 
+### Audio Sequencing & Subtitle Overlays (Phase 19)
+
+The Composer uses dedicated rendering modules for per-scene audio pairing and subtitle generation:
+
+**Audio Sequencer** (`rendering/audio_sequencer.py`):
+- Pure function `build_audio_video_concat()` produces FFmpeg concat filter strings.
+- Mode A (`has_xfade=False`): interleaves video labels with audio references — `[t0][3:a][t1][4:a]concat=n=2:v=1:a=1[outv][outa]`.
+- Mode B (`has_xfade=True`): audio-only concat — `[3:a][4:a]concat=n=2:v=0:a=1[outa]` — video handled by xfade chain.
+- Edge cases: no audio → `anullsrc`; fewer audio → silence padding; more audio → truncation.
+- Replaces broken `amix=inputs=N` that played all voice tracks simultaneously.
+
+**Subtitle Engine** (`rendering/subtitle_engine.py`):
+- `build_subtitle_overlays()`: converts scene dicts (text, duration) into timed `CaptionOverlay` objects with absolute timestamps (scene_start accumulates across scenes). Words split into chunks of `words_per_caption` (default 6).
+- `build_hook_overlay()`: creates center-positioned hook caption for first N seconds (default 3.0s), clamped to scene duration.
+- `validate_tiktok_output()`: checks 6 FFmpeg output flags (pix_fmt, faststart, libx264, aac, bitrate, shortest) and returns pass/fail dict.
+
+**Treatment Filter Builder** (`rendering/treatment_filters.py`):
+- `TreatmentFilterBuilder(config)` with `build(asset, start_time=0.0) -> str` method.
+- Variable substitution: `{frames}` = duration × fps, `{text}` = headline, `{duration}`, `{start_time}`.
+- Input-type rules: image+zoompan → prepend `scale=5400:-1,`; after scale/crop → append `,setsar=1/1`; null/unknown → `"null"`.
+
+**Treatment Config** (`rendering/treatment_config.py`):
+- Frozen dataclasses: `TreatmentDef` and `TransitionDef` for immutable access.
+- `TreatmentConfig(path)` loads YAML, exposes `get_treatment()`, `get_transition()`, `target_fps`, `pacing` properties.
+- Returns copies from dict properties for immutability.
+
+**xfade Transition Chain:**
+- `_build_transition_chain()` pure function builds mixed xfade/concat filter.
+- Offset: `cumulative_duration - trans_duration - 0.1` (safety margin).
+- Duration clamped: `min(trans_duration, min(prev_dur, next_dur) - 0.15)` (prevents FFmpeg errors on short clips).
+- Unknown transitions → fallback to crossfade.
+- Single scene → no transitions, direct output label.
+
+**Subtitle Integration:**
+- Orchestrator threads `script_scenes` to Composer via `_stage_composition()`.
+- Composer chains drawtext filters: `[outv] → [vsub_in] → drawtext=...:enable='between(t,start,end)' → [outv]`.
+- Special characters escaped via `escape_drawtext()` from `primitives.py`.
+
 ---
 
 ## 8. Variation Strategy & Creative Memory
@@ -775,12 +813,12 @@ SQLite for MVP (same schema migrates to PostgreSQL). Multi-tenant from day one.
 
 ## 13. MVP Deliverables
 
-1. **7 MVP Agents** — Safety, Researcher, Scriptwriter, Voice Producer, Visual Director (LLM-driven with treatment selection + video production expertise), Composer (treatment-aware rendering + scene normalization), Reviewer
+1. **7 MVP Agents** — Safety, Researcher, Scriptwriter, Voice Producer, Visual Director (LLM-driven with treatment selection + video production expertise), Composer (treatment-aware rendering + scene normalization + audio sequencing + subtitle overlays + xfade transitions), Reviewer
 2. **Orchestrator** — Gated state machine with human-triggered retry
 3. **Creative Memory** — Pre-generation check, variation rotation
 4. **Web Dashboard** — Agent observability, config editing, basic auth + 2 groups
 5. **CLI** — `python3 cli.py run --topic "..." --niche indonesian_artists`; `test-agent` subcommand for independent agent debugging; `--log-level` option
-6. **3 Templates + Treatment System** — News Card, B-Roll Narration, Rapid Update + 9 treatments + 5 transitions in `templates/treatments.yaml`
+6. **3 Templates + Treatment System + Audio/Subtitle Engine** — News Card, B-Roll Narration, Rapid Update + 9 treatments + 5 transitions in `templates/treatments.yaml` + per-scene audio sequencing + timed subtitle overlays + TikTok output validation
 7. **Scene Normalizer** — Framerate unification (30fps), SAR normalization, Ken Burns zoompan for static images, clip duration validation
 8. **Config System** — Agent → Niche → Account → Job hierarchy with versioning
 9. **Output Packager** — `video.mp4` + `caption.txt` + `thumbnail.png` + `metadata.json`
