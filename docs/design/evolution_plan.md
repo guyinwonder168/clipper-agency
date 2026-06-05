@@ -1,8 +1,8 @@
 # Clipper Agency — Evolution Plan
 
-**Version:** 2.4
-**Date:** 2026-05-31
-**Status:** MVP Phases 0-16 Complete — Future Scope Updated After Phase 16
+**Version:** 2.5
+**Date:** 2026-06-05
+**Status:** MVP Phases 0-19 Complete — Future Scope Updated After Phase 19
 
 ---
 
@@ -53,7 +53,21 @@ These items were discussed during Phase 16 design but deferred to keep the phase
 
 **Trigger:** When API costs become noticeable or job iteration frequency increases.
 
-### 4. Full Config Hierarchy — Agent → Niche → Account → Job (Level C)
+### 4. Slow-Motion Treatment Support
+
+**Current state:** The `slow_motion` treatment is defined in `treatments.yaml` with `setpts=2.0*PTS` but is deferred from implementation. The Composer's trim-based duration contract (`trim=duration=X`) assumes treatments don't change playback speed. Applying slow-motion after trim has no effect; applying it before trim requires the trim value to account for the speed factor.
+
+**Technical constraint:** Two `setpts` filters in the same chain can interfere. The pipeline already uses `setpts=PTS-STARTPTS` after trim to reset timestamps. A slow-motion `setpts=2.0*PTS` would need to be applied before trim, and the trim duration adjusted to the stretched length.
+
+**Future state:** Cross-agent coordination to support time-stretching treatments:
+- **Visual Director:** multiply `target_duration` by the slow-motion factor when selecting `slow_motion` treatment
+- **Composer:** apply `setpts=N*PTS` before trim, adjust trim value to match original `target_duration` (not the stretched one)
+- **Audio Sequencer / Voice Producer:** stretch audio to match the longer output duration
+- Requires a new `speed_factor` field in treatment metadata (`treatments.yaml`)
+
+**Trigger:** When slow-motion or time-stretch effects are needed for content variety.
+
+### 5. Full Config Hierarchy — Agent → Niche → Account → Job (Level C)
 
 **Current state:** MVP implements Level B — per-agent + per-niche config. Agent defaults can be overridden by niche profile.
 
