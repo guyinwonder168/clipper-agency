@@ -1001,3 +1001,263 @@ class TestComposerUnifiedPipeline:
         assert "[outa]" in fc
         # Assert — no broken amix
         assert "amix" not in fc
+
+
+def _make_asset(
+    path: str,
+    duration: float = 5.0,
+    treatment: str | None = None,
+    transition_out: str = "crossfade",
+    **kw,
+) -> dict:
+    """Build an asset dict with sensible defaults for edge-case tests."""
+    return {
+        "path": path,
+        "target_duration": duration,
+        "treatment": treatment,
+        "transition_out": transition_out,
+        **kw,
+    }
+
+
+class TestComposerEdgeCases:
+    """Edge-case tests for _build_assembly_cmd: boundaries, empty inputs, clamping."""
+
+    # ── Test 1: Single scene needs no transition ──
+
+    def test_single_scene_no_transition(self):
+        """1 video → direct [outv] rename, no xfade or concat."""
+        # Arrange
+        valid = ["/tmp/scene_1.mp4"]
+        assets = [_make_asset(valid[0], duration=4.0)]
+
+        # Act
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Assert
+        assert "[0:v]trim=duration=4.0,setpts=PTS-STARTPTS[outv]" in fc
+        assert "xfade=" not in fc
+        assert "concat=" not in fc
+
+    # ── Test 2: All hard_cut → concat-only chain, no xfade ──
+
+    def test_all_hard_cut_identical_to_concat(self):
+        """3 scenes all with hard_cut → 2 concat joins, no xfade."""
+        # Arrange
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4", "/tmp/s2.mp4"]
+        assets = [
+            _make_asset(valid[0], transition_out="hard_cut"),
+            _make_asset(valid[1], transition_out="hard_cut"),
+            _make_asset(valid[2], transition_out="hard_cut"),
+        ]
+
+        # Act
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Assert — two concat joins for 3 scenes
+        assert fc.count("concat=n=2:v=1") == 2
+        assert "xfade=" not in fc
+
+    # ── Test 3: Mixed input types each with different treatments ──
+
+    def test_mixed_input_types_with_treatments(self):
+        """image+ken_burns, video+cinematic_crop, text+hook_big_caption all appear."""
+        # Arrange
+        valid = ["/tmp/img.png", "/tmp/vid.mp4", "/tmp/card.mp4"]
+        assets = [
+            _make_asset(
+                valid[0], duration=5.0, treatment="ken_burns_zoom_in",
+                type="image", transition_out="hard_cut",
+            ),
+            _make_asset(
+                valid[1], duration=5.0, treatment="cinematic_crop",
+                type="video", transition_out="hard_cut",
+            ),
+            _make_asset(
+                valid[2], duration=5.0, treatment="hook_big_caption",
+                type="text", headline="Big News!", transition_out="hard_cut",
+            ),
+        ]
+
+        # Act
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Assert — ken_burns gets scale=5400:-1 prefix for image zoompan
+        assert "scale=5400:-1" in fc
+        assert "zoompan=" in fc
+        # Assert — cinematic_crop gets crop+scale
+        assert "crop=ih*9/16:ih,scale=1080:1920,setsar=1/1" in fc
+        # Assert — hook_big_caption substitutes {text} with headline
+        assert "drawtext=text='Big News!'" in fc
+
+    # ── Test 4: transition_duration=0 still uses xfade path ──
+
+    def test_transition_duration_zero_acts_as_hard_cut(self):
+        """crossfade with transition_duration=0.0 → xfade present but duration=0.0."""
+        # Arrange
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
+        assets = [
+            _make_asset(
+                valid[0], duration=5.0,
+                transition_out="crossfade", transition_duration=0.0,
+            ),
+            _make_asset(valid[1], duration=5.0),
+        ]
+
+        # Act
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Assert — still xfade (not concat), but duration=0.0
+        assert "xfade=transition=fade" in fc
+        assert "duration=0.0" in fc
+        assert "concat=n=2:v=1" not in fc
+
+    # ── Test 5: Very short next clip clamps transition to minimum ──
+
+    def test_very_short_clip_clamps_transition(self):
+        """1.5s clip with 0.1s next → transition clamped to MIN_TRANSITION_DUR (0.05)."""
+        # Arrange
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
+        assets = [
+            _make_asset(
+                valid[0], duration=1.5,
+                transition_out="crossfade",
+            ),
+            _make_asset(valid[1], duration=0.1),
+        ]
+
+        # Act
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Assert — max_dur = min(1.5, 0.1) - 0.15 = -0.05
+        # clamped = min(0.3, max(0.05, -0.05)) = 0.05
+        assert "duration=0.05" in fc
+
+    # ── Test 6: Empty text in script_scenes → no drawtext ──
+
+    def test_no_script_text_no_subtitles(self):
+        """script_scenes with empty text → build_subtitle_overlays returns [] → no drawtext."""
+        # Arrange
+        valid = ["/tmp/scene_1.mp4"]
+        assets = [_make_asset(valid[0], duration=5.0)]
+        script_scenes = [{"text": "", "duration": 5}]
+
+        # Act
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+            script_scenes=script_scenes,
+        )
+        fc = _filter_complex(cmd)
+
+        # Assert — empty text produces no drawtext overlay
+        assert "drawtext" not in fc
+
+    # ── Test 7: No audio files → anullsrc silent track ──
+
+    def test_no_audio_files_silent_track(self):
+        """2 scenes with audio_files=[] → anullsrc[outa], no amix or audio concat."""
+        # Arrange
+        valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
+        assets = [
+            _make_asset(valid[0], transition_out="hard_cut"),
+            _make_asset(valid[1]),
+        ]
+
+        # Act
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Assert — anullsrc for silent audio
+        assert "anullsrc[outa]" in fc
+        assert "amix" not in fc
+
+    # ── Test 8: text_card type with hook_big_caption treatment ──
+
+    def test_card_fallback_scene_with_treatment(self):
+        """text_card asset with hook_big_caption → drawtext filter with headline substituted."""
+        # Arrange
+        valid = ["/tmp/card.mp4"]
+        assets = [
+            _make_asset(
+                valid[0], duration=3.0,
+                treatment="hook_big_caption", type="text_card",
+                headline="Amazing Fact!",
+            ),
+        ]
+
+        # Act
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Assert — treatment drawtext with headline substituted
+        assert "drawtext=text='Amazing Fact!'" in fc
+        assert "fontsize=80" in fc
+        assert "trim=duration=3.0" in fc
+        # hook_big_caption has no scale/crop, so no setsar appended
+        assert "[outv]" in fc
+
+    # ── Test 9: Multiple scenes with varying durations ──
+
+    def test_multiple_scenes_with_varying_durations(self):
+        """4 scenes (2s, 5s, 8s, 3s) → each trim=duration=N present in filter."""
+        # Arrange
+        durations = [2.0, 5.0, 8.0, 3.0]
+        valid = [f"/tmp/s{i}.mp4" for i in range(4)]
+        assets = [
+            _make_asset(valid[i], duration=durations[i], transition_out="hard_cut")
+            for i in range(4)
+        ]
+
+        # Act
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Assert — all four trim durations present
+        for d in durations:
+            assert f"trim=duration={d}" in fc
+        # Assert — 3 concat joins for 4 scenes (hard_cut chain)
+        assert fc.count("concat=n=2:v=1") == 3
+
+    # ── Test 10: Fewer audio files than scenes → silence padding ──
+
+    def test_audio_count_mismatches_scene_count(self):
+        """4 scenes + 2 audio files → anullsrc silence padding for missing 2."""
+        # Arrange
+        valid = [f"/tmp/s{i}.mp4" for i in range(4)]
+        assets = [
+            _make_asset(valid[i], transition_out="hard_cut")
+            for i in range(4)
+        ]
+        audio = ["/tmp/voice_0.mp3", "/tmp/voice_1.mp3"]
+
+        # Act
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, audio, "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Assert — 4-scene audio concat with silence padding
+        assert "concat=n=4:a=1[outa]" in fc
+        assert "anullsrc=r=44100" in fc
+        assert "amix" not in fc
