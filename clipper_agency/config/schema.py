@@ -60,6 +60,16 @@ class TemplateConfig(BaseModel):
     assets_required: list[str] = Field(default_factory=list)
 
 
+class ContentPlanningConfig(BaseModel):
+    """Content planning constraints — format, story count, duration budgets."""
+
+    default_format: str = "three_story_roundup"
+    max_stories_per_video: int = Field(3, ge=1, le=10)
+    target_duration_sec: int = Field(55, ge=20, le=300)
+    hard_limit_sec: int = Field(60, ge=20, le=300)
+    estimated_words_per_second: float = Field(2.0, ge=0.5, le=5.0)
+
+
 class AppSettings(BaseSettings):
     """Application-level settings loaded from .env / environment.
 
@@ -104,3 +114,6 @@ class AppSettings(BaseSettings):
     # Debug / dev
     debug: bool = False
     dry_run: bool = False
+
+    # Content planning
+    content_planning: ContentPlanningConfig = Field(default_factory=ContentPlanningConfig)
