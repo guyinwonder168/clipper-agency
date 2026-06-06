@@ -202,8 +202,7 @@ class TestScriptwriterBudgetParams:
             job_id=5,
             topic="Topic",
             research_brief="Brief",
-            hard_limit_sec=60,
-            story_count=3,
+            story_direction={"hard_limit_sec": 60, "story_count": 3},
         )
         system_content = mock_chat.call_args.kwargs["messages"][0]["content"]
         assert "60 seconds" in system_content
@@ -219,8 +218,10 @@ class TestScriptwriterBudgetParams:
             job_id=6,
             topic="Topic",
             research_brief="Brief",
-            story_count=2,
-            stories_list=["Story A", "Story B"],
+            story_direction={
+                "story_count": 2,
+                "stories_list": ["Story A", "Story B"],
+            },
         )
         system_content = mock_chat.call_args.kwargs["messages"][0]["content"]
         assert "do NOT add extra stories" in system_content

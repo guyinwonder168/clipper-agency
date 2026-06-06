@@ -79,18 +79,22 @@ class ScriptwriterAgent(BaseAgent):
         tone: str = "",
         content_angle: str = "",
         assets_cache: str = "",
-        target_duration_sec: int = 55,
-        hard_limit_sec: int = 60,
-        estimated_words_per_second: float = 2.0,
-        max_scenes: int = 8,
-        story_format: str = "",
-        story_count: int = 3,
-        stories_list: list | None = None,
+        story_direction: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         rules = safety_rules or []
         safety_rules_text = "\n".join(f"- {r}" for r in rules) if rules else "None"
         logger.info("Scriptwriter: brief length=%d", len(research_brief))
+
+        # Extract direction params with defaults
+        sd = story_direction or {}
+        target_duration_sec = sd.get("target_duration_sec", 55)
+        hard_limit_sec = sd.get("hard_limit_sec", 60)
+        estimated_words_per_second = sd.get("estimated_words_per_second", 2.0)
+        max_scenes = sd.get("max_scenes", 8)
+        story_format = sd.get("story_format", "")
+        story_count = sd.get("story_count", 3)
+        stories_list = sd.get("stories_list", None)
         if assets_cache:
             write_json(
                 agent_input_file(assets_cache, job_id, self.agent_name),

@@ -63,9 +63,12 @@ class TestValidatedDirectionWiring:
                 assets_cache="/tmp/cache",
             )
             _, kwargs = mock_sw.call_args
-            assert kwargs["story_format"] == "three_story_roundup"
-            assert kwargs["story_count"] == 2
-            assert kwargs["stories_list"] == ["story_a", "story_b"]
+            sd = kwargs["story_direction"]
+            assert sd["story_format"] == "three_story_roundup"
+            assert sd["story_count"] == 2
+            assert sd["stories_list"] == ["story_a", "story_b"]
+            # content_angle from direction overrides "info"
+            assert kwargs["content_angle"] == "dramatic"
 
     def test_budget_params_passed_to_scriptwriter(
         self, mock_schema, mock_conn, mock_settings,
@@ -79,7 +82,7 @@ class TestValidatedDirectionWiring:
         mock_settings.return_value = _make_settings(target=50, hard=60)
 
         direction = ContentDirectionResult(
-            format="single_deep_dive",
+            format="single_story_deep",
             story_count=1,
             stories=["story_x"],
             content_angle="analytical",
@@ -105,11 +108,12 @@ class TestValidatedDirectionWiring:
                 assets_cache="/tmp/cache",
             )
             _, kwargs = mock_sw.call_args
-            assert kwargs["target_duration_sec"] == 50
-            assert kwargs["hard_limit_sec"] == 60
-            assert kwargs["estimated_words_per_second"] == 2.0
+            sd = kwargs["story_direction"]
+            assert sd["target_duration_sec"] == 50
+            assert sd["hard_limit_sec"] == 60
+            assert sd["estimated_words_per_second"] == 2.0
             # 1 story * 2 + 2 = 4
-            assert kwargs["max_scenes"] == 4
+            assert sd["max_scenes"] == 4
 
     def test_no_direction_uses_config_defaults(
         self, mock_schema, mock_conn, mock_settings,
@@ -140,11 +144,12 @@ class TestValidatedDirectionWiring:
                 assets_cache="/tmp/cache",
             )
             _, kwargs = mock_sw.call_args
+            sd = kwargs["story_direction"]
             # Budget params should still be present from config
-            assert kwargs["target_duration_sec"] == 55
-            assert kwargs["hard_limit_sec"] == 60
+            assert sd["target_duration_sec"] == 55
+            assert sd["hard_limit_sec"] == 60
             # 3 (config default) * 2 + 2 = 8
-            assert kwargs["max_scenes"] == 8
+            assert sd["max_scenes"] == 8
             # No story_format/stories_list when no direction
-            assert "story_format" not in kwargs
-            assert "stories_list" not in kwargs
+            assert "story_format" not in sd
+            assert "stories_list" not in sd
