@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,15 @@ from clipper_agency.output.packager import OutputPackager
 
 logger = logging.getLogger(__name__)
 
+_LOG_MAX_LEN = 500
+_RE_CTRL = re.compile(r"[\r\n\t]")
+
+
+def _sanitize_for_log(text: str) -> str:
+    """Strip control characters to prevent log injection (CWE-117)."""
+    return _RE_CTRL.sub(" ", str(text))[:_LOG_MAX_LEN]
+
+
 _COMPOSER_FAILED = "Composer failed"
 _PACKAGING_FAILED = "Packaging failed"
 _VOICE_GEN_FAILED = "Voice generation failed"
@@ -101,7 +111,8 @@ class Orchestrator:
         """Mark agent failed, update job, return failure dict."""
         error = output.get("error", default_reason)
         logger.error("%s FAILED: %s",
-                     agent_name.replace("_", " ").title(), error)
+                     agent_name.replace("_", " ").title(),
+                     _sanitize_for_log(error))
         mark_agent_failed(conn, job_id, agent_name, error)
         update_job_status(conn, job_id, "FAILED", error)
         return {
@@ -705,6 +716,22 @@ class Orchestrator:
             return {}, research_result
         return research_result, None
 
+    @staticmethod
+    def _build_retry_timeline(
+        script_output: dict[str, Any], voice_output: dict[str, Any],
+    ) -> list | None:
+        """Build reconciled timeline from script + voice for retry path."""
+        cp_config = load_settings().content_planning
+        if not cp_config or not voice_output:
+            return None
+        tl = reconcile_timeline(
+            scenes=script_output.get("script", []),
+            audio_meta=voice_output.get("audio_metadata", []),
+            target=cp_config.target_duration_sec,
+            hard=cp_config.hard_limit_sec,
+        )
+        return tl.timeline
+
     def _retry_downstream_stages(
         self, conn: Any, job_id: int, topic: str,
         niche_ctx: dict[str, Any],
@@ -742,16 +769,7 @@ class Orchestrator:
             )
 
         # Build timeline from script + voice for timeline-aware agents
-        cp_config = load_settings().content_planning
-        timeline = None
-        if cp_config and voice_output:
-            tl = reconcile_timeline(
-                scenes=script_output.get("script", []),
-                audio_meta=voice_output.get("audio_metadata", []),
-                target=cp_config.target_duration_sec,
-                hard=cp_config.hard_limit_sec,
-            )
-            timeline = tl.timeline
+        timeline = self._build_retry_timeline(script_output, voice_output)
 
         if from_idx <= PIPELINE_ORDER.index("visual_director"):
             visual_output = self._run_visual_director_phase(
