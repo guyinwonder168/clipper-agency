@@ -1,8 +1,8 @@
 # Clipper Agency — Requirements Traceability Matrix
 
-**Version:** 3.0
-**Date:** 2026-06-06
-**Status:** Tier 4 Design Accepted — Timeline-Aware Agent Orchestration (pending implementation)
+**Version:** 4.0
+**Date:** 2026-06-07
+**Status:** v2.0.0 Architecture Redesign Complete — Audio-First Continuous Voiceover Implemented
 
 ---
 
@@ -210,20 +210,24 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 128 | Treatment config YAML loader with frozen dataclasses (`TreatmentDef`, `TransitionDef`) for immutable access; `TreatmentConfig` exposes `get_treatment()`, `get_transition()`, `target_fps`, `pacing` properties | PRD §5 PR-26, SRS §2 FR-32, Design §7 |
 | 129 | Orchestrator threads `script_scenes` from scriptwriter output to Composer for subtitle generation; Composer chains drawtext filters with `enable='between(t,start,end)'` and `escape_drawtext()` | PRD §5 PR-28, SRS §2 FR-35, Design §4 |
 
-### From Tier 4 Content Planning & Timeline Contract (Proposed)
+### From Audio-First Continuous Voiceover Architecture (v2.0.0)
 
 | # | Fact | New Location |
 |---|------|-------------|
-| 130 | Researcher content direction extends LLM synthesis to include recommended format, ranked candidate stories, content angle, and risk notes | PRD §5 PR-29, SRS §2 FR-37, Design §7, ADR 0020 |
-| 131 | Orchestrator Format Validator validates content direction deterministically against `ContentPlanningConfig`; derives word/time budgets | PRD §5 PR-29, SRS §2 FR-37, Design §7 |
-| 132 | Scriptwriter must obey validated format and word budget; emits `role` (opening_hook/story_N/cta), `word_count`, `estimated_duration_sec` per scene | PRD §5 PR-29, SRS §2 FR-38, Design §4, Design §7 |
-| 133 | Script Duration Gate estimates total duration from word count before TTS; fails early if exceeds hard limit | PRD §5 PR-29, SRS §2 FR-38, Design §3 G7, Design §7 |
-| 134 | Voice Producer measures actual audio duration per scene via ffprobe; returns `audio_metadata` | PRD §5 PR-29, SRS §2 FR-39, Design §4, Design §7 |
-| 135 | Orchestrator Timeline Reconciler combines Researcher direction + Scriptwriter output + Voice duration metadata into canonical timeline with per-scene start/end times; fails before Visual Director if total exceeds hard limit | PRD §5 PR-29, SRS §2 FR-40, Design §7, ADR 0020 |
-| 136 | Visual Director consumes reconciled timeline for durations and visual instructions; creates opening card for hook, CTA card for cta | PRD §5 PR-29, SRS §2 FR-41, Design §7 |
-| 137 | Composer obeys timeline durations, pairs timeline audio with visuals, generates subtitles from timeline text, respects hook/CTA roles | PRD §5 PR-29, SRS §2 FR-42, Design §7 |
-| 138 | MVP duration target 45-55s, hard limit configurable via `ContentPlanningConfig`; 60s is product policy not universal TikTok ToS | PRD §3, SRS §7, Design §3 G10, Design §7 |
-| 139 | Retry paths must reconstruct and pass content direction, script scenes, voice metadata, and timeline artifacts to downstream agents | PRD §8, Design §3, Design §7 |
+| 140 | Researcher renamed to Segment Producer with 5 sub-roles: Fact Checker, Viral Analyst, Clip Scout, Story Producer, Edit Planner. File renamed `researcher.py` → `segment_producer.py` | PRD §5 PR-02, SRS §2 FR-03, Design §4, ADR 0021 |
+| 141 | Segment Producer outputs edit blueprint with story_beats (visual_must_show/must_not_show, asset_candidates, overlay_text, caption_keywords), format_decision, verified_facts with safe_wording, unverified_claims, do_not_use list | PRD §5 PR-29, SRS §2 FR-03/FR-37, Design §4, ADR 0021 |
+| 142 | Scriptwriter writes continuous voiceover narration (75-110 words, no emojis, spoken-word style) instead of per-scene headline fragments. Outputs voiceover_text + narrative_structure mapping beats to word ranges | PRD §5 PR-29, SRS §2 FR-05/FR-38, Design §4, ADR 0021 |
+| 143 | Voice Producer generates single continuous TTS call (87.5% cost reduction: 8 calls → 1). Returns voiceover.mp3 + word-level timestamps via ElevenLabs `/with-timestamps` (character-level grouped to words) | PRD §5 PR-29, SRS §2 FR-06/FR-39, Design §4, ADR 0021 |
+| 144 | Sequential Voice→Visual pipeline: Voice Producer must complete before Visual Director starts. Removed parallel asyncio.gather from engine | PRD §5 PR-02, SRS §2 FR-41, Design §3, ADR 0021 |
+| 145 | Visual Director beat-driven planning: consumes story_beats + word timestamps + visual rules. Each beat has exact audio duration from timestamps. Visual hierarchy enforced: source clip → screenshot → portrait → text card → stock | PRD §5 PR-29, SRS §2 FR-07/FR-41, Design §4, ADR 0021 |
+| 146 | Composer single audio timeline: voiceover.mp3 is immutable anchor (never trimmed). Smart scene trimming at ffprobe keyframe boundaries (±15% tolerance), speed adjustment ±20% | PRD §5 PR-29, SRS §2 FR-08/FR-42, Design §4/§7, ADR 0021 |
+| 147 | Keyword captions (max 6 words, beat-aligned, bottom-positioned) replace full-sentence subtitles. Implemented in subtitle_engine.py | PRD §5 PR-28/PR-29, SRS §2 FR-08/FR-42, Design §4/§7, ADR 0021 |
+| 148 | Reviewer enhanced with 4 programmatic quality checks: (1) AV sync (drift < 0.5s), (2) caption quality (short keywords, max 6 words), (3) fact safety (safe wording), (4) narrative structure (beat completeness) | PRD §5 PR-29, SRS §2 FR-09, Design §4, ADR 0021 |
+| 149 | Shared schema contract via `config/schema.py`: 11 Pydantic models (StoryBeat, FormatDecision, VerifiedFact, UnverifiedClaim, VisualInstruction, AssetCandidate, KeywordCaption, VoiceSettings, VoiceProviderResult, ContentBrief, NarrativeSection) | SRS §2 FR-40, Design §7, ADR 0021 |
+| 150 | Timeline Reconciler removed from engine — replaced by direct data flow: engine passes timestamps from Voice Producer to Visual Director and Composer | Design §3, ADR 0021 |
+| 151 | ElevenLabs `chars_to_words()` converts character-level timestamps to word-level. Voice settings: stability=0.4, similarity_boost=0.75, style=0.7, use_speaker_boost=True | SRS §2 FR-39, Design §4, ADR 0021 |
+| 152 | Gemini TTS fallback uses FFmpeg silencedetect for approximate timestamps when provider returns raw PCM only (no timestamps) | SRS §2 FR-39, Design §4, ADR 0021 |
+| 153 | Backward-compat files removed: researcher.py, researcher.md, 2 test wrappers. All references updated to segment_producer | Design §4, ADR 0021 |
 
 ---
 
@@ -248,7 +252,7 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | PR-26 | FR-32 | §7 Treatment System, §10 Templates | N/A | Invalid treatment YAML, unknown treatment type, missing FFmpeg filter | `templates/treatments.yaml` validated at load time; unknown treatments fall back to `broll_standard` |
 | PR-27 | FR-33 | §7 Scene Normalization | G9 | Mixed framerates, non-1:1 SAR, static images, flash frames | Scene normalizer in Composer pipeline: framerate→30fps, SAR→1:1, zoompan for images, reject <1s clips |
 | PR-28 | FR-34, FR-35, FR-36 | §7 Audio/Subtitle/Transition, §4 Composer | G9, G10 | Audio silence padding, missing script text, xfade on short clips, special chars in drawtext | Audio sequencer + subtitle engine + xfade chain + production flags |
-| PR-29 | FR-37, FR-38, FR-39, FR-40, FR-41, FR-42 | §7 Content Planning & Timeline, §3 G7/G_NEW/G10, §4 Agent Contracts | G7, G8, G_NEW, G10 | Script exceeds word budget, actual audio exceeds hard limit, retry missing script/timeline, visual shorter than narration, subtitle text missing | Content direction validation, word-count duration estimate, ffprobe audio measurement, Timeline Reconciler start/end calc, timeline-aware Visual Director + Composer render, retry artifact pass-through |
+| PR-29 | FR-37, FR-38, FR-39, FR-40, FR-41, FR-42 | §7 Audio-First Architecture, §3 G7/G8/G10, §4 Agent Contracts | G7, G8, G9, G10 | TTS too long/short (atempo ±15%), single TTS failure, word timestamp inaccuracy, clip longer than beat (smart trim), clip shorter (slow 30%), downloaded clip watermarks, no video clips (text_only), fewer clips than stories (deep dive), generic stock for named-person (visual rules), unverified claim as fact (reviewer catch) | Story beats with visual rules, continuous voiceover contract, word-level timestamps, beat-driven visual planning, smart scene trimming, keyword captions, 4 reviewer quality checks, shared schema.py contract |
 
 ### MVP P1 Requirements
 
@@ -338,18 +342,22 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | E26c | Script text contains special characters (colons, quotes, percent signs) | `escape_drawtext()` escapes `\`, `'`, `:`, `%` for FFmpeg drawtext filter | PRD §5 PR-28, Design §7 |
 | E26d | Unknown transition type in asset metadata | Falls back to crossfade with default 0.3s duration; warning logged | PRD §5 PR-28, Design §7 |
 
-### Timeline & Duration Budget Edge Cases (Tier 4 Proposed)
+### Audio-First Architecture Edge Cases (v2.0.0)
 
 | # | Edge Case | Handling | Location |
 |---|-----------|----------|----------|
-| E34 | Researcher produces no content_direction | Orchestrator falls back to default format and story count from `ContentPlanningConfig` | Design §7, SRS §2 FR-37 |
-| E35 | Scriptwriter produces more scenes than budget allows | G7 soft-fail; log warning, clamp to max stories | Design §3 G7, SRS §2 FR-38 |
-| E36 | Script word-count estimate exceeds hard limit | G7 hard-fail before TTS; optionally allow one bounded rewrite | Design §3 G7, SRS §2 FR-38 |
-| E37 | Voice Producer generates audio but ffprobe fails | Duration defaults to 0.0 in metadata; timeline gate warns | Design §7, SRS §2 FR-39 |
-| E38 | Total actual audio exceeds hard limit | Timeline Reconciler fails before Visual Director and Composer | Design §7, SRS §2 FR-40 |
-| E39 | Timeline Reconciler finds mismatched scene counts (script vs audio) | Fewer audio: fall back to script estimate; more audio: truncate to script count | Design §7, SRS §2 FR-40 |
-| E40 | Retry from Composer does not reconstruct timeline artifacts | `_retry_composer_stage` must load and pass `script_scenes` + `timeline` from upstream workspace | Design §7, PRD §8 |
-| E41 | Visual Director receives timeline but asset download fails | Same as existing G9 handling; timeline-aware scenes still have correct durations | Design §3 G9, SRS §2 FR-41 |
+| E34 | TTS audio too long (exceeds 60s hard limit) | G8 hard-fail; FFmpeg atempo ±15% can adjust, but major overage stops pipeline | Design §3 G8, ADR 0021 |
+| E35 | TTS audio too short (< 20s) | G8 soft-fail, continue with warning | Design §3 G8, ADR 0021 |
+| E36 | Word timestamp inaccuracy (ElevenLabs drift) | Character-level grouping is proven accurate; ±50ms acceptable | Design §4, ADR 0021 |
+| E37 | Clip longer than beat duration | Smart scene trimming at keyframe boundaries with ±15% tolerance + speed adjust ±20% | Design §7, SRS §2 FR-42, ADR 0021 |
+| E38 | Clip shorter than beat duration | Slow down max 30% or loop | Design §7, SRS §2 FR-42, ADR 0021 |
+| E39 | Downloaded clip has watermarks/captions | Leave them (authenticity). Our keyword captions go at bottom of frame, shifted up if overlap | Design §7, ADR 0021 |
+| E40 | Segment Producer finds no video clips | Format = `text_only` or skip job | SRS §2 FR-03, ADR 0021 |
+| E41 | Fewer clips than stories | Deep dive format instead of roundup (format_decision) | SRS §2 FR-03, ADR 0021 |
+| E42 | Generic stock used for named-person story | Visual Director rejects per visual_must_not_show / do_not_use rules | SRS §2 FR-07, ADR 0021 |
+| E43 | Unverified claim stated as fact | Reviewer fact_safety check catches; Scriptwriter uses safe_wording | SRS §2 FR-09, ADR 0021 |
+| E44 | Gemini TTS fallback returns no timestamps | FFmpeg silencedetect provides approximate timing (less precise but functional) | Design §4, ADR 0021 |
+| E45 | Voice Provider single TTS call fails | Same fallback chain: ElevenLabs → Gemini TTS → Fish Audio → fail clearly | SRS §2 FR-06, ADR 0021 |
 
 ### Reviewer Edge Cases
 
@@ -501,4 +509,8 @@ Use this checklist to verify the documentation set is airtight. Any reviewer (hu
 | **Timeline Reconciler** | Orchestrator-owned deterministic service that creates a canonical timeline from Researcher direction + Scriptwriter output + Voice Producer actual audio durations |
 | **Canonical Timeline** | Source-of-truth per-scene timing contract consumed by Visual Director and Composer; includes `start_sec`, `end_sec`, `role`, `audio_path`, `target_duration_sec`, `visual_instruction` |
 | **Script Duration Gate** | Pre-TTS deterministic check that estimates total duration from word count and rejects scripts likely to exceed the hard limit |
-| **Format Validator** | Orchestrator service that validates Researcher content_direction against niche config and derives word/time budgets |
+| **Format Validator** | ~~Orchestrator service that validates Researcher content_direction against niche config and derives word/time budgets~~ (Removed in v2.0.0 — Segment Producer edit blueprint supersedes content_direction) |
+| **Story Beat** | Primary data contract in audio-first architecture. Each beat carries visual_must_show/must_not_show rules, asset_candidates, overlay_text, caption_keywords, narration_goal, safe_wording |
+| **Smart Scene Trimming** | Composer technique: ffprobe keyframe boundary detection with ±15% tolerance, speed adjustment ±20%, for fitting visuals to audio timeline |
+| **Keyword Captions** | Short captions (max 6 words, beat-aligned, bottom-positioned) replacing full-sentence subtitles. Changed at each beat boundary |
+| **Continuous Voiceover** | Single TTS call generating complete narration (75-110 words) with word-level timestamps, replacing 8 per-scene TTS calls (87.5% cost reduction) |

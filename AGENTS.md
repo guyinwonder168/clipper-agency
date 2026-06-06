@@ -4,8 +4,8 @@ Project-specific instructions for AI agents working in this repository.
 
 ## Repository State
 
-- **Greenfield project** — early implementation phase (Phases 0-19 complete).
-- All 783 offline tests pass (2 pre-existing `integration`-marked tests deselected — `test_full_pipeline_smoke` requires FFmpeg + paid API keys, 1 other requires API keys). 7 agents built + Orchestrator engine + CLI interface + Web dashboard + data-driven config/prompt files + Docker deployment + pydantic-settings .env config system + structured logging + per-agent model config + test-agent CLI + configurable TTS provider (ElevenLabs/Gemini TTS/Fish Audio fallback) + artifact workspace contract + job debug dashboard/CLI + job manifest + gated pipeline hard-fail enforcement + agent state DB transitions + retry/resume/cache-reuse via dashboard/CLI + CSRF-protected retry/resume routes + FFmpeg preflight diagnostics + media probing + scene validation/normalization (30fps target, Ken Burns zoompan for images) + clip provenance tracking + generated card fallback (Pillow) + G10 deterministic validation + fixed-contract packager (S6549 safe) + template-driven rendering engine (YAML templates, 3 adapters, FFmpeg filter chains with fade/crossfade transitions, drawtext captions, Pillow thumbnails) + Composer template routing with diagnostics + E2E pipeline bugfixes (voice producer partial completion, Gemini TTS 429 backoff, SAR normalization, agent failure status checks for voice_producer/visual_director/composer, _fail_agent deduplication) + LLM-driven Visual Director (compact research data, per-scene visual planning, 3-tier image fallback Pexels→Firecrawl→gradient, text cards with relevant images, **enhanced with video production expertise — FPS rules, pacing, treatment selection, transitions, default treatment routing**) + treatment template YAML definitions (9 treatments, 5 transitions) + prompt files .txt→.md + search_photos() for PexelsService + prompt deduplication + NicheConfig schema cleanup (content_angle, search_terms, max_hashtags) + niche wiring through orchestrator + safety_rules from niche YAML + CLI niche validation + individual niche fields as prompt vars + repetitive failure patterns doc (docs/repetitive-failure-patterns.md) + 93% test coverage.
+- **Greenfield project** — early implementation phase (Phases 0-19 complete + Audio-First Continuous Voiceover v2.0.0 architecture redesign).
+- All 989 offline tests pass (2 pre-existing `integration`-marked tests deselected — `test_full_pipeline_smoke` requires FFmpeg + paid API keys, 1 other requires API keys). 7 agents built + Orchestrator engine + CLI interface + Web dashboard + data-driven config/prompt files + Docker deployment + pydantic-settings .env config system + structured logging + per-agent model config + test-agent CLI + configurable TTS provider (ElevenLabs/Gemini TTS/Fish Audio fallback) + artifact workspace contract + job debug dashboard/CLI + job manifest + gated pipeline hard-fail enforcement + agent state DB transitions + retry/resume/cache-reuse via dashboard/CLI + CSRF-protected retry/resume routes + FFmpeg preflight diagnostics + media probing + scene validation/normalization (30fps target, Ken Burns zoompan for images) + clip provenance tracking + generated card fallback (Pillow) + G10 deterministic validation + fixed-contract packager (S6549 safe) + template-driven rendering engine (YAML templates, 3 adapters, FFmpeg filter chains with fade/crossfade transitions, drawtext captions, Pillow thumbnails) + Composer template routing with diagnostics + E2E pipeline bugfixes (voice producer partial completion, Gemini TTS 429 backoff, SAR normalization, agent failure status checks for voice_producer/visual_director/composer, _fail_agent deduplication) + LLM-driven Visual Director (compact research data, per-scene visual planning, 3-tier image fallback Pexels→Firecrawl→gradient, text cards with relevant images, **enhanced with video production expertise — FPS rules, pacing, treatment selection, transitions, default treatment routing**) + treatment template YAML definitions (9 treatments, 5 transitions) + prompt files .txt→.md + search_photos() for PexelsService + prompt deduplication + NicheConfig schema cleanup (content_angle, search_terms, max_hashtags) + niche wiring through orchestrator + safety_rules from niche YAML + CLI niche validation + individual niche fields as prompt vars + repetitive failure patterns doc (docs/repetitive-failure-patterns.md) + **audio-first continuous voiceover architecture (v2.0.0)**: Segment Producer (researcher renamed with 5 sub-roles: fact checker, viral analyst, clip scout, story producer, edit planner), continuous voiceover via single TTS call with ElevenLabs `/with-timestamps` word-level timestamps, beat-driven Visual Director with `visual_must_show`/`visual_must_not_show` rules, smart scene trimming with ffprobe keyframe boundary detection, keyword captions (max 6 words, beat-aligned), sequential Voice→Visual pipeline, enhanced Reviewer with 4 programmatic quality checks (AV sync, caption quality, fact safety, narrative structure), shared schema contract via `config/schema.py` (11 Pydantic models). 93% test coverage.
 
 ## Python Commands
 
@@ -142,15 +142,18 @@ phase/3-services        phase/7-dashboard         phase/11-logging-model-config
 
 ## Architecture (MVP)
 
-Agentic pipeline coordinated by a DB-driven orchestrator:
+Agentic pipeline coordinated by a DB-driven orchestrator (audio-first continuous voiceover):
 
 ```
-Topic → Safety → Researcher → Scriptwriter → Voice Producer → Visual Director → Composer → Reviewer → Output
+Topic → Safety → Segment Producer → Scriptwriter → Voice Producer → Visual Director → Composer → Reviewer → Output
   G1      G2      G3/G4/G5       G6              G7                G8                G9        G10
 ```
 
 - 7 agents, 10 gates (G1-G10), state persisted in SQLite.
 - Agents communicate via DB state — no direct agent-to-agent calls.
+- **Audio-first pipeline**: voiceover generated first (single TTS call), visuals fitted to audio timeline.
+- **Beat-driven architecture**: story_beats + word-level timestamps drive visual selection and composition.
+- **Sequential voice→visual**: Voice Producer must complete before Visual Director starts.
 - Output package: `video.mp4` + `caption.txt` + `thumbnail.png` + `metadata.json`.
 - **MVP scope:** 1 client, 1 TikTok account, Indonesian artist infotainment niche.
 
@@ -209,7 +212,7 @@ Once code exists:
 - Integration tests require: FFmpeg 5.0+, SQLite, API keys for OpenRouter/ElevenLabs/Pexels/ScrapeCreators/Firecrawl.
 - Tests that call external APIs must use `pytest` markers to allow offline runs:
   ```bash
-  .venv/bin/python3 -m pytest -m "not external and not integration" -q  # skip API-dependent + integration tests (568 pass, 2 deselected)
+  .venv/bin/python3 -m pytest -m "not external and not integration" -q  # skip API-dependent + integration tests (989 pass, 2 deselected)
   ```
 
 ## Niche & Template Config
