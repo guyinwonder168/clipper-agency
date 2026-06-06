@@ -1,8 +1,8 @@
 # Clipper Agency — Software Requirements Specification
 
-**Version:** 2.8
-**Date:** 2026-06-05
-**Status:** MVP Phases 0-19 Complete — Composer Treatment & Transition Engine
+**Version:** 2.9
+**Date:** 2026-06-06
+**Status:** Tier 4 Design Accepted — Timeline-Aware Agent Orchestration (pending implementation)
 **Related:** `docs/PRD.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
@@ -47,12 +47,18 @@
 | FR-28 | Human-triggered retry and resume: CLI `job-retry <id> --from <agent>` re-runs from a specified agent, CLI `job-resume <id>` continues from a failed/paused stage; dashboard POST `/jobs/<id>/retry` and `/jobs/<id>/resume` routes provide the same controls | P0 | MVP |
 | FR-29 | FFmpeg preflight diagnostic: before any render work, check `ffmpeg exists`, `ffprobe exists`, libx264 available, aac support, mp3 decode; fail clearly with diagnostic message if any missing | P0 | MVP |
 | FR-30 | Generated card fallback: when no video clips or stock footage are available for a scene, generate 1080x1920 text-based PNG cards (headline, fact, context, CTA) using Pillow, styled from niche template; usage-only-cards condition escalates risk warning to Reviewer | P1 | MVP |
-| FR-31 | Deterministic video validation (G10): before Reviewer multimodal spend, validate `video.mp4` exists, non-zero, 9:16 aspect ratio, 1080x1920, duration 20-60s, audio track present, h264/aac codec, metadata stripped | P0 | MVP |
+| FR-31 | Deterministic video validation (G10): before Reviewer multimodal spend, validate `video.mp4` exists, non-zero, 9:16 aspect ratio, 1080x1920, duration within configurable hard limit (default 60s), audio track present, h264/aac codec, metadata stripped | P0 | MVP |
 | FR-32 | Treatment system: YAML-defined treatments in `templates/treatments.yaml` providing 9 visual treatments (ken_burns_zoom_in, ken_burns_pan_left, cinematic_crop, broll_standard, slow_motion, lower_third_slide, text_card_reveal, hook_big_caption, fade_to_black) + 5 transitions (crossfade, hard_cut, wipe_left, dissolve, circle_open) + FPS rules (30fps target) + pacing rules. Visual Director selects treatments per-scene; Composer applies via template-driven rendering engine. Adding new treatments requires YAML only, no code changes | P0 | MVP |
 | FR-33 | Scene normalizer: unify mixed-asset framerates to 30fps target, normalize SAR to 1:1, apply Ken Burns zoompan for static images (2.5s zoom cycle), validate clip duration bounds (1-5s), enforce consistent encoding parameters (h264/aac) across all scenes before composition. Rejects flash-frame clips (<1s) and clips exceeding 5s | P0 | MVP |
 | FR-34 | Audio sequencer: per-scene audio+video concat with two modes — Mode A (paired video+audio when no xfade) and Mode B (audio-only concat when xfade handles video). Pads missing audio with silence sources (anullsrc). Replaces broken amix that played all voice tracks simultaneously. Implemented in `clipper_agency/rendering/audio_sequencer.py` | P0 | MVP |
 | FR-35 | Subtitle engine: converts script scene text into timed CaptionOverlay objects with absolute timestamps across scenes. Builds hook overlay (first 3s center-positioned caption) and validates TikTok output requirements (pix_fmt, faststart, libx264, aac, bitrate, shortest). Implemented in `clipper_agency/rendering/subtitle_engine.py` | P0 | MVP |
 | FR-36 | Composer production output: xfade/concat mixed transition chain with offset calculation (cumulative_duration - trans_duration - safety_margin), duration clamping (min of transition_duration, min(prev_dur, next_dur) - headroom), fallback to crossfade for unknown transitions. Production flags: `-pix_fmt yuv420p`, `-movflags +faststart`, H.264/AAC codecs. Subtitle drawtext filters chained with `enable='between(t,start,end)'` and escape_drawtext for special characters | P0 | MVP |
+| FR-37 | Researcher content direction: Researcher LLM synthesis must include structured `content_direction` (recommended format, story rank, content angle, risk notes). Orchestrator validates direction deterministically | P0 | MVP (Proposed) |
+| FR-38 | Scriptwriter budget obedience: Scriptwriter must obey validated content direction, word budget, and scene roles (opening_hook, story_1..N, cta). Must emit `word_count` and `estimated_duration_sec` per scene | P0 | MVP (Proposed) |
+| FR-39 | Voice Producer duration metadata: Voice Producer must measure actual audio duration per scene via ffprobe and return `audio_metadata` with `audio_duration_sec`, `audio_path`, and `provider` fields | P0 | MVP (Proposed) |
+| FR-40 | Orchestrator Timeline Reconciler: Combines Researcher content_direction, Scriptwriter roles/durations, Voice Producer actual audio durations, and niche/platform config into canonical timeline with per-scene start/end times. Fails pipeline before Visual Director if total audio exceeds hard limit | P0 | MVP (Proposed) |
+| FR-41 | Visual Director timeline-aware planning: Visual Director must consume reconciled timeline for scene durations and visual instructions. Must create opening card for `opening_hook` and CTA card for `cta` roles | P0 | MVP (Proposed) |
+| FR-42 | Composer timeline-obedient rendering: Composer must obey timeline durations, pair timeline audio paths with visual scenes, generate subtitles from timeline text, and respect opening hook/CTA roles. Must fail if timeline/audio/visual contracts are inconsistent | P0 | MVP (Proposed) |
 
 ### 2.2 User Interfaces
 
@@ -218,7 +224,7 @@ ScrapeCreators credits reserved for TikTok video URLs, creator profiles, engagem
 
 | Area | Requirement |
 |------|-------------|
-| **Platform policy** | TikTok: max 60s, 9:16, caption 150 chars, 5 hashtags max |
+| **Platform policy** | TikTok: target output governed by configurable `content_planning.hard_limit_sec`; 9:16 vertical; caption 150 chars; 5 hashtags max. 60s is MVP product policy, not universal TikTok ToS |
 | **Copyright** | Third-party clips <5s, transformed, multi-source, original voiceover |
 | **Content safety** | Safety Agent pre-checks before generation (cheapest model). Hard-block illegal/banned/high-risk defamation. Soft-warning for unverified claims. |
 | **Unverified claims** | Soft wording required ("dikabarkan" — reported/said to be, "ramai dibahas netizen" — widely discussed by netizens) |

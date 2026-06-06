@@ -35,7 +35,7 @@
 ## Pipeline
 
 ```
-Topic → G1 → Safety → G2 → Researcher → G3-G5 → Scriptwriter → G6 → Voice → G7 → Visual → G8 → Composer → G9 → Reviewer → G10 → Output
+Topic → G1 → Safety → G2 → Researcher (content_direction) → G3-G5 → Format Validator → Scriptwriter (budget) → Script Gate → Voice → G8 → Timeline Reconciler → Visual (timeline-aware) → G9 → Composer (timeline-obedient) → G10 → Reviewer → Output
 ```
 
 Each step is **gated** (pass/soft-fail/hard-fail). Agents communicate through **database state** — no direct agent-to-agent calls.
@@ -132,10 +132,12 @@ clipper_agency/
 ├── config/                  # Pydantic config loader & hierarchy
 ├── core/                    # Shared utilities, logging, safe paths
 ├── db/                      # SQLite schema, queries, connection
-├── orchestrator/            # Gated state machine & pipeline engine
+├── orchestrator/            # Gated state machine, format validator & timeline reconciler
 │   ├── engine.py
 │   ├── gates.py
-│   └── state_machine.py
+│   ├── validator.py          # Content direction format validator
+│   ├── duration_gate.py      # Script duration gate (pre-TTS)
+│   └── timeline.py           # Canonical timeline reconciler
 ├── agents/                  # 7 pipeline agents
 │   ├── base.py
 │   ├── safety.py
@@ -239,6 +241,6 @@ Tests live in `tests/` mirroring the package structure. Currently **783 tests** 
 
 ## Status
 
-**✅ MVP Complete** — Phases 0-19 implemented. Treatment system, scene normalizer, LLM-driven visual director, template rendering engine, audio sequencing, subtitle overlays, xfade transitions.
+**✅ MVP Complete** — Phases 0-19 implemented. Treatment system, scene normalizer, LLM-driven visual director, template rendering engine, audio sequencing, subtitle overlays, xfade transitions. Tier 4 (timeline-aware orchestration) design accepted, pending implementation.
 
 783 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing

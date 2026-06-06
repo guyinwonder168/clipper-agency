@@ -1,8 +1,8 @@
 # Clipper Agency — Technical Design Document
 
-**Version:** 3.9
-**Date:** 2026-06-05
-**Status:** MVP Phases 0-19 Complete — Composer Treatment & Transition Engine
+**Version:** 4.0
+**Date:** 2026-06-06
+**Status:** Tier 4 Design Accepted — Timeline-Aware Agent Orchestration (pending implementation)
 **Related:** `docs/PRD.md`, `docs/SRS.md`, `docs/requirements_traceability.md`
 
 ---
@@ -110,20 +110,23 @@ Stage 2+:
 3.  Gate G2: Lightweight Cost + Credit Estimate
 4.  Agent A1: Safety Pre-Check (ultra-cheap model)
 5.  Gate G3: Research Cache Check
-6.  Agent A2: Researcher (ScrapeCreators + Firecrawl)
+6.  Agent A2: Researcher (ScrapeCreators + Firecrawl + content_direction)
 7.  Gate G4: Post-Research Risk Gate
 8.  Gate G5: Source Quality Gate
-9.  Gate G6: Creative Memory Gate
-10. Agent A3: Scriptwriter
-11. Gate G7: Script Validation Gate
-12. Agent A4: Voice Producer (ElevenLabs → Gemini TTS → Fish Audio fallback)
-13. Gate G8: Audio Validation Gate
-14. Agent A5: Visual Director (yt-dlp + fallback)
-15. Gate G9: Asset Validation Gate
-16. Agent A6: Composer (FFmpeg)
-17. Gate G10: Deterministic Video Validation
-18. Agent A7: Reviewer (multimodal)
-19. Output Package
+9.  Orchestrator Format Validator (deterministic, config-driven)
+10. Gate G6: Creative Memory Gate
+11. Agent A3: Scriptwriter (budget-obedient, scene roles + word count + estimated duration)
+12. Gate G_NEW: Script Duration Gate (word-count estimate before TTS)
+13. Agent A4: Voice Producer (ElevenLabs → Gemini TTS → Fish Audio + audio_metadata)
+14. Gate G8: Audio Validation Gate
+15. Orchestrator Timeline Reconciler (canonical timeline; fails before Visual if over hard limit)
+16. Gate G_NEW: Timeline Validation Gate
+17. Agent A5: Visual Director (timeline-aware, opening card + CTA card)
+18. Gate G9: Asset Validation Gate
+19. Agent A6: Composer (timeline-obedient, per-scene audio + subtitles + xfade)
+20. Gate G10: Deterministic Video Validation (configurable duration limit)
+21. Agent A7: Reviewer (multimodal)
+22. Output Package
 ```
 
 ### 3.2 Gate Definitions
@@ -210,27 +213,40 @@ Stage 2+:
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Validate script before spending ElevenLabs credits on voice |
-| **Input** | Script text, caption text |
-| **Check type** | Deterministic (length, format, safety keyword scan) + GLM-4-9B (ultra-cheap) |
-| **Pass** | Script within length, no safety issues, proper formatting |
-| **Soft fail** | Minor issues (too long, weak hook) — auto-trim or flag for review |
-| **Hard fail** | Safety violation detected — stop, route to human |
-| **Cost protection** | Blocks ElevenLabs spend on invalid/unsafe scripts |
+| **Purpose** | Validate script budget compliance before spending ElevenLabs credits on voice |
+| **Input** | Script scenes with word_count, estimated_duration_sec; content direction budget |
+| **Check type** | Deterministic (word-count duration estimate, scene role validation, format adherence) |
+| **Pass** | Script fits word/time budget, scene roles present, estimated total ≤ target |
+| **Soft fail** | Exceeds target but within hard limit — log, continue with warning |
+| **Hard fail** | Exceeds hard limit — stop early before TTS spend. Missing required scene roles. |
+| **Cost protection** | Blocks ElevenLabs spend on scripts that cannot fit within duration limits |
 | **Next** | Human if hard fail. A4 if pass/soft-fail. |
 
 #### G8: Audio Validation Gate
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Validate voiceover file before spending FFmpeg time on render |
-| **Input** | Audio file path, expected duration |
-| **Check type** | Deterministic (file exists, file size > 0, duration check, format validation) |
-| **Pass** | Audio file valid, duration within ±2s of expected |
-| **Soft fail** | Minor duration mismatch (<2s) — log, continue |
-| **Hard fail** | File missing, 0 bytes, 0 seconds, corrupt, or duration >10s off expected — stop |
-| **Cost protection** | Prevents FFmpeg render with missing/broken audio |
-| **Next** | Admin/Creative Lead if hard fail. A5 if pass/soft-fail. |
+| **Purpose** | Validate voiceover files and duration metadata before downstream visual/render spend |
+| **Input** | Audio file paths, `audio_metadata` (per-scene duration via ffprobe), expected durations |
+| **Check type** | Deterministic (file exists, file size > 0, duration metadata present, total within hard limit) |
+| **Pass** | Audio files valid, metadata present, duration consistent |
+| **Soft fail** | Minor duration deviation — log, continue |
+| **Hard fail** | File missing, 0 bytes, no metadata, total exceeds hard limit |
+| **Cost protection** | Prevents Visual Director and Composer spend when audio is broken or too long |
+| **Next** | Timeline Reconciler if pass/soft-fail. Admin/Creative Lead if hard fail. |
+
+#### G_NEW: Timeline Validation Gate
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | Validate canonical timeline before visual planning and rendering spend |
+| **Input** | `reconciled_timeline.json` |
+| **Check type** | Deterministic |
+| **Pass** | Timeline internally consistent, per-scene start/end times aligned, total ≤ hard limit, all roles present |
+| **Soft fail** | Not applicable |
+| **Hard fail** | Inconsistent timeline, total exceeds hard limit, missing audio files, missing scene roles |
+| **Cost protection** | Prevents Visual Director and Composer spend on impossible timelines |
+| **Next** | Admin/Creative Lead if hard fail. A5 if pass. |
 
 #### G9: Asset Validation Gate
 
@@ -252,9 +268,9 @@ Stage 2+:
 | **Purpose** | Validate rendered video before spending multimodal Reviewer tokens |
 | **Input** | Output video file path |
 | **Check type** | Deterministic (file exists, file size > 0, duration, resolution, codec, audio track present) |
-| **Pass** | Video 9:16, 1080x1920, duration 20-60s, audio track present, file size > 1KB |
+| **Pass** | Video 9:16, 1080x1920, duration within configurable hard limit (default 60s), audio track present, file size > 1KB |
 | **Soft fail** | Minor deviations — log, continue to reviewer |
-| **Hard fail** | File missing, 0 bytes, wrong resolution, no audio, or duration out of range |
+| **Hard fail** | File missing, 0 bytes, wrong resolution, no audio, or duration out of configurable range |
 | **Cost protection** | Prevents multimodal Reviewer spend on broken video files |
 | **Next** | Admin/Creative Lead if hard fail. A7 if pass/soft-fail. |
 
@@ -264,9 +280,9 @@ Each job has a state tracked in the database:
 
 ```text
 CREATED → PREFLIGHT → COST_ESTIMATED → SAFETY_CHECKED → RESEARCHING
-→ RESEARCH_REVIEWED → SOURCES_VALIDATED → MEMORY_CHECKED → SCRIPTING
-→ SCRIPT_VALIDATED → VOICING → AUDIO_VALIDATED → VISUALIZING
-→ ASSETS_VALIDATED → COMPOSING → VIDEO_VALIDATED → REVIEWING
+→ RESEARCH_REVIEWED → SOURCES_VALIDATED → FORMAT_VALIDATED → MEMORY_CHECKED → SCRIPTING
+→ SCRIPT_DURATION_CHECKED → VOICING → AUDIO_VALIDATED → TIMELINE_RECONCILED
+→ VISUALIZING → ASSETS_VALIDATED → COMPOSING → VIDEO_VALIDATED → REVIEWING
 → COMPLETED
 
 Any state → PAUSED (Admin/Creative Lead action via dashboard or CLI signal)
@@ -304,10 +320,11 @@ Required before enabling those commands:
 | Agent | Role | Cost Tier | Caching |
 |-------|------|-----------|---------|
 | **Safety Agent** | Pre-checks topic. Ultra-cheap model (GLM-4-9B). Hard-blocks illegal/banned/high-risk defamation; soft-warns unverified claims. | Ultra Budget | Not cached |
-| **Researcher** | Gathers context + source URLs + music candidates. MVP: ScrapeCreators (`trim=true` + field extraction via `_extract_fields()` handling both `aweme_info`-wrapped and flat trimmed responses, max 20 results) + Firecrawl (lean url/title/desc only). Cache-first: reads/writes raw responses, `research_brief.md`, `research_contract.json`, and normalized files under `ASSETS_CACHE/job_{id}/agents/researcher/`. Token guard: `MAX_SOURCE_CHARS=40000` prevents LLM overflow. Returns structured data with entities, tags, risk_flags, cache_key. | Budget East | TTL-based + job workspace file cache |
-| **Scriptwriter** | Writes script + caption in niche tone. Rotates angle from creative history. Always fresh. | Budget East | Never |
-| **Voice Producer** | Generates voiceover via provider fallback: ElevenLabs → Google AI Studio Gemini TTS → Fish Audio → fail clearly. `GeminiTTSService` uses `gemini-2.5-flash-preview-tts` with configured voice (default `Kore`) and wraps PCM audio as WAV when needed. `FishAudioService` uses `s2-pro` model, `POST /v1/tts`, `reference_id` for voice model. Voice files and sanitized `provider_attempts.json` are saved under `ASSETS_CACHE/job_{id}/agents/voice_producer/`. Always fresh. | API cost | Never |
-| **Visual Director** | LLM-driven visual planning with video production expertise: compacts research data, uses LLM to plan per-scene visual strategy (treatment selection, FPS rules, pacing, transitions), executes via dispatch table (tiktok_clip, pexels_video, pexels_image, text_card). Treatment-aware: selects from 9 YAML-defined treatments (Ken Burns zoom/pan, cinematic crop, B-roll, slow-motion, lower-third, text card reveal, hook caption, fade-to-black) with appropriate transitions. 3-tier image fallback for text cards (Pexels photo → Firecrawl article image → gradient). Falls back to legacy sequential planning on LLM failure. | Budget East | Never |
+| **Researcher** | Gathers context + source URLs + music candidates + content direction. MVP: ScrapeCreators (`trim=true` + field extraction) + Firecrawl + LLM synthesis. Content direction: recommends format (three_story_roundup / single_story_deep / rapid_bulletin), ranks candidate stories, suggests content angle and risk notes. Orchestrator validates direction deterministically. See `docs/adr/0020-use-canonical-timeline-contract.md`. | Budget East | TTL-based + job workspace file cache |
+| **Scriptwriter** | Writes script + caption in niche tone obeying content direction budget. Emits scene roles (opening_hook, story_1..N, cta), word_count, estimated_duration_sec per scene. Rotates angle from creative history. Always fresh. | Budget East | Never |
+| **Voice Producer** | Generates voiceover via provider fallback: ElevenLabs → Google AI Studio Gemini TTS → Fish Audio → fail clearly. Measures actual audio duration via ffprobe and returns `audio_metadata` per scene. Voice files and metadata saved under `ASSETS_CACHE/job_{id}/agents/voice_producer/`. Always fresh. | API cost | Never |
+| **Orchestrator (Format Validator + Timeline Reconciler)** | Deterministic services: validates Researcher content_direction against niche config, derives word/time budgets, runs Script Duration Gate, and reconciles canonical timeline from Researcher direction + Scriptwriter output + Voice Producer actual durations. Fails pipeline early when budget or timeline limits are exceeded. No LLM cost. | N/A (deterministic) | Per-job timeline artifact |
+| **Visual Director** | LLM-driven timeline-aware visual planning: consumes reconciled timeline, creates opening card for `opening_hook` and CTA card for `cta` roles, matches visual duration to `target_duration_sec`, selects treatments/transitions per scene. See `docs/adr/0014-visual-director-llm-planning.md`. | Budget East | Never |
 | **Composer** | FFmpeg assembly: scenes, transitions, captions, audio, thumbnail. Treatment-aware: applies treatment-specific FFmpeg filter chains (zoompan for Ken Burns, speed for slow-motion, fade for transitions) from `templates/treatments.yaml`. Scene normalizer unifies framerates to 30fps, normalizes SAR to 1:1, validates clip bounds before composition. Audio sequencer pairs per-scene voice files with video clips via concat (Mode A: paired audio+video, Mode B: audio-only when xfade handles video). Subtitle engine converts script text to timed drawtext overlays with absolute timestamps. xfade/concat mixed transition chain with offset calculation, duration clamping, and safety margins. Production flags: `-pix_fmt yuv420p`, `-movflags +faststart`. Dead `amix` and `_build_filter` code removed. | N/A | Never |
 | **Reviewer** | Quality + safety + duplicate check. Multimodal (video + text). Max 2 human-triggered retries. | Moderate | Never |
 | **Creative Director** | Stage 2. Proposes new angles/templates when variation exhausted. | Agentic East | Triggered |
@@ -326,7 +343,7 @@ The Visual Director uses LLM-driven planning with video production expertise to 
 
 **Default treatment routing:** When LLM is unavailable or returns no treatment, Visual Director applies sensible defaults: `text_card_reveal` for text_card scenes, `broll_standard` for video clips, `ken_burns_zoom_in` for static images.
 
-**Design principle:** "Orchestrator dumb, agents smart." The engine passes research file paths to Visual Director; the agent decides how to use them.
+**Design principle:** "Orchestrator owns cross-agent contracts, agents own creative decisions." The Orchestrator validates content direction, derives word/time budgets, and reconciles the canonical timeline. Agents receive explicit contracts rather than inferring timing independently. See `docs/adr/0020-use-canonical-timeline-contract.md`.
 
 **Configuration:** `visual_director_model` in `AppSettings` controls which LLM is used. Default: `mimo-v2-flash`.
 
@@ -348,11 +365,12 @@ Query construction is config-driven: the niche profile defines search terms, lan
 | Agent | Input | Output | On Failure |
 |-------|-------|--------|------------|
 | **Safety** | Topic string, niche safety_rules; persisted as `agents/safety/input.json` | Pass/soft-warning/hard-fail + reason; persisted as `agents/safety/output.json` + `summary.md` | Hard-fail stops pipeline |
-| **Researcher** | Topic, niche config, cached research (if fresh); persisted as `agents/researcher/input.json` | Markdown brief (`research_brief.md`), raw provider payloads, normalized files, `research_contract.json`, and `output.json` | Empty result → G5 handles |
-| **Scriptwriter** | Researcher contract/output, creative history; persisted as `agents/scriptwriter/input.json` | `script.json`, `caption.txt`, `hashtags.json`, selected angle, and `output.json` | N/A (always produces output) |
-| **Voice Producer** | Validated script text, voice_id from config; persisted as `agents/voice_producer/input.json` | Voice files under `agents/voice_producer/voices/`, `provider_attempts.json`, duration metadata, and `output.json` | All providers fail → stop, retry by Admin/Creative Lead |
-| **Visual Director** | Researcher research_contract_path + research_brief_path, Pexels query from tags, local asset paths, generated card config; persisted as `agents/visual_director/input.json` | `visual_plan.json` (LLM decisions with reasoning), `scene_plan.json`, `provenance.json`, scene files under `scenes/`, cards under `cards/`, and `output.json` | Download failures → G9 handles |
-| **Composer** | Validated audio file, scene plan, template config, caption text; persisted as `agents/composer/input.json` | Final `OUTPUT_DIR/job_{id}/video.mp4`, plus `ffmpeg_command.txt`, `ffmpeg_stderr.log`, template diagnostics (`template_config.json`, `render_plan.json`, `ffmpeg_filtergraph.txt`), and `output.json` in job workspace | FFmpeg failure → stop, retry by Admin/Creative Lead |
+| **Researcher** | Topic, niche config, cached research (if fresh); persisted as `agents/researcher/input.json` | Markdown brief (`research_brief.md`), `content_direction.json`, raw provider payloads, normalized files, `research_contract.json`, and `output.json` | Empty result → G5 handles |
+| **Scriptwriter** | Researcher output + validated content direction + word/time budget; persisted as `agents/scriptwriter/input.json` | `script.json` (with `role`, `word_count`, `estimated_duration_sec` per scene), `caption.txt`, `hashtags.json`, selected angle, and `output.json` | N/A (always produces output) |
+| **Voice Producer** | Validated script text + voice_id; persisted as `agents/voice_producer/input.json` | Voice files under `agents/voice_producer/voices/`, `audio_metadata.json` (per-scene duration via ffprobe), `provider_attempts.json`, and `output.json` | All providers fail → stop, retry by Admin/Creative Lead |
+| **Timeline Reconciler** | Researcher content_direction + Scriptwriter output + Voice audio_metadata + niche config; persisted as `timeline/reconciled_timeline.json` | Canonical timeline with per-scene start_sec/end_sec, roles, target durations, visual instructions | Exceeds hard limit → fail before Visual Director |
+| **Visual Director** | Reconciled timeline + research contract + Pexels query; persisted as `agents/visual_director/input.json` | `visual_plan.json` (LLM decisions), `scene_plan.json`, `provenance.json`, scene/card files, and `output.json` | Download failures → G9 handles |
+| **Composer** | Validated timeline + audio files + visual assets + template config; persisted as `agents/composer/input.json` | Final `OUTPUT_DIR/job_{id}/video.mp4`, plus `ffmpeg_command.txt`, diagnostics, and `output.json` | FFmpeg failure → stop, retry by Admin/Creative Lead |
 | **Reviewer** | Rendered video file, script text, caption, creative history; persisted as `agents/reviewer/input.json` | Pass/reject + specific issues + recommended retry step; persisted as `agents/reviewer/output.json` + `review.md` | Reject → Admin/Creative Lead decides |
 
 #### Researcher Output Schema
@@ -635,6 +653,105 @@ The Composer uses dedicated rendering modules for per-scene audio pairing and su
 - Orchestrator threads `script_scenes` to Composer via `_stage_composition()`.
 - Composer chains drawtext filters: `[outv] → [vsub_in] → drawtext=...:enable='between(t,start,end)' → [outv]`.
 - Special characters escaped via `escape_drawtext()` from `primitives.py`.
+
+### Content Planning & Timeline Reconciliation (Tier 4 — Proposed)
+
+The following additions are designed but not yet implemented. See `docs/plans/2026-06-06-timeline-aware-agent-orchestration.md` for the full design and `docs/plans/2026-06-06-tier4-implementation-plan.md` for the implementation plan.
+
+#### Content Direction (Researcher)
+
+Researcher extends its existing LLM synthesis to emit a structured `content_direction`:
+
+```json
+{
+  "content_direction": {
+    "recommended_format": "three_story_roundup",
+    "reason": "Three safe, recent, unrelated stories...",
+    "selected_story_count": 3,
+    "selected_stories": ["story_1", "story_2", "story_3"],
+    "content_angle": "fast gossip roundup",
+    "risk_notes": ["Use cautious wording for unverified claims."]
+  }
+}
+```
+
+#### Orchestrator Format Validator
+
+Deterministic validation of Researcher direction against niche config (`ContentPlanningConfig`):
+
+- Validates recommended format is allowed.
+- Clamps story count to `max_stories_per_video`.
+- Derives word/time budgets from config.
+- Falls back to defaults when direction is missing.
+
+#### Script Duration Gate
+
+Before TTS spend, estimates duration locally:
+
+```text
+estimated_seconds = word_count / estimated_words_per_second + pause_buffer
+```
+
+Rejects scripts that exceed the hard limit before Voice Producer or downstream agents run.
+
+#### Voice Producer Audio Metadata
+
+Voice Producer measures each generated file with `ffprobe`:
+
+```json
+{
+  "scene": 1,
+  "audio_path": ".../scene_1.mp3",
+  "audio_duration_sec": 8.7,
+  "provider": "elevenlabs"
+}
+```
+
+#### Orchestrator Timeline Reconciler
+
+Deterministic service that combines Researcher direction, Scriptwriter scene roles/durations, Voice Producer actual audio durations, and niche config into one canonical timeline.
+
+Output:
+
+```json
+{
+  "timeline": [
+    {
+      "scene": 1,
+      "role": "opening_hook",
+      "text": "...",
+      "audio_path": "...",
+      "audio_duration_sec": 8.7,
+      "start_sec": 0.0,
+      "end_sec": 8.7,
+      "target_duration_sec": 8.7,
+      "visual_instruction": "opening card"
+    }
+  ],
+  "total_duration_sec": 54.2,
+  "within_limit": true
+}
+```
+
+Fails pipeline before Visual Director if total exceeds hard limit.
+
+#### Visual Director Timeline-Aware
+
+Visual Director consumes reconciled timeline for scene durations and visual instructions. Must produce opening card for `opening_hook` and CTA card for `cta` roles.
+
+#### Composer Timeline-Obedient
+
+Composer uses timeline durations, pairs timeline audio paths with visuals, generates subtitles from timeline text, and respects hook/CTA roles. Fails if timeline, audio files, or visual assets are inconsistent.
+
+#### Artifact Additions
+
+```text
+agents/researcher/content_direction.json
+agents/voice_producer/audio_metadata.json
+timeline/reconciled_timeline.json
+gates/script_duration.json
+gates/timeline_validation.json
+```
 
 ---
 

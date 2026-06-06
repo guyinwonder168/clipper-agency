@@ -1,6 +1,6 @@
-# Composer Treatment & Transition Engine — Full Tier 3 Implementation Plan
+# Composer Treatment & Transition Engine — Full Tier 3 Implementation Plan ✅ COMPLETED
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Implementation complete.** All 8 batches (B0-B7) executed, 14 commits merged via PR #36. Final: 783 tests passing, 93% coverage, SonarCloud Quality Gate PASSED. Tagged `v1.2.0`.
 
 **Goal:** Produce TikTok-upload-quality video by fixing ALL Composer output issues: voice clashing, missing subtitles, per-scene narration sync, treatment filters, and xfade transitions. Every pain point from job_2 output must be resolved.
 
@@ -152,11 +152,11 @@ compose_output = self._run_composer(
 
 **Responsibility:** Load and validate the YAML, expose `get_treatment(name)` and `get_transition(name)` lookups with frozen dataclasses (`TreatmentDef`, `TransitionDef`). Expose `target_fps` and `pacing` from `fps_rules` and `pacing_rules` sections.
 
-- [ ] **Step 1: Write failing test** — 9 test cases covering: loading all 9+ treatments, field access, null filter for `broll_standard`, transition defs, `hard_cut` null filter, unknown name returns None, fps_rules, pacing_rules, custom path constructor
-- [ ] **Step 2: Run** — expect `ModuleNotFoundError`
-- [ ] **Step 3: Implement** — `TreatmentDef(frozen)`, `TransitionDef(frozen)`, `TreatmentConfig(path)` with internal `yaml.safe_load()`. Reference implementation exists in the original plan lines 128-208.
-- [ ] **Step 4: Verify** — All 9 tests pass
-- [ ] **Step 5: Commit as** `feat: add TreatmentConfig YAML loader`
+- [x] **Step 1: Write failing test** — 9 test cases covering: loading all 9+ treatments, field access, null filter for `broll_standard`, transition defs, `hard_cut` null filter, unknown name returns None, fps_rules, pacing_rules, custom path constructor
+- [x] **Step 2: Run** — expect `ModuleNotFoundError`
+- [x] **Step 3: Implement** — `TreatmentDef(frozen)`, `TransitionDef(frozen)`, `TreatmentConfig(path)` with internal `yaml.safe_load()`. Reference implementation exists in the original plan lines 128-208.
+- [x] **Step 4: Verify** — All 9 tests pass
+- [x] **Step 5: Commit as** `feat: add TreatmentConfig YAML loader`
 
 ---
 
@@ -182,11 +182,11 @@ compose_output = self._run_composer(
 - `text`: `drawtext` with `{text}` substitution
 - Add `,setsar=1/1` after any scale/crop (research pitfall #4)
 
-- [ ] **Step 1: Write failing test** — 13 cases: frames substitution, text substitution, text default, duration substitution, start_time, image pre-scale, video no pre-scale, null returns "null", unknown returns "null", slow_motion setpts, text_card_reveal alpha, lower_third drawtext, cinematic_crop crop
-- [ ] **Step 2: Run** — expect `ModuleNotFoundError`
-- [ ] **Step 3: Implement** — `TreatmentFilterBuilder(config).build(asset, start_time=0.0) -> str`. Reference implementation exists in the original plan lines 352-405.
-- [ ] **Step 4: Verify** — All 13 tests pass
-- [ ] **Step 5: Commit as** `feat: add TreatmentFilterBuilder for per-scene filter strings`
+- [x] **Step 1: Write failing test** — 13 cases: frames substitution, text substitution, text default, duration substitution, start_time, image pre-scale, video no pre-scale, null returns "null", unknown returns "null", slow_motion setpts, text_card_reveal alpha, lower_third drawtext, cinematic_crop crop
+- [x] **Step 2: Run** — expect `ModuleNotFoundError`
+- [x] **Step 3: Implement** — `TreatmentFilterBuilder(config).build(asset, start_time=0.0) -> str`. Reference implementation exists in the original plan lines 352-405.
+- [x] **Step 4: Verify** — All 13 tests pass
+- [x] **Step 5: Commit as** `feat: add TreatmentFilterBuilder for per-scene filter strings`
 
 ---
 
@@ -197,10 +197,10 @@ compose_output = self._run_composer(
 
 **Add tests:** All xfade transitions have `{duration}` and `{offset}` vars; image treatments use `zoompan`; fps_rules present; pacing_rules have hook_window
 
-- [ ] **Step 1: Read existing** `tests/test_treatment_templates.py`
-- [ ] **Step 2: Add 4 validation tests**
-- [ ] **Step 3: Run** — All 11 tests pass
-- [ ] **Step 4: Commit as** `test: expand treatment template validation with TreatmentConfig`
+- [x] **Step 1: Read existing** `tests/test_treatment_templates.py`
+- [x] **Step 2: Add 4 validation tests**
+- [x] **Step 3: Run** — All 11 tests pass
+- [x] **Step 4: Commit as** `test: expand treatment template validation with TreatmentConfig`
 
 ---
 
@@ -228,16 +228,16 @@ When treatment_filter is "null" -> no extra filter (backward compatible). Also a
 - In the per-input loop: call `builder.build(asset)` and prepend result to trim filter chain when not "null"
 - Keep existing trim logic unchanged
 
-- [ ] **Step 1: Write failing tests** — 5 cases:
+- [x] **Step 1: Write failing tests** — 5 cases:
   - `test_build_assembly_cmd_applies_treatment_filter` — cinematic_crop appears in filter graph
   - `test_build_assembly_cmd_null_treatment_no_extra_filter` — broll_standard keeps original trim behavior
   - `test_build_assembly_cmd_treatment_respects_duration` — trim duration unchanged
   - `test_build_assembly_cmd_text_treatment_substitutes_vars` — headline appears in drawtext
   - `test_build_assembly_cmd_no_treatment_metadata_still_works` — backward compat
-- [ ] **Step 2: Implement** in `composer.py:_build_assembly_cmd()`
-- [ ] **Step 3: Run** `pytest tests/test_composer.py -v` — All existing + 5 new pass
-- [ ] **Step 4: Run full suite** — 699+ pass, 93%+ coverage
-- [ ] **Step 5: Commit as** `feat: integrate treatment filters into Composer assembly`
+- [x] **Step 2: Implement** in `composer.py:_build_assembly_cmd()`
+- [x] **Step 3: Run** `pytest tests/test_composer.py -v` — All existing + 5 new pass
+- [x] **Step 4: Run full suite** — 699+ pass, 93%+ coverage
+- [x] **Step 5: Commit as** `feat: integrate treatment filters into Composer assembly`
 
 ---
 
@@ -274,7 +274,7 @@ When treatment_filter is "null" -> no extra filter (backward compatible). Also a
 
 **FFmpeg flags:** Ensure `-pix_fmt yuv420p` and `-movflags +faststart` are present (added in Batch 1)
 
-- [ ] **Step 1: Write failing tests** — 8 cases:
+- [x] **Step 1: Write failing tests** — 8 cases:
   - `test_build_assembly_cmd_applies_xfade_transition` — `xfade=` in filter_complex, no concat
   - `test_build_assembly_cmd_hard_cut_uses_concat` — `concat=` present, no xfade
   - `test_build_assembly_cmd_mixed_transitions` — both concat AND xfade in 3-scene filter graph
@@ -283,10 +283,10 @@ When treatment_filter is "null" -> no extra filter (backward compatible). Also a
   - `test_last_scene_no_transition_out` — only 1 xfade for 2 scenes (last has no out)
   - `test_transition_duration_clamped_to_shortest_clip` — 1s transition on 2s clip -> clamped
   - `test_xfade_unknown_transition_falls_back_to_default` — graceful degradation
-- [ ] **Step 2: Implement** refactored filter graph builder in `_build_assembly_cmd()`
-- [ ] **Step 3: Run** `pytest tests/test_composer.py -v` — All existing + 8 new pass
-- [ ] **Step 4: Run full suite** — 699+ pass, 93%+ coverage
-- [ ] **Step 5: Commit as** `feat: add xfade transition engine with mixed concat/xfade support`
+- [x] **Step 2: Implement** refactored filter graph builder in `_build_assembly_cmd()`
+- [x] **Step 3: Run** `pytest tests/test_composer.py -v` — All existing + 8 new pass
+- [x] **Step 4: Run full suite** — 699+ pass, 93%+ coverage
+- [x] **Step 5: Commit as** `feat: add xfade transition engine with mixed concat/xfade support`
 
 ---
 
@@ -339,7 +339,7 @@ def build_audio_video_concat(
 - More audio files than scenes -> truncate to scene count
 - Single scene -> no concat needed, direct label
 
-- [ ] **Step 1: Write failing tests** — 8 cases:
+- [x] **Step 1: Write failing tests** — 8 cases:
   - `test_pairs_audio_to_video` — 3 scenes + 3 audio -> `concat=n=3:v=1:a=1`
   - `test_no_audio_generates_silence` — 0 audio files -> `anullsrc`
   - `test_fewer_audio_than_scenes_pads_silence` — 3 scenes + 2 audio -> pad scene 3 with silence
@@ -348,10 +348,10 @@ def build_audio_video_concat(
   - `test_audio_input_indices_offset_by_video_count` — audio indices start at `num_video_inputs`
   - `test_output_labels_correct` — returns `("outv", "outa")`
   - `test_audio_sequencer_is_pure` — same inputs always produce same output
-- [ ] **Step 2: Run** — expect `ModuleNotFoundError`
-- [ ] **Step 3: Implement** — Pure function, no file I/O, no side effects
-- [ ] **Step 4: Verify** — All 8 tests pass
-- [ ] **Step 5: Commit as** `feat: add AudioSequencer for per-scene audio pairing`
+- [x] **Step 2: Run** — expect `ModuleNotFoundError`
+- [x] **Step 3: Implement** — Pure function, no file I/O, no side effects
+- [x] **Step 4: Verify** — All 8 tests pass
+- [x] **Step 5: Commit as** `feat: add AudioSequencer for per-scene audio pairing`
 
 ---
 
@@ -381,17 +381,17 @@ audio_filter, video_out, audio_out = build_audio_video_concat(
 - **Mode A (no xfade):** `concat=n=N:v=1:a=1` — paired audio+video
 - **Mode B (with xfade):** Audio gets its own `concat=n=N:a=1[outa]`, video uses xfade chain
 
-- [ ] **Step 1: Write failing tests** — 6 cases:
+- [x] **Step 1: Write failing tests** — 6 cases:
   - `test_assembly_uses_concat_audio_when_all_hard_cut` — `concat` with `:a=1`
   - `test_assembly_uses_separate_audio_concat_when_xfade` — audio `concat` separate from video xfade
   - `test_assembly_no_audio_uses_silence` — `anullsrc` in filter graph
   - `test_assembly_audio_matches_scene_count` — 5 scenes + 5 audio files
   - `test_assembly_audio_fewer_files_pads` — 5 scenes + 3 audio files -> padded
   - `test_assembly_preserves_existing_video_chain` — video chain unchanged by audio integration
-- [ ] **Step 2: Implement** in `composer.py:_build_assembly_cmd()`
-- [ ] **Step 3: Run** `pytest tests/test_composer.py -v`
-- [ ] **Step 4: Run full suite** — 699+ pass, 93%+ coverage
-- [ ] **Step 5: Commit as** `feat: integrate per-scene audio sequencing into Composer`
+- [x] **Step 2: Implement** in `composer.py:_build_assembly_cmd()`
+- [x] **Step 3: Run** `pytest tests/test_composer.py -v`
+- [x] **Step 4: Run full suite** — 699+ pass, 93%+ coverage
+- [x] **Step 5: Commit as** `feat: integrate per-scene audio sequencing into Composer`
 
 ---
 
@@ -440,7 +440,7 @@ def build_subtitle_overlays(
 - `rendering/primitives.py:make_caption_overlays()` — similar logic, can reuse patterns
 - `rendering/contracts.py:CaptionOverlay` — existing Pydantic model
 
-- [ ] **Step 1: Write failing tests** — 10 cases:
+- [x] **Step 1: Write failing tests** — 10 cases:
   - `test_single_scene_single_caption` — 5 words, 5s -> 1 overlay spanning 0-5s
   - `test_single_scene_split_captions` — 12 words, 6s, wpc=6 -> 2 overlays, 3s each
   - `test_multi_scene_absolute_timing` — 2 scenes, second scene captions start after first
@@ -451,10 +451,10 @@ def build_subtitle_overlays(
   - `test_default_words_per_caption_is_6` — uses default when not specified
   - `test_scene_with_no_duration_defaults_to_5` — graceful default
   - `test_single_word_caption` — 1 word still produces an overlay
-- [ ] **Step 2: Run** — expect `ModuleNotFoundError`
-- [ ] **Step 3: Implement** — Pure function, uses `CaptionOverlay` contract
-- [ ] **Step 4: Verify** — All 10 tests pass
-- [ ] **Step 5: Commit as** `feat: add SubtitleEngine for timed caption overlays`
+- [x] **Step 2: Run** — expect `ModuleNotFoundError`
+- [x] **Step 3: Implement** — Pure function, uses `CaptionOverlay` contract
+- [x] **Step 4: Verify** — All 10 tests pass
+- [x] **Step 5: Commit as** `feat: add SubtitleEngine for timed caption overlays`
 
 ---
 
@@ -493,11 +493,11 @@ This requires:
 3. `ComposerAgent.execute()` accepts and stores `script_scenes`
 4. Backward compatible: `script_scenes` defaults to `[]`
 
-- [ ] **Step 1: Write failing test** — verify Composer receives script_scenes
-- [ ] **Step 2: Implement** parameter threading in orchestrator + composer signature
-- [ ] **Step 3: Run** `pytest tests/test_orchestrator.py tests/test_composer.py -v`
-- [ ] **Step 4: Run full suite** — 699+ pass, 93%+ coverage
-- [ ] **Step 5: Commit as** `feat: pass script text through to Composer for subtitles`
+- [x] **Step 1: Write failing test** — verify Composer receives script_scenes
+- [x] **Step 2: Implement** parameter threading in orchestrator + composer signature
+- [x] **Step 3: Run** `pytest tests/test_orchestrator.py tests/test_composer.py -v`
+- [x] **Step 4: Run full suite** — 699+ pass, 93%+ coverage
+- [x] **Step 5: Commit as** `feat: pass script text through to Composer for subtitles`
 
 ---
 
@@ -546,17 +546,17 @@ def _build_assembly_cmd(
 ) -> list[str]:
 ```
 
-- [ ] **Step 1: Write failing tests** — 6 integration cases:
+- [x] **Step 1: Write failing tests** — 6 integration cases:
   - `test_full_pipeline_treatment_audio_subtitles` — all 3 subsystems active in filter graph
   - `test_pipeline_audio_no_subtitles` — audio works without script text
   - `test_pipeline_subtitles_no_audio` — subtitles render with silent audio
   - `test_pipeline_xfade_with_audio_and_subtitles` — the full production case
   - `test_pipeline_hard_cut_with_audio_and_subtitles` — concat-based production case
   - `test_pipeline_backward_compat_no_audio_no_script` — original behavior preserved
-- [ ] **Step 2: Implement** unified `_build_assembly_cmd()` refactoring
-- [ ] **Step 3: Run** `pytest tests/test_composer.py -v` — All existing + new pass
-- [ ] **Step 4: Run full suite** — 699+ pass, 93%+ coverage
-- [ ] **Step 5: Commit as** `feat: unify treatment+audio+subtitle+transition in Composer assembly`
+- [x] **Step 2: Implement** unified `_build_assembly_cmd()` refactoring
+- [x] **Step 3: Run** `pytest tests/test_composer.py -v` — All existing + new pass
+- [x] **Step 4: Run full suite** — 699+ pass, 93%+ coverage
+- [x] **Step 5: Commit as** `feat: unify treatment+audio+subtitle+transition in Composer assembly`
 
 ---
 
@@ -589,14 +589,14 @@ def _build_assembly_cmd(
 | Audio sync | Per-scene concat | B3/B5 |
 | Max duration | 180s (TikTok) | Validate in Composer |
 
-- [ ] **Step 1: Write failing tests** — 4 cases:
+- [x] **Step 1: Write failing tests** — 4 cases:
   - `test_hook_overlay_first_3_seconds` — hook caption only in first 3s
   - `test_hook_overlay_uses_first_scene_headline` — text from scene 1
   - `test_production_validation_passes_valid_output` — all TikTok checks pass
   - `test_production_validation_flags_missing_faststart` — catches missing flag
-- [ ] **Step 2: Implement** hook overlay + validation function
-- [ ] **Step 3: Run tests**
-- [ ] **Step 4: Commit as** `feat: add hook overlay and TikTok production validation`
+- [x] **Step 2: Implement** hook overlay + validation function
+- [x] **Step 3: Run tests**
+- [x] **Step 4: Commit as** `feat: add hook overlay and TikTok production validation`
 
 ---
 
@@ -620,10 +620,10 @@ def _build_assembly_cmd(
 
 **Cleanup:** `_build_filter()` (lines 383-410) is dead production code replaced by `_build_assembly_cmd()`. Remove it and update any tests that reference it directly.
 
-- [ ] **Step 1: Write edge case tests**
-- [ ] **Step 2: Remove `_build_filter()` and fix affected tests**
-- [ ] **Step 3: Run full suite**
-- [ ] **Step 4: Commit as** `test: add edge case tests, remove dead _build_filter`
+- [x] **Step 1: Write edge case tests**
+- [x] **Step 2: Remove `_build_filter()` and fix affected tests**
+- [x] **Step 3: Run full suite**
+- [x] **Step 4: Commit as** `test: add edge case tests, remove dead _build_filter`
 
 ---
 
@@ -637,13 +637,13 @@ def _build_assembly_cmd(
 
 ### Task 7: Full test suite validation + coverage + integration check
 
-- [ ] **Step 1:** Run `.venv/bin/python3 -m pytest -m "not external and not integration" -q`
+- [x] **Step 1:** Run `.venv/bin/python3 -m pytest -m "not external and not integration" -q`
   - Expect: All 699+ existing pass + ~50 new tests pass
-- [ ] **Step 2:** Check coverage >= 93%: `.venv/bin/python3 -m pytest --cov=clipper_agency --cov-report=term-missing`
-- [ ] **Step 3:** Fix any coverage gaps in new modules (treatment_config, treatment_filters, audio_sequencer, subtitle_engine)
-- [ ] **Step 4:** Verify new modules have >= 90% individual coverage
-- [ ] **Step 5:** `git diff --stat master` — review all changes
-- [ ] **Step 6:** Commit as `test: final coverage validation for Tier 3`
+- [x] **Step 2:** Check coverage >= 93%: `.venv/bin/python3 -m pytest --cov=clipper_agency --cov-report=term-missing`
+- [x] **Step 3:** Fix any coverage gaps in new modules (treatment_config, treatment_filters, audio_sequencer, subtitle_engine)
+- [x] **Step 4:** Verify new modules have >= 90% individual coverage
+- [x] **Step 5:** `git diff --stat master` — review all changes
+- [x] **Step 6:** Commit as `test: final coverage validation for Tier 3`
 
 ---
 
@@ -708,3 +708,30 @@ Then run a full pipeline job to verify the end-to-end output has:
 4. Treatment filters applied (ken burns, cinematic crop, etc.)
 5. Smooth transitions between scenes (crossfade, hard cut)
 6. Production-grade MP4 ready for TikTok upload
+
+---
+
+## Tier 3 Complete — Summary
+
+**Status:** ✅ All 8 batches (B0-B7) implemented and merged via PR #36.
+
+| Batch | What | Result |
+|-------|------|--------|
+| **B0** | `treatment_config.py` + `treatment_filters.py` + template tests | 3 new modules, 26 tests |
+| **B1** | Treatment filters in Composer `_build_assembly_cmd()` | 5 tests, production flags added |
+| **B2** | xfade transition engine (mixed concat/xfade chain) | 8 tests, offset calc with safety margins |
+| **B3** | `audio_sequencer.py` + per-scene audio concat in Composer | Mode A (paired) + Mode B (audio-only with xfade) |
+| **B4** | `subtitle_engine.py` + script passthrough in Orchestrator | Timed CaptionOverlays, hook overlay |
+| **B5** | Unified refactor — treatments + audio + subtitles + transitions | 6 integration tests, all subsystems wired |
+| **B6** | Hook overlay, production validation, edge cases, dead code cleanup | 10 edge case tests, `_build_filter()` removed |
+| **B7** | Final validation | **783 tests, 93% coverage**, SonarCloud ✅ |
+
+**New modules created:**
+- `clipper_agency/rendering/treatment_config.py`
+- `clipper_agency/rendering/treatment_filters.py`
+- `clipper_agency/rendering/audio_sequencer.py`
+- `clipper_agency/rendering/subtitle_engine.py`
+
+**Key commits:** 14 commits across PR #36. Tagged `v1.2.0` with GitHub Release.
+
+**Notable:** `slow_motion` treatment deferred — `setpts=2.0*PTS` conflicts with trim-based duration contract (see evolution_plan.md item #4).
