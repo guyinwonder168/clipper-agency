@@ -23,3 +23,9 @@ search_terms:
   - klarifikasi
   - gosip
   - trending
+content_planning:
+  default_format: three_story_roundup
+  max_stories_per_video: 3
+  target_duration_sec: 55
+  hard_limit_sec: 60
+  estimated_words_per_second: 2.0

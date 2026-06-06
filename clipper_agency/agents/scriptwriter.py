@@ -25,11 +25,17 @@ Given a research brief and topic, create:
 
 Format your response as JSON:
 {{
-  "script": [{{"scene": 1, "text": "...", "duration": estimated_seconds}}, ...],
+  "script": [
+    {{"scene": 1, "role": "opening_hook", "text": "...", "word_count": 10, "estimated_duration_sec": 5.0}},
+    ...
+  ],
   "caption": "...",
   "hashtags": ["#tag1", "#tag2"],
   "estimated_duration": total_seconds
 }}
+
+Scene roles: "opening_hook", "story_N" (e.g. story_1, story_2), "closing_cta".
+Provide word_count and estimated_duration_sec for every scene.
 
 Guidelines:
 - Hook within first 3 seconds
@@ -128,8 +134,9 @@ class ScriptwriterAgent(BaseAgent):
         try:
             stripped = content.strip().strip("```json").strip("```").strip()
             data = json.loads(stripped)
+            script = _normalize_scenes(data.get("script", []))
             return {
-                "script": data.get("script", []),
+                "script": script,
                 "caption": data.get("caption", ""),
                 "hashtags": data.get("hashtags", []),
                 "estimated_duration": data.get("estimated_duration", 0),
@@ -141,3 +148,18 @@ class ScriptwriterAgent(BaseAgent):
                 "hashtags": [],
                 "estimated_duration": 0,
             }
+
+
+def _normalize_scenes(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ensure every scene has role, word_count, and estimated_duration_sec."""
+    normalized: list[dict[str, Any]] = []
+    for scene in scenes:
+        s = dict(scene)
+        if "role" not in s:
+            s["role"] = "body"
+        if "estimated_duration_sec" not in s and "duration" in s:
+            s["estimated_duration_sec"] = s["duration"]
+        if "word_count" not in s:
+            s["word_count"] = len(s.get("text", "").split())
+        normalized.append(s)
+    return normalized

@@ -1,6 +1,6 @@
-# Scene Normalizer Framerate Fix — Implementation Plan
+# Scene Normalizer Framerate Fix — Implementation Plan ✅ COMPLETED
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Tier 1 complete.** Merged to master at `32e895e` via PR #32 + PR #33. 669 tests passing, SonarCloud Quality Gate PASSED.
 
 **Goal:** Fix FFmpeg concat hang caused by mixed framerates — normalize all scenes to 30fps and convert still images to animated video clips with Ken Burns zoompan effect.
 
@@ -341,7 +341,7 @@ def test_normalize_image_png_detected(self, tmp_path, mocker):
     mock_ffmpeg.assert_called_once()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/bin/python3 -m pytest tests/test_scene_normalizer.py::TestSceneNormalizer::test_normalize_image_uses_zoompan tests/test_scene_normalizer.py::TestSceneNormalizer::test_normalize_image_ken_burns_zoom_in tests/test_scene_normalizer.py::TestSceneNormalizer::test_normalize_image_png_detected -v`
 Expected: ALL FAIL — no image detection path
@@ -418,7 +418,7 @@ Then update `normalize()` to route images to `_normalize_image()`:
         # ... existing probe + video normalization code ...
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/bin/python3 -m pytest tests/test_scene_normalizer.py -v`
 Expected: ALL PASS (11 tests now: 8 original + 3 new)
@@ -486,9 +486,8 @@ git commit -m "chore: increase image normalization timeout for zoompan CPU load"
 - [x] **Step 2: Create PR** — PR #32 created, reviewed, SonarCloud fixed ✅
 - [x] **Step 3: SonarCloud green + merge** — PR #32 merged; PR #33 (review fix: fps flooring) merged; both branches deleted ✅
 
-**Tier 1 complete.** Merged to master at `32e895e`.
 
----
+
 
 ## Summary of Changes
 

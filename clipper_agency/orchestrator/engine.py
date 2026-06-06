@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,11 @@ from clipper_agency.db.queries import (
     update_job_status,
 )
 from clipper_agency.db.schema import initialize_schema
+from clipper_agency.orchestrator.duration_gate import (
+    DurationBudget,
+    check_script_duration_budget,
+    estimate_script_duration_sec,
+)
 from clipper_agency.orchestrator.gates import (
     GateResult,
     GateCostEstimate,
@@ -53,14 +59,26 @@ from clipper_agency.orchestrator.gates import (
     GateAssetValidation,
     GateVideoValidation,
 )
+from clipper_agency.orchestrator.timeline import reconcile_timeline
+from clipper_agency.orchestrator.validator import validate_content_direction
 from clipper_agency.output.packager import OutputPackager
 
 logger = logging.getLogger(__name__)
+
+_LOG_MAX_LEN = 500
+_RE_CTRL = re.compile(r"[\r\n\t]")
+
+
+def _sanitize_for_log(text: str) -> str:
+    """Strip control characters to prevent log injection (CWE-117)."""
+    return _RE_CTRL.sub(" ", str(text))[:_LOG_MAX_LEN]
+
 
 _COMPOSER_FAILED = "Composer failed"
 _PACKAGING_FAILED = "Packaging failed"
 _VOICE_GEN_FAILED = "Voice generation failed"
 _ASSET_SOURCING_FAILED = "Asset sourcing failed"
+_SCRIPT_BUDGET_FAILED = "Scriptwriter duration budget exceeded"
 
 
 class Orchestrator:
@@ -93,7 +111,8 @@ class Orchestrator:
         """Mark agent failed, update job, return failure dict."""
         error = output.get("error", default_reason)
         logger.error("%s FAILED: %s",
-                     agent_name.replace("_", " ").title(), error)
+                     agent_name.replace("_", " ").title(),
+                     _sanitize_for_log(error))
         mark_agent_failed(conn, job_id, agent_name, error)
         update_job_status(conn, job_id, "FAILED", error)
         return {
@@ -198,6 +217,17 @@ class Orchestrator:
         )
         self._complete_agent(conn, assets_cache, job_id, "researcher")
 
+        # Format Validator: validate content_direction from Researcher
+        cp_config = load_settings().content_planning
+        if cp_config:
+            validated = validate_content_direction(
+                research_output.get("content_direction"), cp_config,
+            )
+            research_output["validated_direction"] = validated
+            logger.info("Format validator: format=%s stories=%d fallback=%s",
+                        validated.format, validated.story_count,
+                        validated.fallback)
+
         g4 = GatePostResearchRisk()
         g4_result = g4.evaluate(
             risk_flags=research_output.get("risk_flags", []),
@@ -227,16 +257,21 @@ class Orchestrator:
         language: str, tone: str, content_angle: str,
         research_output: dict[str, Any],
         assets_cache: str, output_dir: str,
-    ) -> tuple[dict[str, Any], dict[str, Any]] | dict[str, Any]:
-        """Run G6→Scriptwriter→G7→Voice→G8.
+    ) -> tuple[dict[str, Any], dict[str, Any], list] | dict[str, Any]:
+        """Run G6→Scriptwriter→G7→Voice→G8→Timeline Reconciler.
 
-        Returns (script_output, voice_output) on success or a failure dict.
+        Returns (script_output, voice_output, timeline) on success
+        or a failure dict.
         """
         script_output = self._run_content_scriptwriter(
             conn, job_id, topic, safety_rules, channel_description,
             language, tone, content_angle,
             research_output, assets_cache,
         )
+        if script_output.get("status") == "failed":
+            return self._fail_agent(conn, job_id, "scriptwriter",
+                                    script_output,
+                                    "Scriptwriter duration exceeded")
 
         logger.info("G7: running Voice Producer agent")
         mark_agent_running(conn, job_id, "voice_producer")
@@ -258,13 +293,41 @@ class Orchestrator:
                                         failed_at="audio_validation"):
             return abort
 
-        return script_output, voice_output
+        # Timeline Reconciler: build canonical timeline
+        cp_config = load_settings().content_planning
+        timeline = []
+        if cp_config:
+            tl_result = reconcile_timeline(
+                scenes=script_output.get("script", []),
+                audio_meta=voice_output.get("audio_metadata", []),
+                target=cp_config.target_duration_sec,
+                hard=cp_config.hard_limit_sec,
+            )
+            timeline = tl_result.timeline
+            logger.info("Timeline reconciler: total=%.1fs within=%s scenes=%d",
+                        tl_result.total_duration_sec,
+                        tl_result.within_limit, len(timeline))
+            if not tl_result.within_limit:
+                reason = (
+                    f"Timeline {tl_result.total_duration_sec:.1f}s exceeds "
+                    f"hard limit {tl_result.hard_limit_sec}s"
+                )
+                update_job_status(conn, job_id, "FAILED", reason)
+                return {
+                    "status": "failed",
+                    "failed_at": "timeline_reconciler",
+                    "reason": reason,
+                    "job_id": job_id,
+                }
+
+        return script_output, voice_output, timeline
 
     def _stage_composition(
         self, conn: Any, job_id: int, topic: str,
         research_output: dict[str, Any],
         script_output: dict[str, Any], voice_output: dict[str, Any],
         assets_cache: str, output_dir: str,
+        timeline: list | None = None,
     ) -> dict[str, Any]:
         """Run Visual→G9→Composer→G10.
 
@@ -274,6 +337,7 @@ class Orchestrator:
         visual_output = self._run_visual_director_phase(
             conn, job_id, topic, research_output, script_output,
             output_dir, assets_cache,
+            timeline=timeline,
         )
 
         if visual_output.get("status") == "failed":
@@ -295,6 +359,7 @@ class Orchestrator:
             audio_files=voice_output.get("audio_files", []),
             script_scenes=script_output.get("script", []),
             output_dir=output_dir, assets_cache=assets_cache,
+            timeline=timeline,
         )
 
         if compose_output.get("status") == "failed":
@@ -302,8 +367,11 @@ class Orchestrator:
                                     compose_output, _COMPOSER_FAILED)
         self._complete_agent(conn, assets_cache, job_id, "composer")
 
+        cp_config = load_settings().content_planning
+        hard_limit = cp_config.hard_limit_sec if cp_config else 60
         g10 = GateVideoValidation()
-        g10_result = g10.evaluate(video_path=compose_output.get("video_path"))
+        g10_result = g10.evaluate(video_path=compose_output.get("video_path"),
+                                  hard_limit_sec=hard_limit)
         self._record_gate(assets_cache, job_id, "G10_video_validation", g10_result)
         if abort := self._enforce_gate(conn, job_id, "G10", g10_result,
                                         failed_at="video_validation"):
@@ -374,7 +442,7 @@ class Orchestrator:
             if isinstance(research_output, dict) and research_output.get("status") == "failed":
                 return research_output
 
-            # Stage 3: Content creation (G6→G8)
+            # Stage 3: Content creation (G6→G8→Timeline)
             stage3 = self._stage_content(
                 conn, job_id, topic, safety_rules, channel_description,
                 language_name, tone_name, angle_name,
@@ -382,13 +450,14 @@ class Orchestrator:
             )
             if isinstance(stage3, dict) and stage3.get("status") == "failed":
                 return stage3
-            script_output, voice_output = stage3
+            script_output, voice_output, timeline = stage3
 
             # Stage 4: Composition (Visual→G10)
             compose_output = self._stage_composition(
                 conn, job_id, topic, research_output,
                 script_output, voice_output,
                 assets_cache, output_dir,
+                timeline=timeline,
             )
             if isinstance(compose_output, dict) and compose_output.get("status") == "failed":
                 return compose_output
@@ -464,6 +533,7 @@ class Orchestrator:
         self, conn: Any, job_id: int, topic: str,
         _research_output: dict[str, Any], script_output: dict[str, Any],
         output_dir: str, assets_cache: str,
+        timeline: list | None = None,
     ) -> dict[str, Any]:
         """Run Visual Director agent: sources → visual output → complete."""
         mark_agent_running(conn, job_id, "visual_director")
@@ -487,6 +557,7 @@ class Orchestrator:
             output_dir=output_dir, assets_cache=assets_cache,
             research_contract_path=research_contract_path,
             research_brief_path=research_brief_path,
+            timeline=timeline,
         )
         if visual_output.get("status") != "failed":
             self._complete_agent(conn, assets_cache, job_id, "visual_director")
@@ -502,11 +573,28 @@ class Orchestrator:
         None, it should be returned immediately from run_pipeline_from.
         """
         mark_agent_running(conn, job_id, "composer")
+        # Load script scenes from completed scriptwriter for subtitles
+        script_output = self._load_agent_output(assets_cache, job_id, "scriptwriter")
+
+        # Rebuild timeline for retry path
+        cp_config = load_settings().content_planning
+        timeline = None
+        if cp_config:
+            tl = reconcile_timeline(
+                scenes=script_output.get("script", []),
+                audio_meta=voice_output.get("audio_metadata", []),
+                target=cp_config.target_duration_sec,
+                hard=cp_config.hard_limit_sec,
+            )
+            timeline = tl.timeline
+
         compose_output = self._run_composer(
             job_id=job_id,
             assets=visual_output.get("assets", []),
             audio_files=voice_output.get("audio_files", []),
             output_dir=output_dir, assets_cache=assets_cache,
+            script_scenes=script_output.get("script", []),
+            timeline=timeline,
         )
 
         if compose_output.get("status") == "failed":
@@ -514,9 +602,13 @@ class Orchestrator:
                 conn, job_id, "composer", compose_output, _COMPOSER_FAILED)
         self._complete_agent(conn, assets_cache, job_id, "composer")
 
+        cp_config = load_settings().content_planning
+        hard_limit = cp_config.hard_limit_sec if cp_config else 60
         g10 = GateVideoValidation()
         g10_result = g10.evaluate(
-            video_path=compose_output.get("video_path"))
+            video_path=compose_output.get("video_path"),
+            hard_limit_sec=hard_limit,
+        )
         self._record_gate(assets_cache, job_id,
                           "G10_video_validation", g10_result)
         abort = self._enforce_gate(
@@ -624,6 +716,22 @@ class Orchestrator:
             return {}, research_result
         return research_result, None
 
+    @staticmethod
+    def _build_retry_timeline(
+        script_output: dict[str, Any], voice_output: dict[str, Any],
+    ) -> list | None:
+        """Build reconciled timeline from script + voice for retry path."""
+        cp_config = load_settings().content_planning
+        if not cp_config or not voice_output:
+            return None
+        tl = reconcile_timeline(
+            scenes=script_output.get("script", []),
+            audio_meta=voice_output.get("audio_metadata", []),
+            target=cp_config.target_duration_sec,
+            hard=cp_config.hard_limit_sec,
+        )
+        return tl.timeline
+
     def _retry_downstream_stages(
         self, conn: Any, job_id: int, topic: str,
         niche_ctx: dict[str, Any],
@@ -647,6 +755,9 @@ class Orchestrator:
                     research_output, assets_cache,
                 ),
             )
+            if script_output.get("status") == "failed":
+                return self._fail_agent(conn, job_id, "scriptwriter",
+                                        script_output, _SCRIPT_BUDGET_FAILED)
 
         if from_idx <= PIPELINE_ORDER.index("voice_producer"):
             voice_output = self._run_cached_or_fresh(
@@ -657,10 +768,14 @@ class Orchestrator:
                 ),
             )
 
+        # Build timeline from script + voice for timeline-aware agents
+        timeline = self._build_retry_timeline(script_output, voice_output)
+
         if from_idx <= PIPELINE_ORDER.index("visual_director"):
             visual_output = self._run_visual_director_phase(
                 conn, job_id, topic, research_output, script_output,
                 output_dir, assets_cache,
+                timeline=timeline,
             )
             if visual_output.get("status") == "failed":
                 return self._fail_agent(conn, job_id, "visual_director",
@@ -830,6 +945,31 @@ class Orchestrator:
         )
         self._record_gate(assets_cache, job_id, "G7_script_validation",
                           g7_result)
+
+        # Duration Gate: check script fits within time budget
+        cp_config = load_settings().content_planning
+        if cp_config and isinstance(script_scenes, list) and script_scenes:
+            estimated = estimate_script_duration_sec(
+                script_scenes,
+                words_per_sec=cp_config.estimated_words_per_second,
+            )
+            budget = DurationBudget(
+                target=cp_config.target_duration_sec,
+                hard=cp_config.hard_limit_sec,
+            )
+            budget_check = check_script_duration_budget(estimated, budget)
+            script_output["_duration_check"] = budget_check
+            logger.info("Duration gate: estimated=%.1fs %s",
+                        estimated, budget_check["reason"])
+            if not budget_check["pass"]:
+                reason = (
+                    f"Script duration {estimated:.1f}s exceeds "
+                    f"hard limit {budget.hard}s"
+                )
+                mark_agent_failed(conn, job_id, "scriptwriter", reason)
+                update_job_status(conn, job_id, "FAILED", reason)
+                script_output["status"] = "failed"
+                script_output["error"] = reason
 
         return script_output
 

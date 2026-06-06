@@ -45,11 +45,21 @@ Rules to follow:
 Search results:
 {sources_text}
 
-Return a concise research brief that covers:
-1. Key facts and verified information
-2. Trending angles and viral potential
-3. Content suggestions for short-form video
-4. Any risks or sensitive topics to handle carefully
+Return a JSON response with two fields:
+
+1. "research_brief" — concise brief covering:
+   - Key facts and verified information
+   - Trending angles and viral potential
+   - Content suggestions for short-form video
+   - Any risks or sensitive topics to handle carefully
+
+2. "content_direction" — recommend the best approach for this content:
+   - "recommended_format": one of "three_story_roundup", "single_story_deep", or "rapid_bulletin"
+   - "reason": brief explanation
+   - "selected_story_count": number (1-6)
+   - "selected_stories": list of story slugs or headlines
+   - "content_angle": suggested angle for Scriptwriter
+   - "risk_notes": any safety/caution notes
 """
 
 
@@ -324,7 +334,24 @@ class ResearcherAgent(BaseAgent):
             temperature=0.3,
             max_tokens=1024,
         )
+        parsed = self._parse_synthesis_response(response["content"])
         return {
-            "research_brief": response["content"],
+            "research_brief": parsed["research_brief"],
+            "content_direction": parsed.get("content_direction"),
             "source_count": len(sources),
         }
+
+    def _parse_synthesis_response(self, content: str) -> dict[str, Any]:
+        """Parse LLM synthesis response into research_brief + content_direction."""
+        try:
+            stripped = content.strip()
+            if stripped.startswith("```"):
+                stripped = stripped.removeprefix("```json").removeprefix("```")
+                stripped = stripped.removesuffix("```").strip()
+            data = json.loads(stripped)
+            return {
+                "research_brief": data.get("research_brief", ""),
+                "content_direction": data.get("content_direction"),
+            }
+        except (json.JSONDecodeError, KeyError):
+            return {"research_brief": content, "content_direction": None}

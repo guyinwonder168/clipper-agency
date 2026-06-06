@@ -1,8 +1,8 @@
 # Clipper Agency — Product Requirements Document
 
-**Version:** 2.8
-**Date:** 2026-06-05
-**Status:** MVP Phases 0-19 Complete — Composer Treatment & Transition Engine
+**Version:** 2.9
+**Date:** 2026-06-06
+**Status:** Tier 4 Design Accepted — Timeline-Aware Agent Orchestration (pending implementation)
 **Related:** `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
@@ -34,7 +34,7 @@ Clipper Agency automates short-form video content production for social media. T
 | **Scale** | 1 client, 1 account |
 | **Niche** | Indonesian artist trending updates (infotainment) |
 | **Tone** | Casual, TikTok-style Bahasa Indonesia |
-| **Video** | 20-60 second vertical (9:16, 1080x1920) |
+| **Video** | Target 45-55 second vertical (9:16, 1080x1920) w/ configurable hard limit ≤60s |
 | **Upload** | Manual (no TikTok API posting) |
 | **Media** | yt-dlp download (Layer 1 primary); Pexels fallback when no source URL or download fails; local user asset path accepted |
 | **Research** | ScrapeCreators (TikTok video/music) + Firecrawl (context/news) |
@@ -77,7 +77,7 @@ Intermediate execution material is not part of the final upload package. Each jo
 | ID | Requirement | Priority | Stage |
 |----|-------------|----------|-------|
 | PR-01 | Automated video generation from trending topics via gated agent pipeline | P0 | MVP |
-| PR-02 | Agent pipeline: Safety → Researcher → Post-Research Risk Gate → Scriptwriter → Voice → Visual (LLM-driven per-scene planning) → Compose → Review. Each step gated with pass/soft-fail/hard-fail rules. See `docs/technical_design.md` §3 for full gate definitions. | P0 | MVP |
+| PR-02 | Agent pipeline: Safety → Researcher (content_direction) → Orchestrator Format Validator → Scriptwriter (word/time budget) → Script Duration Gate → Voice → Timeline Reconciler → Visual (timeline-aware) → Compose (timeline-obedient) → Review. Each step gated with pass/soft-fail/hard-fail rules. See `docs/technical_design.md` §3 for full gate definitions. | P0 | MVP |
 | PR-03 | Web dashboard for job management and agent configuration | P0 | MVP |
 | PR-04 | CLI for direct pipeline execution | P0 | MVP |
 | PR-05 | Ready-to-upload output package (video + caption + thumbnail + metadata) | P0 | MVP |
@@ -104,6 +104,7 @@ Intermediate execution material is not part of the final upload package. Each jo
 | PR-26 | Treatment system: YAML-defined visual treatments (Ken Burns zoom/pan, cinematic crop, B-roll, slow-motion, lower-third slide, text card reveal, hook caption, fade-to-black) with transitions (crossfade, hard cut, wipe left, dissolve, circle open) and FPS/pacing rules, applied automatically by Visual Director and Composer without code changes | P0 | MVP |
 | PR-27 | Scene normalizer: unify mixed-asset framerates to 30fps target, normalize SAR to 1:1, apply Ken Burns zoompan for static images, validate clip duration bounds (1-5s), enforce consistent encoding parameters across all scenes before composition | P0 | MVP |
 | PR-28 | Per-scene audio sequencing with silence padding, timed subtitle overlays from script text via drawtext, xfade/concat mixed transition chain with duration clamping and safety margins, and TikTok-ready production output flags (yuv420p, faststart, H.264/AAC) | P0 | MVP |
+| PR-29 | Timeline-aware content planning and cross-agent reconciliation: Researcher recommends content direction (format + story selection), Orchestrator validates and derives word/time budgets, Scriptwriter obeys budgets with scene roles and estimated durations, Voice Producer measures actual audio durations, Orchestrator Timeline Reconciler creates canonical timeline, Visual Director plans assets from timeline, Composer renders timeline-obedient output with synced audio/subtitles/opening/CTA | P0 | MVP (Proposed) |
 
 ---
 

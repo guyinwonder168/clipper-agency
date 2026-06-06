@@ -1,6 +1,6 @@
-# Visual Director Enhancement — Implementation Plan
+# Visual Director Enhancement — Implementation Plan ✅ COMPLETED
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Tier 2 complete.** Merged to master via PR #34. 695 tests passing, 93% coverage, SonarCloud Quality Gate PASSED.
 >
 > **Prerequisite:** Complete study of `tanersener/ffmpeg-video-slideshow-scripts` and `editly` repos (see Task 0) before starting Tasks 1-6. This gives us real FFmpeg filter graph knowledge to bake into the Visual Director prompt.
 
@@ -547,7 +547,7 @@ def test_execute_plan_includes_treatment_metadata(self):
     assert assets[1]["target_duration"] == 5
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `.venv/bin/python3 -m pytest tests/test_visual_director.py::test_execute_plan_includes_treatment_metadata -v`
 Expected: FAIL — assets don't include treatment fields
@@ -589,7 +589,7 @@ In `visual_director.py`, update the `_execute_plan()` method to merge treatment 
         return assets
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `.venv/bin/python3 -m pytest tests/test_visual_director.py::test_execute_plan_includes_treatment_metadata -v`
 Expected: PASS
@@ -777,3 +777,5 @@ git commit -m "feat: composer reads treatment metadata from visual director asse
 | `tests/test_composer.py` | Updated — treatment routing tests |
 
 **Execution order:** Task 0 (research) → Tasks 1-4 (can partially parallel: 1+2 independent, 3+4 depend on 2) → Task 5 (depends on 3+4) → Task 6 (verification)
+
+---

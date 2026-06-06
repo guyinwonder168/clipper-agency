@@ -4,8 +4,10 @@ Provider order: ElevenLabs → Gemini TTS → Fish Audio → clear failure.
 Artifacts are persisted under ``assets_cache/job_{id}/agents/voice_producer/``.
 """
 
+import json
 import logging
 import os
+import subprocess
 from typing import Any
 
 from clipper_agency.agents.base import BaseAgent
@@ -74,10 +76,21 @@ class VoiceProducerAgent(BaseAgent):
             scenes, voice_id, job_id, assets_cache,
         )
 
+        # Build audio metadata with ffprobe durations
+        provider_name = ""
+        for attempt in attempts:
+            if attempt.get("status") in ("success", "partial"):
+                provider_name = attempt.get("provider", "")
+                break
+        audio_meta = self._build_audio_metadata(
+            agent_dir, len(scenes), provider_name
+        ) if agent_dir else []
+
         all_generated = len(audio_files) >= len(scenes)
         output = {
             "status": "completed" if all_generated else "failed",
             "audio_files": audio_files,
+            "audio_metadata": audio_meta,
             "attempts": attempts,
         }
         if not all_generated:
@@ -204,3 +217,37 @@ class VoiceProducerAgent(BaseAgent):
         if provider == "fish_audio":
             return FishAudioService()
         raise ValueError(f"Unknown TTS provider: {provider}")
+
+    def _probe_audio_duration(self, filepath: str) -> float:
+        """Measure audio duration in seconds using ffprobe."""
+        if not os.path.exists(filepath):
+            return 0.0
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json",
+                 "-show_format", filepath],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return 0.0
+            data = json.loads(result.stdout)
+            return float(data.get("format", {}).get("duration", 0.0))
+        except Exception:
+            return 0.0
+
+    def _build_audio_metadata(self, output_dir: str, scene_count: int, provider: str = "") -> list[dict]:
+        """Build per-scene audio metadata with ffprobe durations."""
+        voices_dir = os.path.join(output_dir, "voices")
+        if not os.path.isdir(voices_dir):
+            return []
+        meta_list: list[dict] = []
+        for i in range(1, scene_count + 1):
+            path = os.path.join(voices_dir, f"scene_{i}.mp3")
+            duration = self._probe_audio_duration(path)
+            meta_list.append({
+                "scene": i,
+                "audio_path": path,
+                "audio_duration_sec": duration,
+                "provider": provider,
+            })
+        return meta_list

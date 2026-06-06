@@ -3,7 +3,7 @@
 **Date:** 2026-05-31
 **Status:** Accepted
 **Commits:** `7b45688` (merge commit), `95cf54e` (doc updates)
-**Phase:** 16 (Visual Director LLM Planning)
+**Phase:** 16 (Visual Director LLM Planning), updated after Phases 17-19
 
 ## Context
 
@@ -28,15 +28,19 @@ Replace the Visual Director's blind sequential logic with LLM-driven per-scene p
 
 2. **LLM planning** (`_plan_with_llm()`): Send compact research + script scenes + niche config to LLM with structured output schema. LLM returns per-scene plan with `action.type` enum (`tiktok_clip`, `pexels_video`, `pexels_image`, `text_card`), `reasoning` (free text), and action-specific parameters.
 
-3. **Dispatch execution** (`_execute_plan()` + `_execute_action()`): Route each action to handler (`_exec_tiktok_clip`, `_exec_pexels_video`, `_exec_pexels_image`, `_exec_text_card`). Each handler downloads or generates the visual asset.
+3. **Treatment and transition metadata** (Phase 17+): Visual Director plans now include treatment and transition choices from `templates/treatments.yaml` so Composer can apply data-driven FFmpeg effects instead of hardcoded visual behavior.
 
-4. **3-tier image fallback** (for text cards): `_fetch_image()` tries Pexels photo search (`search_photos()`) → Firecrawl article og:image → gradient card background. Every text card gets a relevant image when possible.
+4. **Dispatch execution** (`_execute_plan()` + `_execute_action()`): Route each action to handler (`_exec_tiktok_clip`, `_exec_pexels_video`, `_exec_pexels_image`, `_exec_text_card`). Each handler downloads or generates the visual asset.
 
-5. **Legacy fallback**: When LLM planning fails or returns `None`, `_run_legacy_planning()` uses the original sequential URL assignment + Pexels fallback.
+5. **3-tier image fallback** (for text cards): `_fetch_image()` tries Pexels photo search (`search_photos()`) → Firecrawl article og:image → gradient card background. Every text card gets a relevant image when possible.
+
+6. **Legacy fallback**: When LLM planning fails or returns `None`, `_run_legacy_planning()` uses the original sequential URL assignment + Pexels fallback.
 
 **Configuration:** New `visual_director_model` field in `AppSettings` (default `mimo-v2-flash`), env var `VISUAL_DIRECTOR_MODEL`.
 
 **Design principle:** "Orchestrator dumb, agents smart." The engine passes research file paths to Visual Director; the agent decides how to use them. The Orchestrator never filters or interprets research data.
+
+**Known limitation after Phase 19:** Visual Director still plans durations from Scriptwriter estimates rather than actual Voice Producer audio durations. The job 2 retest showed that this can produce visual scenes shorter than narration. Tier 4 will introduce an Orchestrator-owned canonical timeline contract before Visual Director planning; see ADR 0020.
 
 ## Alternatives Considered
 
@@ -67,9 +71,11 @@ Replace the Visual Director's blind sequential logic with LLM-driven per-scene p
 
 - **Positive:** Visual selections are contextually relevant — LLM matches sources to scenes using research data.
 - **Positive:** Text cards now include relevant images via 3-tier fallback, significantly improving visual quality.
+- **Positive:** Treatment and transition metadata lets Visual Director communicate production intent to Composer without hardcoding effects in either agent.
 - **Positive:** Extensible — adding new action types (e.g., `stock_video`, `ai_generated_image`) only requires a new handler in the dispatch table.
 - **Positive:** Research data is utilized, justifying the Researcher's LLM cost.
 - **Negative:** Additional LLM call per job (Visual Director planning) adds ~2-5 seconds latency and token cost.
 - **Negative:** New failure mode — LLM can return invalid JSON, empty plan, or unknown action types. Mitigated by legacy fallback + defensive parsing.
 - **Negative:** Prompt file (`prompts/visual_director.md`) is now a critical dependency. Poor prompt quality = poor visual decisions.
+- **Negative:** Duration planning remains incomplete until Visual Director consumes the reconciled timeline from Tier 4.
 - **Neutral:** The `visual_director_model` default (`mimo-v2-flash`) is a cost-optimized choice. Premium deployments may want to upgrade for better planning quality.

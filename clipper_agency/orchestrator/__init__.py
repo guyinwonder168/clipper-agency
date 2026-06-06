@@ -19,6 +19,11 @@ from clipper_agency.orchestrator.state_machine import (
     VALID_TRANSITIONS,
     JobStateMachine,
 )
+from clipper_agency.orchestrator.timeline import (
+    ReconciledTimeline,
+    TimelineItem,
+    reconcile_timeline,
+)
 
 __all__ = [
     "Orchestrator",
@@ -36,4 +41,7 @@ __all__ = [
     "JOB_STATES",
     "VALID_TRANSITIONS",
     "JobStateMachine",
+    "ReconciledTimeline",
+    "TimelineItem",
+    "reconcile_timeline",
 ]
