@@ -302,8 +302,11 @@ class Orchestrator:
                                     compose_output, _COMPOSER_FAILED)
         self._complete_agent(conn, assets_cache, job_id, "composer")
 
+        cp_config = load_settings().content_planning
+        hard_limit = cp_config.hard_limit_sec if cp_config else 60
         g10 = GateVideoValidation()
-        g10_result = g10.evaluate(video_path=compose_output.get("video_path"))
+        g10_result = g10.evaluate(video_path=compose_output.get("video_path"),
+                                  hard_limit_sec=hard_limit)
         self._record_gate(assets_cache, job_id, "G10_video_validation", g10_result)
         if abort := self._enforce_gate(conn, job_id, "G10", g10_result,
                                         failed_at="video_validation"):
@@ -502,11 +505,14 @@ class Orchestrator:
         None, it should be returned immediately from run_pipeline_from.
         """
         mark_agent_running(conn, job_id, "composer")
+        # Load script scenes from completed scriptwriter for subtitles
+        script_output = self._load_agent_output(assets_cache, job_id, "scriptwriter")
         compose_output = self._run_composer(
             job_id=job_id,
             assets=visual_output.get("assets", []),
             audio_files=voice_output.get("audio_files", []),
             output_dir=output_dir, assets_cache=assets_cache,
+            script_scenes=script_output.get("script", []),
         )
 
         if compose_output.get("status") == "failed":
@@ -514,9 +520,13 @@ class Orchestrator:
                 conn, job_id, "composer", compose_output, _COMPOSER_FAILED)
         self._complete_agent(conn, assets_cache, job_id, "composer")
 
+        cp_config = load_settings().content_planning
+        hard_limit = cp_config.hard_limit_sec if cp_config else 60
         g10 = GateVideoValidation()
         g10_result = g10.evaluate(
-            video_path=compose_output.get("video_path"))
+            video_path=compose_output.get("video_path"),
+            hard_limit_sec=hard_limit,
+        )
         self._record_gate(assets_cache, job_id,
                           "G10_video_validation", g10_result)
         abort = self._enforce_gate(

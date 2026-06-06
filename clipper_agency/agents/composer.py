@@ -204,6 +204,11 @@ class ComposerAgent(BaseAgent):
         voice_files = audio_files or []
         script_scenes = kwargs.get("script_scenes", [])
 
+        # ── Timeline override: use canonical durations from planner ──
+        timeline = kwargs.get("timeline")
+        if timeline:
+            video_assets = self._apply_timeline_to_assets(video_assets, timeline)
+
         # ── FFmpeg preflight diagnostics ──
         preflight_result = self._run_preflight(output_dir, job_id)
         if preflight_result is not None:
@@ -615,6 +620,39 @@ class ComposerAgent(BaseAgent):
                         item[field] = asset[field]
                 enriched.append(item)
         return enriched
+
+    @staticmethod
+    def _timeline_item_to_dict(item):
+        """Convert TimelineItem dataclass or dict to dict."""
+        if isinstance(item, dict):
+            return item
+        import dataclasses
+        return dataclasses.asdict(item)
+
+    def _apply_timeline_to_assets(self, assets, timeline):
+        """Override asset durations with canonical timeline durations."""
+        if not timeline:
+            return assets
+        resolved = []
+        for i, asset in enumerate(assets):
+            new_asset = dict(asset)
+            if i < len(timeline):
+                td_item = self._timeline_item_to_dict(timeline[i])
+                td = td_item.get("target_duration_sec")
+                if td is not None:
+                    new_asset["target_duration"] = td
+                new_asset["role"] = td_item.get("role", asset.get("role", "body"))
+            resolved.append(new_asset)
+        return resolved
+
+    def _build_timeline_audio_map(self, timeline):
+        """Build scene-indexed audio file mapping from timeline."""
+        if not timeline:
+            return {}
+        return {
+            i: self._timeline_item_to_dict(t).get("audio_path", "")
+            for i, t in enumerate(timeline)
+        }
 
     @staticmethod
     def _build_assembly_cmd(

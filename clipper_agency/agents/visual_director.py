@@ -45,6 +45,10 @@ class VisualDirectorAgent(BaseAgent):
     ) -> dict[str, Any]:
         scenes = script or []
 
+        timeline_data = kwargs.get("timeline")
+        if timeline_data:
+            scenes = self._resolve_scene_data(script, timeline_data)
+
         assets_cache = kwargs.get("assets_cache", "")
         agent_dir = ""
         if assets_cache:
@@ -94,6 +98,34 @@ class VisualDirectorAgent(BaseAgent):
         except Exception as e:
             logger.exception("Visual: asset sourcing failed")
             return {"status": "failed", "error": str(e), "assets": []}
+
+    def _resolve_scene_data(
+        self, script: list[dict], timeline_data: list[dict] | None = None,
+    ) -> list[dict]:
+        """Merge script scenes with reconciled timeline data.
+
+        When timeline is present, use its durations as source-of-truth.
+        Falls back to raw script when no timeline available.
+        """
+        if timeline_data:
+            return [
+                {
+                    "scene": t.get("scene", i + 1),
+                    "role": t.get("role", "body"),
+                    "text": t.get("text", ""),
+                    "target_duration": t.get("target_duration_sec", 5),
+                }
+                for i, t in enumerate(timeline_data)
+            ]
+        return [
+            {
+                "scene": s.get("scene", i + 1),
+                "role": s.get("role", "body"),
+                "text": s.get("text", ""),
+                "target_duration": s.get("duration", s.get("target_duration", 5)),
+            }
+            for i, s in enumerate(script)
+        ]
 
     def _run_llm_planning(
         self, scenes: list[dict], job_id: int, output_dir: str,

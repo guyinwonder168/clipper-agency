@@ -211,9 +211,35 @@ class GateVideoValidation(BaseGate):
     REQUIRED_HEIGHT = 1920
     REQUIRED_CODEC = "h264"
     MIN_DURATION = 20
-    MAX_DURATION = 60
+    DEFAULT_MAX_DURATION = 60
 
-    def evaluate(self, video_path: str | None = None, **kwargs) -> GateResult:
+    def _check_duration_only(
+        self, duration_sec: float, hard_limit_sec: int | None = None,
+    ) -> GateResult | None:
+        """Check just the duration against limits.
+
+        Returns None on pass, GateResult on fail.
+        """
+        max_duration = (
+            hard_limit_sec if hard_limit_sec is not None
+            else self.DEFAULT_MAX_DURATION
+        )
+        if duration_sec < self.MIN_DURATION:
+            return GateResult(
+                False, "hard_fail",
+                f"Video too short: {duration_sec:.1f}s, "
+                f"minimum {self.MIN_DURATION}s",
+            )
+        if duration_sec > max_duration:
+            return GateResult(
+                False, "hard_fail",
+                f"Video too long: {duration_sec:.1f}s, "
+                f"maximum {max_duration}s",
+            )
+        return None
+
+    def evaluate(self, video_path: str | None = None,
+                 hard_limit_sec: int | None = None, **kwargs) -> GateResult:
         if not video_path or not Path(video_path).exists():
             return GateResult(False, "hard_fail", "Video file missing")
 
@@ -243,19 +269,9 @@ class GateVideoValidation(BaseGate):
                 "Video duration unknown — cannot validate",
             )
 
-        if info.duration < self.MIN_DURATION:
-            return GateResult(
-                False, "hard_fail",
-                f"Video too short: {info.duration:.1f}s, "
-                f"minimum {self.MIN_DURATION}s",
-            )
-
-        if info.duration > self.MAX_DURATION:
-            return GateResult(
-                False, "hard_fail",
-                f"Video too long: {info.duration:.1f}s, "
-                f"maximum {self.MAX_DURATION}s",
-            )
+        duration_fail = self._check_duration_only(info.duration, hard_limit_sec)
+        if duration_fail is not None:
+            return duration_fail
 
         if not info.has_audio:
             return GateResult(
