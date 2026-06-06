@@ -37,3 +37,18 @@ class TestResearcherContentDirection:
         result = agent._parse_synthesis_response(raw)
         assert result["research_brief"] == "This is not JSON at all."
         assert result.get("content_direction") is None
+
+    def test_dict_brief_converted_to_string(self):
+        """Regression: LLM may return research_brief as dict, not string."""
+        agent = ResearcherAgent()
+        raw = json.dumps({
+            "research_brief": {"summary": "Three stories", "sources": 5},
+            "content_direction": {
+                "recommended_format": "three_story_roundup",
+                "selected_story_count": 3,
+            },
+        })
+        result = agent._parse_synthesis_response(raw)
+        assert isinstance(result["research_brief"], str)
+        assert "summary" in result["research_brief"]
+        assert result["content_direction"]["selected_story_count"] == 3

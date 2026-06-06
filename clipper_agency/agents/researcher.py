@@ -349,8 +349,12 @@ class ResearcherAgent(BaseAgent):
                 stripped = stripped.removeprefix("```json").removeprefix("```")
                 stripped = stripped.removesuffix("```").strip()
             data = json.loads(stripped)
+            brief = data.get("research_brief", "")
+            # Ensure brief is always a string for write_text downstream
+            if isinstance(brief, dict):
+                brief = json.dumps(brief, indent=2)
             return {
-                "research_brief": data.get("research_brief", ""),
+                "research_brief": str(brief),
                 "content_direction": data.get("content_direction"),
             }
         except (json.JSONDecodeError, KeyError):
