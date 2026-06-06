@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-06-06
+
+### Tier 4: Timeline-Aware Agent Orchestration
+
+Canonical timeline contract ensuring cross-agent timing consistency — resolving audio/video sync drift, missing subtitles, and retry path data loss discovered during job 2 retest.
+
+#### New Modules (3)
+
+- **`orchestrator/validator.py`** — Format validator for Researcher's `content_direction`. Validates format against allowed set, coerces/clamps story counts, falls back to `ContentPlanningConfig` defaults.
+- **`orchestrator/duration_gate.py`** — Script duration budget checker. Estimates scene duration from word count × WPS rate, fails fast when over configurable hard limit.
+- **`orchestrator/timeline.py`** — Timeline reconciler. Merges script scenes + ffprobe audio metadata into canonical timeline with cumulative start/end times, duration fallback, and hard-limit enforcement.
+
+#### Config & Schema
+
+- **`ContentPlanningConfig`** pydantic model — `default_format`, `max_stories_per_video`, `target_duration_sec`, `hard_limit_sec`, `estimated_words_per_second`.
+- Niche YAML defaults for Indonesian artists.
+
+#### Agent Changes
+
+- **Researcher** — Emits `content_direction` (format, story selection) from existing LLM synthesis call. Zero extra LLM cost.
+- **Scriptwriter** — Emits `role`, `word_count`, `estimated_duration_sec` per scene. Backward-compatible `duration` field retained.
+- **Voice Producer** — Measures actual audio duration via `ffprobe`, returns `audio_metadata` list.
+- **Visual Director** — Timeline-aware: uses reconciled timeline durations as source-of-truth when available.
+- **Composer** — Timeline-obedient: applies timeline durations to video assets, builds audio map from timeline.
+
+#### Pipeline Integration
+
+- `_stage_research()` → `validate_content_direction()` after Researcher.
+- `_run_content_scriptwriter()` → `check_script_duration_budget()` after Scriptwriter. Fails fast on over-budget.
+- `_stage_content()` → `reconcile_timeline()` after Voice Producer. Returns 3-tuple (script, voice, timeline). Fails pipeline if over hard limit.
+- `_stage_composition()` → passes timeline to Visual Director + Composer.
+- `_retry_composer_stage()` → rebuilds timeline from persisted artifacts.
+- `_retry_downstream_stages()` → stops on duration-gate failure, builds timeline for downstream.
+- G10 duration limit now configurable via `ContentPlanningConfig.hard_limit_sec`.
+
+#### Bug Fixes
+
+- **Retry path missing subtitles** — `_retry_composer_stage()` now loads scriptwriter output and passes `script_scenes` kwarg.
+- **Log injection (CWE-117)** — `_sanitize_for_log()` strips control characters from agent error messages before logging.
+
+#### Tests
+
+- 783 → 844 tests (+61 new).
+- New test files: `test_content_planning_schema` (4), `test_researcher_content_direction` (3), `test_voice_producer_duration_metadata` (4), `test_format_validator` (6), `test_duration_gate` (8), `test_timeline_reconciler` (6), `test_scriptwriter_budget` (4), `test_visual_director_timeline_aware` (3), `test_composer_timeline_obedient` (5), `test_retry_timeline` (8), `test_engine_timeline_wiring` (6), `test_tier4_timeline_e2e` (2 integration).
+
+#### Documentation
+
+- PRD v2.9, SRS v2.9, technical_design v4.0, requirements_traceability v3.0.
+- ADR 0020 — Canonical Timeline Contract (Proposed).
+- Design doc: `docs/plans/2026-06-06-timeline-aware-agent-orchestration.md`.
+
 ## [1.2.0] — 2026-06-05
 
 ### Phase 19: Composer Treatment & Transition Engine
