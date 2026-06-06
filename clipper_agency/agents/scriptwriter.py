@@ -81,15 +81,19 @@ class ScriptwriterAgent(BaseAgent):
         tone: str = "",
         content_angle: str = "",
         assets_cache: str = "",
-        story_beats: list[dict[str, Any]] | None = None,
-        verified_facts: list[dict[str, Any]] | None = None,
-        unverified_claims: list[dict[str, Any]] | None = None,
-        format_decision: dict[str, Any] | None = None,
+        blueprint: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        # Extract blueprint data — support dict param or legacy kwargs
+        bp = blueprint or {}
+        story_beats = bp.get("story_beats") or kwargs.get("story_beats")
+        verified_facts = bp.get("verified_facts") or kwargs.get("verified_facts")
+        unverified_claims = bp.get("unverified_claims") or kwargs.get("unverified_claims")
+        format_decision = bp.get("format_decision") or kwargs.get("format_decision")
+
         rules = safety_rules or []
         safety_rules_text = "\n".join(f"- {r}" for r in rules) if rules else "None"
-        logger.info("Scriptwriter: topic=%s, beats=%d", topic, len(story_beats or []))
+        logger.info("Scriptwriter: topic=%s, beats=%d", topic[:80], len(story_beats or []))
 
         # Persist input artifacts
         if assets_cache:
@@ -142,7 +146,7 @@ class ScriptwriterAgent(BaseAgent):
             max_tokens=2048,
         )
 
-        parsed = self._parse_script_response(response["content"], story_beats)
+        parsed = self._parse_script_response(response["content"])
 
         # Validate voiceover text
         validation_errors = _validate_output(parsed)
@@ -184,7 +188,7 @@ class ScriptwriterAgent(BaseAgent):
     def _parse_script_response(
         self,
         content: str,
-        story_beats: list[dict[str, Any]] | None = None,
+        *_args: Any,
     ) -> dict[str, Any]:
         """Parse the JSON voiceover response from the LLM."""
         try:
@@ -199,7 +203,6 @@ class ScriptwriterAgent(BaseAgent):
 
         narrative_structure = _normalize_narrative_structure(
             data.get("narrative_structure", []),
-            story_beats,
         )
 
         return {
@@ -231,7 +234,7 @@ def _validate_output(parsed: dict[str, Any]) -> list[str]:
 
 def _normalize_narrative_structure(
     raw_beats: list[dict[str, Any]],
-    story_beats: list[dict[str, Any]] | None,
+    *_args: Any,
 ) -> list[dict[str, Any]]:
     """Normalize narrative_structure entries, ensuring required fields exist."""
     normalized: list[dict[str, Any]] = []

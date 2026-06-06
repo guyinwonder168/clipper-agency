@@ -35,6 +35,7 @@ _PRIORITY_SCREENSHOT = "screenshot"
 _PRIORITY_PORTRAIT = "portrait"
 _PRIORITY_TEXT_CARD = "text_card"
 _PRIORITY_STOCK = "stock"
+_PUNCTUATION_CHARS = ".,!?;:"
 
 
 class VisualDirectorAgent(BaseAgent):
@@ -120,30 +121,51 @@ class VisualDirectorAgent(BaseAgent):
                     scenes, job_id, topic, output_dir, source_urls, agent_dir,
                 )
 
-            clips = self._build_provenance(assets)
             output = {"status": "completed", "assets": assets}
-
-            if agent_dir:
-                write_json(
-                    agent_output_file(assets_cache, job_id, "visual_director"),
-                    output,
-                )
-                provenance_data: dict[str, Any] = {
-                    "topic": topic,
-                    "scene_count": len(plan),
-                    "clips": clips,
-                    "beat_driven": beat_driven,
-                }
-                if not research_contract_path and not beat_driven:
-                    provenance_data["pexels_results"] = len(pexels_videos)
-                    provenance_data["source_url_count"] = len(source_urls or [])
-                write_json(f"{agent_dir}/provenance.json", provenance_data)
+            self._write_artifacts(
+                assets_cache, job_id, agent_dir, topic, plan, assets,
+                output, beat_driven, research_contract_path,
+                pexels_videos, source_urls,
+            )
 
             logger.info("Visual: completed %d assets", len(assets))
             return output
         except Exception as e:
             logger.exception("Visual: asset sourcing failed")
             return {"status": "failed", "error": str(e), "assets": []}
+
+    def _write_artifacts(
+        self,
+        assets_cache: str,
+        job_id: int,
+        agent_dir: str,
+        topic: str,
+        plan: list[dict],
+        assets: list[dict],
+        output: dict[str, Any],
+        beat_driven: bool,
+        research_contract_path: str,
+        pexels_videos: list[dict],
+        source_urls: list[str] | None,
+    ) -> None:
+        """Write output JSON and provenance metadata to agent workspace."""
+        if not agent_dir:
+            return
+        write_json(
+            agent_output_file(assets_cache, job_id, "visual_director"),
+            output,
+        )
+        clips = self._build_provenance(assets)
+        provenance_data: dict[str, Any] = {
+            "topic": topic,
+            "scene_count": len(plan),
+            "clips": clips,
+            "beat_driven": beat_driven,
+        }
+        if not research_contract_path and not beat_driven:
+            provenance_data["pexels_results"] = len(pexels_videos)
+            provenance_data["source_url_count"] = len(source_urls or [])
+        write_json(f"{agent_dir}/provenance.json", provenance_data)
 
     # ------------------------------------------------------------------
     # Beat-driven planning (audio-first)
@@ -212,26 +234,13 @@ class VisualDirectorAgent(BaseAgent):
         durations: dict[int, float] = {}
 
         for beat in beats:
-            word_start = 0
-            word_end = 0
-
-            # Try to find word range from overlay_text or narration_goal
-            # The narrative_structure from scriptwriter maps beat_id → word_range
-            # For now, use overlay_text matching to find timestamps
             beat_words = beat.overlay_text.split() if beat.overlay_text else []
             if beat_words and timestamps:
-                first_word = beat_words[0].lower().strip(".,!?;:")
-                last_word = beat_words[-1].lower().strip(".,!?;:")
-
-                start_time = None
-                end_time = None
-                for ts in timestamps:
-                    ts_clean = ts.word.lower().strip(".,!?;:")
-                    if ts_clean == first_word and start_time is None:
-                        start_time = ts.start
-                    if ts_clean == last_word:
-                        end_time = ts.end
-
+                first_word = beat_words[0].lower().strip(_PUNCTUATION_CHARS)
+                last_word = beat_words[-1].lower().strip(_PUNCTUATION_CHARS)
+                start_time, end_time = self._find_word_range_timestamps(
+                    first_word, last_word, timestamps,
+                )
                 if start_time is not None and end_time is not None:
                     durations[beat.beat_id] = round(end_time - start_time, 3)
                 else:
@@ -239,16 +248,40 @@ class VisualDirectorAgent(BaseAgent):
             else:
                 durations[beat.beat_id] = 0.0
 
-        # Distribute total duration evenly among beats with zero duration
-        zero_beats = [bid for bid, d in durations.items() if d <= 0.0]
-        if zero_beats and total_ts_duration > 0.0:
-            assigned_total = sum(d for d in durations.values() if d > 0.0)
-            remaining = total_ts_duration - assigned_total
-            per_beat = max(remaining / len(zero_beats), 0.5)
-            for bid in zero_beats:
-                durations[bid] = round(per_beat, 3)
-
+        self._distribute_zero_beat_durations(durations, total_ts_duration)
         return durations
+
+    @staticmethod
+    def _find_word_range_timestamps(
+        first_word: str,
+        last_word: str,
+        timestamps: list[WordTimestamp],
+    ) -> tuple[float | None, float | None]:
+        """Find start/end times for a beat's word range in the timestamp list."""
+        start_time = None
+        end_time = None
+        for ts in timestamps:
+            ts_clean = ts.word.lower().strip(_PUNCTUATION_CHARS)
+            if ts_clean == first_word and start_time is None:
+                start_time = ts.start
+            if ts_clean == last_word:
+                end_time = ts.end
+        return start_time, end_time
+
+    @staticmethod
+    def _distribute_zero_beat_durations(
+        durations: dict[int, float],
+        total_ts_duration: float,
+    ) -> None:
+        """Distribute remaining duration evenly among beats with zero duration."""
+        zero_beats = [bid for bid, d in durations.items() if d <= 0.0]
+        if not zero_beats or total_ts_duration <= 0.0:
+            return
+        assigned_total = sum(d for d in durations.values() if d > 0.0)
+        remaining = total_ts_duration - assigned_total
+        per_beat = max(remaining / len(zero_beats), 0.5)
+        for bid in zero_beats:
+            durations[bid] = round(per_beat, 3)
 
     def _plan_beats_with_llm(
         self,
@@ -388,25 +421,22 @@ class VisualDirectorAgent(BaseAgent):
         do_not_use_set = set(do_not_use)
 
         # Tier 1: Direct source clip
-        for candidate in beat.asset_candidates:
-            if candidate.url in do_not_use_set:
-                continue
-            if candidate.type == "tiktok_clip":
-                return {
-                    "type": "tiktok_clip",
-                    "source_url": candidate.url,
-                }
+        clip = self._find_candidate_by_type(
+            beat.asset_candidates, "tiktok_clip", do_not_use_set,
+        )
+        if clip:
+            return {"type": "tiktok_clip", "source_url": clip.url}
 
         # Tier 2: Official screenshot
-        for candidate in beat.asset_candidates:
-            if candidate.url in do_not_use_set:
-                continue
-            if candidate.type == "screenshot":
-                return {
-                    "type": "pexels_image",
-                    "search_query": beat.fallback.image_search or beat.spoken_point[:50],
-                    "source_url": candidate.url,
-                }
+        screenshot = self._find_candidate_by_type(
+            beat.asset_candidates, "screenshot", do_not_use_set,
+        )
+        if screenshot:
+            return {
+                "type": "pexels_image",
+                "search_query": beat.fallback.image_search or beat.spoken_point[:50],
+                "source_url": screenshot.url,
+            }
 
         # Tier 3: Subject portrait with Ken Burns (Pexels search)
         search_query = (
@@ -429,6 +459,18 @@ class VisualDirectorAgent(BaseAgent):
             "image_search": beat.fallback.image_search or search_query,
             "bg_color": "",
         }
+
+    @staticmethod
+    def _find_candidate_by_type(
+        candidates: list, candidate_type: str, do_not_use_set: set[str],
+    ):
+        """Find first asset candidate matching type not in do_not_use set."""
+        for candidate in candidates:
+            if candidate.url in do_not_use_set:
+                continue
+            if candidate.type == candidate_type:
+                return candidate
+        return None
 
     def _execute_beat_plan(
         self, plan: list[dict], scenes_dir: str,

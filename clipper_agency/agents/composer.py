@@ -905,7 +905,7 @@ class ComposerAgent(BaseAgent):
 
         if clip_dur > target_duration_sec:
             return self._trim_long_clip(
-                clip_path, clip_dur, target_duration_sec, output_path,
+                clip_path, target_duration_sec, output_path,
             )
         return self._stretch_short_clip(
             clip_path, clip_dur, target_duration_sec, output_path,
@@ -914,7 +914,6 @@ class ComposerAgent(BaseAgent):
     def _trim_long_clip(
         self,
         clip_path: str,
-        clip_dur: float,
         target: float,
         output_path: str,
     ) -> str:
@@ -1115,7 +1114,7 @@ class ComposerAgent(BaseAgent):
         try:
             return self._try_audio_first_assemble(
                 job_id, voiceover_path, timestamps,
-                narrative_structure, assets, output_dir,
+                narrative_structure, assets,
                 video_path, thumbnail_path, assets_cache, agent_dir,
             )
         except subprocess.CalledProcessError as e:
@@ -1136,7 +1135,6 @@ class ComposerAgent(BaseAgent):
         timestamps: list[dict],
         narrative_structure: list[dict],
         assets: list[dict],
-        output_dir: str,
         video_path: str,
         thumbnail_path: str,
         assets_cache: str,
@@ -1152,41 +1150,10 @@ class ComposerAgent(BaseAgent):
         card_fallback_scenes: list[int] = []
 
         try:
-            normalizer = SceneNormalizer()
-            card_gen = CardGenerator()
-
-            for i, beat_dur in enumerate(beat_durations):
-                if i >= len(assets):
-                    break
-                asset = assets[i]
-                scene_path = asset.get("path", "")
-
-                if scene_path and Path(scene_path).exists():
-                    norm_path, was_card = self._process_scene(
-                        temp_dir, normalizer, card_gen, i + 1, scene_path,
-                    )
-                    if norm_path:
-                        trimmed = self._smart_trim(
-                            norm_path, beat_dur, temp_dir,
-                        )
-                        trimmed_clips.append(trimmed)
-                    if was_card:
-                        card_fallback_scenes.append(i + 1)
-                else:
-                    # Card fallback for missing visuals
-                    card_mp4 = temp_dir / f"card_beat_{i}.mp4"
-                    card_png = temp_dir / f"card_beat_{i}.png"
-                    card_gen.generate(
-                        CardType.CONTEXT,
-                        asset.get("headline", f"Beat {i + 1}"),
-                        str(card_png),
-                    )
-                    ctv = card_to_video(
-                        str(card_png), str(card_mp4), duration=max(1, int(beat_dur)),
-                    )
-                    if ctv.success:
-                        trimmed_clips.append(str(card_mp4))
-                    card_fallback_scenes.append(i + 1)
+            self._collect_beat_clips(
+                beat_durations, assets, temp_dir,
+                trimmed_clips, card_fallback_scenes,
+            )
 
             if not trimmed_clips:
                 output = {
@@ -1202,45 +1169,139 @@ class ComposerAgent(BaseAgent):
                     )
                 return output
 
-            # Build keyword captions
-            keyword_captions = build_keyword_captions(
-                narrative_structure, timestamps,
+            return self._run_audio_first_render(
+                job_id, voiceover_path, timestamps, narrative_structure,
+                assets, beat_durations, trimmed_clips, card_fallback_scenes,
+                video_path, thumbnail_path, assets_cache, agent_dir,
             )
-
-            # Enrich assets with beat durations and treatment metadata
-            enriched = self._enrich_audio_first_assets(
-                assets, trimmed_clips, beat_durations,
-            )
-
-            # Build and execute FFmpeg command
-            cmd = self._build_audio_first_cmd(
-                voiceover_path=voiceover_path,
-                trimmed_clips=trimmed_clips,
-                normalized_assets=enriched,
-                keyword_captions=keyword_captions,
-                output_path=video_path,
-            )
-
-            logger.info(
-                "Composer (audio-first): assembling %d clips + voiceover → %s",
-                len(trimmed_clips), video_path,
-            )
-            run_ffmpeg_streaming(cmd, timeout=600, label="audio_first")
-
-            self._generate_thumbnail(video_path, thumbnail_path)
-
-            output = {
-                "status": "completed",
-                "video_path": video_path,
-                "thumbnail_path": thumbnail_path,
-                "card_fallback_scenes": card_fallback_scenes,
-                "mode": "audio_first",
-            }
-            if agent_dir:
-                self._persist_diagnostics(agent_dir, cmd, "")
-                write_json(
-                    agent_output_file(assets_cache, job_id, "composer"), output,
-                )
-            return output
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _collect_beat_clips(
+        self,
+        beat_durations: list[float],
+        assets: list[dict],
+        temp_dir: Path,
+        trimmed_clips: list[str],
+        card_fallback_scenes: list[int],
+    ) -> None:
+        """Process each beat's asset into a trimmed clip, using card fallback when needed."""
+        normalizer = SceneNormalizer()
+        card_gen = CardGenerator()
+
+        for i, beat_dur in enumerate(beat_durations):
+            if i >= len(assets):
+                break
+            asset = assets[i]
+            scene_path = asset.get("path", "")
+
+            if scene_path and Path(scene_path).exists():
+                self._process_existing_scene(
+                    temp_dir, normalizer, card_gen, i, beat_dur,
+                    scene_path, trimmed_clips, card_fallback_scenes,
+                )
+            else:
+                self._generate_card_fallback(
+                    temp_dir, card_gen, i, beat_dur, asset,
+                    trimmed_clips, card_fallback_scenes,
+                )
+
+    def _process_existing_scene(
+        self,
+        temp_dir: Path,
+        normalizer: SceneNormalizer,
+        card_gen: CardGenerator,
+        index: int,
+        beat_dur: float,
+        scene_path: str,
+        trimmed_clips: list[str],
+        card_fallback_scenes: list[int],
+    ) -> None:
+        """Normalize and smart-trim an existing scene asset."""
+        norm_path, was_card = self._process_scene(
+            temp_dir, normalizer, card_gen, index + 1, scene_path,
+        )
+        if norm_path:
+            trimmed = self._smart_trim(norm_path, beat_dur, temp_dir)
+            trimmed_clips.append(trimmed)
+        if was_card:
+            card_fallback_scenes.append(index + 1)
+
+    def _generate_card_fallback(
+        self,
+        temp_dir: Path,
+        card_gen: CardGenerator,
+        index: int,
+        beat_dur: float,
+        asset: dict,
+        trimmed_clips: list[str],
+        card_fallback_scenes: list[int],
+    ) -> None:
+        """Generate a text-card video clip as fallback for a missing visual asset."""
+        card_mp4 = temp_dir / f"card_beat_{index}.mp4"
+        card_png = temp_dir / f"card_beat_{index}.png"
+        card_gen.generate(
+            CardType.CONTEXT,
+            asset.get("headline", f"Beat {index + 1}"),
+            str(card_png),
+        )
+        ctv = card_to_video(
+            str(card_png), str(card_mp4), duration=max(1, int(beat_dur)),
+        )
+        if ctv.success:
+            trimmed_clips.append(str(card_mp4))
+        card_fallback_scenes.append(index + 1)
+
+    def _run_audio_first_render(
+        self,
+        job_id: int,
+        voiceover_path: str,
+        timestamps: list[dict],
+        narrative_structure: list[dict],
+        assets: list[dict],
+        beat_durations: list[float],
+        trimmed_clips: list[str],
+        card_fallback_scenes: list[int],
+        video_path: str,
+        thumbnail_path: str,
+        assets_cache: str,
+        agent_dir: str,
+    ) -> dict[str, Any]:
+        """Build FFmpeg command, render, generate thumbnail, and return result."""
+        keyword_captions = build_keyword_captions(
+            narrative_structure, timestamps,
+        )
+
+        enriched = self._enrich_audio_first_assets(
+            assets, trimmed_clips, beat_durations,
+        )
+
+        cmd = self._build_audio_first_cmd(
+            voiceover_path=voiceover_path,
+            trimmed_clips=trimmed_clips,
+            normalized_assets=enriched,
+            keyword_captions=keyword_captions,
+            output_path=video_path,
+        )
+
+        logger.info(
+            "Composer (audio-first): assembling %d clips + voiceover → %s",
+            len(trimmed_clips), video_path,
+        )
+        run_ffmpeg_streaming(cmd, timeout=600, label="audio_first")
+
+        self._generate_thumbnail(video_path, thumbnail_path)
+
+        output = {
+            "status": "completed",
+            "video_path": video_path,
+            "thumbnail_path": thumbnail_path,
+            "card_fallback_scenes": card_fallback_scenes,
+            "mode": "audio_first",
+        }
+        if agent_dir:
+            self._persist_diagnostics(agent_dir, cmd, "")
+            write_json(
+                agent_output_file(assets_cache, job_id, "composer"), output,
+            )
+        return output

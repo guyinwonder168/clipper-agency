@@ -19,6 +19,33 @@ DEFAULT_VOICE_SETTINGS: dict[str, Any] = {
 }
 
 
+def _scan_word_chars(
+    word: str,
+    char_idx: int,
+    char_timestamps: list[dict],
+) -> tuple[float | None, float | None, int]:
+    """Scan char_timestamps starting at *char_idx* to find one word's bounds.
+
+    Returns:
+        ``(word_start, word_end, new_char_idx)`` where *new_char_idx* is
+        the position to resume scanning for the next word.
+    """
+    word_start: float | None = None
+    word_end: float | None = None
+    word_chars_seen = 0
+
+    while char_idx < len(char_timestamps) and word_chars_seen < len(word):
+        ct = char_timestamps[char_idx]
+        if ct.get("char", "").strip():
+            if word_start is None:
+                word_start = ct["start"]
+            word_end = ct["end"]
+            word_chars_seen += 1
+        char_idx += 1
+
+    return word_start, word_end, char_idx
+
+
 def chars_to_words(text: str, char_timestamps: list[dict]) -> list[dict]:
     """Convert character-level timestamps to word-level timestamps.
 
@@ -38,19 +65,9 @@ def chars_to_words(text: str, char_timestamps: list[dict]) -> list[dict]:
     char_idx = 0
 
     for word in words:
-        word_start: float | None = None
-        word_end: float | None = None
-        word_chars_seen = 0
-
-        while char_idx < len(char_timestamps) and word_chars_seen < len(word):
-            ct = char_timestamps[char_idx]
-            if ct.get("char", "").strip():
-                if word_start is None:
-                    word_start = ct["start"]
-                word_end = ct["end"]
-                word_chars_seen += 1
-            char_idx += 1
-
+        word_start, word_end, char_idx = _scan_word_chars(
+            word, char_idx, char_timestamps,
+        )
         if word_start is not None and word_end is not None:
             word_timestamps.append({
                 "word": word,
