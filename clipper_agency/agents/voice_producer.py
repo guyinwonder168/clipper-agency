@@ -133,7 +133,7 @@ class VoiceProducerAgent(BaseAgent):
 
                 if result.get("status") == "success":
                     return self._build_success_output(
-                        result, provider, assets_cache, job_id,
+                        result, provider,
                     )
 
             except Exception as exc:
@@ -246,8 +246,6 @@ class VoiceProducerAgent(BaseAgent):
         self,
         result: dict[str, Any],
         provider: str,
-        assets_cache: str,
-        job_id: int,
     ) -> dict[str, Any]:
         """Build a VoiceoverOutput-compatible success dict."""
         voiceover_path = result["voiceover_path"]

@@ -9,10 +9,16 @@
       "status": "completed",
       "input": "",
       "output": "",
-      "completed_at": "2026-06-06T15:37:08.199170+00:00"
+      "completed_at": "2026-06-06T19:03:28.728766+00:00"
+    },
+    "segment_producer": {
+      "status": "completed",
+      "input": "",
+      "output": "",
+      "completed_at": "2026-06-06T20:58:20.586319+00:00"
     }
   },
   "gates": {},
   "final_outputs": {},
-  "updated_at": "2026-06-06T15:37:08.199185+00:00"
+  "updated_at": "2026-06-06T20:58:20.586339+00:00"
 }

@@ -93,7 +93,7 @@ def _check_fact_safety(unverified_claims: list[dict]) -> dict[str, Any]:
 
 
 def _check_narrative_structure(
-    narrative: list[dict], audio_duration: float,
+    narrative: list[dict],
 ) -> dict[str, Any]:
     """Verify narrative beats have required fields."""
     if not narrative:
@@ -163,7 +163,7 @@ class ReviewerAgent(BaseAgent):
         caption_q = _check_caption_quality(caption)
         fact_safety = _check_fact_safety(unverified_claims or [])
         narrative_q = _check_narrative_structure(
-            narrative_structure or [], audio_duration_sec,
+            narrative_structure or [],
         )
         programmatic_results = [av_sync, caption_q, fact_safety, narrative_q]
 

@@ -108,19 +108,19 @@ class TestNarrativeStructure:
             {"beat_id": "hook", "section": "intro", "word_range": [0, 50]},
             {"beat_id": "body", "section": "main", "word_range": [50, 200]},
         ]
-        result = _check_narrative_structure(narrative, 30.0)
+        result = _check_narrative_structure(narrative)
         assert result["status"] == "pass"
         assert result["beats"] == 2
 
     def test_pass_empty_structure_skips(self):
-        result = _check_narrative_structure([], 30.0)
+        result = _check_narrative_structure([])
         assert result["status"] == "skip"
 
     def test_warn_missing_beat_fields(self):
         narrative = [
             {"beat_id": "hook", "section": "intro"},
         ]
-        result = _check_narrative_structure(narrative, 30.0)
+        result = _check_narrative_structure(narrative)
         assert result["status"] == "warn"
         assert "word_range" in result["detail"]
 
