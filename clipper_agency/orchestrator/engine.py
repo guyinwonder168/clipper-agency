@@ -68,6 +68,7 @@ _COMPOSER_FAILED = "Composer failed"
 _PACKAGING_FAILED = "Packaging failed"
 _VOICE_GEN_FAILED = "Voice generation failed"
 _ASSET_SOURCING_FAILED = "Asset sourcing failed"
+_SCRIPT_BUDGET_FAILED = "Scriptwriter duration budget exceeded"
 
 
 class Orchestrator:
@@ -727,6 +728,9 @@ class Orchestrator:
                     research_output, assets_cache,
                 ),
             )
+            if script_output.get("status") == "failed":
+                return self._fail_agent(conn, job_id, "scriptwriter",
+                                        script_output, _SCRIPT_BUDGET_FAILED)
 
         if from_idx <= PIPELINE_ORDER.index("voice_producer"):
             voice_output = self._run_cached_or_fresh(

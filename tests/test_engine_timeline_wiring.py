@@ -372,3 +372,79 @@ class TestTimelinePassedToDownstream:
         # Verify Composer received timeline
         composer_call_kwargs = mock_composer.call_args
         assert composer_call_kwargs.kwargs.get("timeline") == timeline
+
+
+@patch("clipper_agency.orchestrator.engine.get_connection")
+@patch("clipper_agency.orchestrator.engine.initialize_schema")
+class TestRetryDurationGateStopsPipeline:
+    """Verify retry path stops when duration-gate fails scriptwriter."""
+
+    def test_retry_stops_after_duration_gate_failure(
+        self, mock_schema, mock_conn,
+    ):
+        from clipper_agency.orchestrator.engine import Orchestrator
+
+        conn = MagicMock()
+        mock_conn.return_value = conn
+        mock_schema.return_value = None
+
+        settings = _make_settings(target=30, hard=35)
+        # Over-budget script: 200 words → ~101s >> 35s hard limit
+        failed_script = {
+            "script": [
+                {"scene": 1, "text": "word " * 100, "word_count": 100},
+                {"scene": 2, "text": "word " * 100, "word_count": 100},
+            ],
+            "caption": "test",
+            "status": "failed",
+            "error": "exceeds hard limit",
+        }
+
+        niche_ctx = {
+            "safety_rules": [],
+            "channel_description": "channel",
+            "language": "id",
+            "tone": "casual",
+            "content_angle": "gossip",
+        }
+
+        with (
+            patch(
+                "clipper_agency.orchestrator.engine.load_settings",
+                return_value=settings,
+            ),
+            patch(
+                "clipper_agency.orchestrator.engine.PipelineOrder"
+                if False else
+                "clipper_agency.orchestrator.engine.PIPELINE_ORDER",
+                ["safety", "researcher", "scriptwriter",
+                 "voice_producer", "visual_director", "composer",
+                 "reviewer"],
+            ),
+            patch.object(
+                Orchestrator, "_run_content_scriptwriter",
+                return_value=failed_script,
+            ),
+            patch.object(Orchestrator, "_fail_agent",
+                         return_value={"status": "failed", "job_id": 1}),
+            patch.object(
+                Orchestrator, "_run_content_voice",
+            ) as mock_voice,
+        ):
+            orch = Orchestrator.__new__(Orchestrator)
+            orch.db_path = "test.db"
+            result = orch._retry_downstream_stages(
+                conn, 1, "topic", niche_ctx, "indonesian_artists",
+                "out", "cache",
+                from_idx=2,  # scriptwriter index
+                use_cache=False,
+                research_output={},
+                script_output={},
+                voice_output={},
+                visual_output={},
+            )
+
+        # Should abort and NOT reach voice producer
+        assert result is not None
+        assert result.get("status") == "failed"
+        mock_voice.assert_not_called()
