@@ -298,8 +298,8 @@ class TestVoiceProducerArtifacts:
         assert voiceover.exists()
         assert voiceover.read_bytes() == b"real_audio_data"
 
-    def test_backward_compat_stubs_created(self, tmp_path, monkeypatch):
-        """A backward-compat scene_1.mp3 should be created in voices/."""
+    def test_no_backward_compat_stubs_created(self, tmp_path, monkeypatch):
+        """After Batch 2 cleanup, scene_1.mp3 should NOT be created."""
         monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
         agent = VoiceProducerAgent()
         el_svc = _mock_elevenlabs_service(audio=b"audio_data")
@@ -312,7 +312,7 @@ class TestVoiceProducerArtifacts:
             )
 
         stub = tmp_path / "job_11" / "agents" / "voice_producer" / "voices" / "scene_1.mp3"
-        assert stub.exists()
+        assert not stub.exists()
 
 
 # ---------------------------------------------------------------------------

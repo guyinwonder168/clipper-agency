@@ -175,7 +175,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
             mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -220,7 +220,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": []}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": []}
+            mock_voice.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_visual.return_value = {"status": "completed", "assets": []}
             mock_composer.return_value = {"status": "completed", "video_path": "", "thumbnail_path": ""}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -255,7 +255,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
             mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -289,7 +289,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": research_brief, "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": []}
+            mock_voice.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_visual.return_value = {"status": "completed", "assets": []}
             mock_composer.return_value = {"status": "completed", "video_path": "", "thumbnail_path": ""}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -316,7 +316,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": []}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": []}
+            mock_voice.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_visual.return_value = {"status": "completed", "assets": []}
             mock_composer.return_value = {"status": "completed", "video_path": "", "thumbnail_path": ""}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -345,7 +345,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": []}
+            mock_voice.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_visual.return_value = {"status": "completed", "assets": []}
             mock_composer.return_value = {"status": "completed", "video_path": "", "thumbnail_path": ""}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -378,7 +378,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "brief", "sources": research_sources}
             mock_scriptwriter.return_value = {"status": "completed", "script": script_scenes, "caption": "Caption", "hashtags": [], "estimated_duration": 3}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": "v.mp4"}]}
             mock_composer.return_value = {"status": "completed", "video_path": "final.mp4", "thumbnail_path": "thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -415,7 +415,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "brief", "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": audio_files}
+            mock_voice.return_value = {"status": "completed", "audio_files": audio_files, "voiceover_path": audio_files[0] if audio_files else ""}
             mock_visual.return_value = {"status": "completed", "assets": assets}
             mock_composer.return_value = {"status": "completed", "video_path": "final.mp4", "thumbnail_path": "thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -444,7 +444,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
             mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -492,7 +492,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
             mock_composer.return_value = {"status": "failed", "error": "FFmpeg not found", "video_path": "", "thumbnail_path": ""}
             mock_reviewer.return_value = {}
@@ -559,7 +559,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "failed", "error": "Asset sourcing failed", "assets": []}
             mock_composer.return_value = {}
             mock_reviewer.return_value = {}
@@ -597,7 +597,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
             mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -626,7 +626,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
             mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -674,7 +674,7 @@ class TestOrchestratorRunPipeline:
                 "sources": aggregate_sources,
             }
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": []}
             mock_composer.return_value = {"status": "completed", "video_path": "/tmp/final.mp4", "thumbnail_path": "/tmp/thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -728,7 +728,7 @@ class TestOrchestratorRunPipeline:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
             mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -787,6 +787,7 @@ class TestOrchestratorRunPipeline:
             mock_voice.return_value = {
                 "status": "completed",
                 "audio_files": [],  # empty triggers G8 hard_fail
+                "voiceover_path": "",
             }
             mock_visual.return_value = {}
 
@@ -824,6 +825,7 @@ class TestOrchestratorRunPipeline:
             mock_voice.return_value = {
                 "status": "completed",
                 "audio_files": [str(audio_file)],
+                "voiceover_path": str(audio_file),
             }
             mock_visual.return_value = {
                 "status": "completed",
@@ -868,6 +870,7 @@ class TestOrchestratorRunPipeline:
             mock_voice.return_value = {
                 "status": "completed",
                 "audio_files": [str(audio_file)],
+                "voiceover_path": str(audio_file),
             }
             mock_visual.return_value = {
                 "status": "completed",
@@ -929,6 +932,7 @@ class TestOrchestratorRunPipeline:
             mock_voice.return_value = {
                 "status": "completed",
                 "audio_files": [str(audio_file)],
+                "voiceover_path": str(audio_file),
             }
             mock_visual.return_value = {
                 "status": "completed",
@@ -1003,7 +1007,7 @@ class TestOrchestratorRunPipeline:
                 "caption": "", "hashtags": [], "estimated_duration": 0,
             }
             mock_voice.return_value = {
-                "status": "completed", "audio_files": [str(audio)],
+                "status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio),
             }
             mock_visual.return_value = {
                 "status": "completed",
@@ -1096,7 +1100,7 @@ class TestConfigSnapshot:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": [{"url": "https://a.com", "title": "S1"}]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
             mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -1132,7 +1136,7 @@ class TestConfigSnapshot:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": [{"url": "https://a.com", "title": "S1"}]}
             mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)]}
+            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
             mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
             mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
             mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -1252,7 +1256,7 @@ class TestRunPipelineFrom:
               patch.object(Orchestrator, "_package_output") as mock_pkg:
              mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": [{"url": "https://a.com", "title": "S1"}]}
              mock_sw.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-             mock_vp.return_value = {"status": "completed", "audio_files": []}
+             mock_vp.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
              mock_vd.return_value = {"status": "completed", "assets": []}
              mock_comp.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": ""}
              mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -1286,7 +1290,7 @@ class TestRunPipelineFrom:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": [{"url": "https://a.com", "title": "S1"}]}
             mock_sw.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_vp.return_value = {"status": "completed", "audio_files": []}
+            mock_vp.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_vd.return_value = {"status": "completed", "assets": []}
             mock_comp.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": ""}
             mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -1400,7 +1404,7 @@ class TestRunPipelineFrom:
              patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
              patch.object(Orchestrator, "_package_output") as mock_pkg:
             mock_sw.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_vp.return_value = {"status": "completed", "audio_files": []}
+            mock_vp.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_vd.return_value = {"status": "completed", "assets": []}
             mock_comp.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": ""}
             mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
@@ -1519,7 +1523,7 @@ class TestRunPipelineFrom:
                 "hashtags": [], "estimated_duration": 0,
             }
             mock_voice.return_value = {
-                "status": "completed", "audio_files": [str(audio)],
+                "status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio),
             }
             mock_visual.return_value = {
                 "status": "completed",

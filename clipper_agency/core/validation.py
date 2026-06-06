@@ -133,7 +133,7 @@ def validate_agent_cache(
         return ValidationResult(False, [f"output.json corrupt for {agent_name}: {exc}"])
 
     # 2. Agent-specific artifact checks.
-    if agent_name in ("researcher", "segment_producer"):
+    if agent_name == "segment_producer":
         r1 = validate_research_contract(
             segment_producer_contract_file(assets_cache, job_id))
         r2 = validate_research_brief(

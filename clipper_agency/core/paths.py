@@ -70,16 +70,6 @@ def segment_producer_contract_file(assets_cache: str | Path, job_id: int) -> str
     return str(Path(agent_dir(assets_cache, job_id, "segment_producer")) / "research_contract.json")
 
 
-def researcher_brief_file(assets_cache: str | Path, job_id: int) -> str:
-    """Path to the Segment Producer brief (legacy alias)."""
-    return segment_producer_brief_file(assets_cache, job_id)
-
-
-def researcher_contract_file(assets_cache: str | Path, job_id: int) -> str:
-    """Path to the Segment Producer contract (legacy alias)."""
-    return segment_producer_contract_file(assets_cache, job_id)
-
-
 def voice_scene_file(assets_cache: str | Path, job_id: int, scene_id: int) -> str:
     """Path to one persisted voice scene artifact."""
     return str(

@@ -52,7 +52,7 @@ def _log_startup_info() -> None:
     logger.info("DB path: %s", settings.db_path)
     logger.info("Output dir: %s", settings.output_dir)
     logger.info(
-        "Agent models: safety=%s researcher=%s scriptwriter=%s visual_director=%s reviewer=%s",
+        "Agent models: safety=%s segment_producer=%s scriptwriter=%s visual_director=%s reviewer=%s",
         settings.safety_model,
         settings.researcher_model,
         settings.scriptwriter_model,
@@ -394,7 +394,7 @@ def _run_safety(instance: object, topic: str, rules: list[str]) -> dict:
     return instance.execute(job_id=0, topic=topic, safety_rules=rules)
 
 
-def _run_researcher(instance: object, topic: str, rules: list[str], max_results: int, output_dir: str) -> dict:
+def _run_segment_producer(instance: object, topic: str, rules: list[str], max_results: int, output_dir: str) -> dict:
     return instance.execute(job_id=0, topic=topic, safety_rules=rules, max_results=max_results, output_dir=output_dir)
 
 
@@ -441,7 +441,7 @@ def _dispatch_test_agent(
 
     dispatch = {
         "safety": lambda: _run_safety(instance, topic, rules),
-        "segment_producer": lambda: _run_researcher(instance, topic, rules, max_results, output_dir),
+        "segment_producer": lambda: _run_segment_producer(instance, topic, rules, max_results, output_dir),
         "scriptwriter": lambda: _run_scriptwriter(instance, topic, rules, brief),
         "voice": lambda: _run_voice(instance, script, output_dir),
         "visual": lambda: _run_visual(instance, topic, script, auto_research_output, output_dir),
@@ -461,7 +461,7 @@ def _dispatch_test_agent(
 @click.argument("agent", type=click.Choice(AGENT_NAMES))
 @click.option("--topic", "-t", default="Test topic", help="Topic for the agent")
 @click.option("--safety-rules", default="no_defamation,mark_rumors_as_unconfirmed", help="Comma-separated safety rules")
-@click.option("--max-results", default=3, help="Max search results (researcher only)")
+@click.option("--max-results", default=3, help="Max search results (segment_producer only)")
 @click.option("--research-brief", default=None, help="Research brief text (scriptwriter only)")
 @click.option("--auto-research", is_flag=True, help="Run researcher first to feed scriptwriter/visual")
 @click.option("--script", default=None, help="Script JSON string (voice/visual/reviewer/composer)")
@@ -480,13 +480,13 @@ def test_agent(
 ) -> None:
     """Run a single agent independently for testing/debugging.
 
-    AGENT is one of: safety, researcher, scriptwriter, voice,
+    AGENT is one of: safety, segment_producer, scriptwriter, voice,
     visual, composer, reviewer.
 
     \b
     Examples:
       python -m clipper_agency test-agent safety -t "Agnez Mo"
-      python -m clipper_agency test-agent researcher -t "Agnez Mo" --max-results 2
+      python -m clipper_agency test-agent segment_producer -t "Agnez Mo" --max-results 2
       python -m clipper_agency test-agent scriptwriter -t "Agnez Mo" --auto-research
     """
     import json
@@ -504,7 +504,7 @@ def test_agent(
 
     agent_map = {
         "safety": SafetyAgent,
-        "researcher": SegmentProducerAgent,
+        "segment_producer": SegmentProducerAgent,
         "scriptwriter": ScriptwriterAgent,
         "voice": VoiceProducerAgent,
         "visual": VisualDirectorAgent,
@@ -519,10 +519,10 @@ def test_agent(
 
     start = time.monotonic()
 
-    # ── Auto-research: run researcher first to feed downstream ──────────
+    # ── Auto-research: run segment_producer first to feed downstream ──────
     auto_research_output: dict = {}
     if auto_research and agent in ("scriptwriter", "visual"):
-        click.echo("\n[auto-research] Running researcher first...")
+        click.echo("\n[auto-research] Running segment_producer first...")
         researcher = SegmentProducerAgent()
         auto_research_output = researcher.execute(
             job_id=0, topic=topic, safety_rules=rules,

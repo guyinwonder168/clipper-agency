@@ -254,11 +254,6 @@ class VoiceProducerAgent(BaseAgent):
         duration = self._probe_audio_duration(voiceover_path)
         timestamps = result.get("timestamps", [])
 
-        # Also write per-scene stubs for backward compatibility
-        self._write_backward_compat_stubs(
-            voiceover_path, assets_cache, job_id,
-        )
-
         output = VoiceoverOutput(
             status="success",
             voiceover_path=voiceover_path,
@@ -285,25 +280,6 @@ class VoiceProducerAgent(BaseAgent):
             "audio_files": [],
             "attempts": [],
         }
-
-    def _write_backward_compat_stubs(
-        self, voiceover_path: str, assets_cache: str, job_id: int,
-    ) -> None:
-        """Copy voiceover to voices/scene_1.mp3 for backward compat."""
-        if not assets_cache or not os.path.exists(voiceover_path):
-            return
-        voices_dir = os.path.join(
-            ensure_agent_dir(assets_cache, job_id, "voice_producer"),
-            "voices",
-        )
-        os.makedirs(voices_dir, exist_ok=True)
-        scene_path = os.path.join(voices_dir, "scene_1.mp3")
-        try:
-            with open(voiceover_path, "rb") as src:
-                with open(scene_path, "wb") as dst:
-                    dst.write(src.read())
-        except OSError:
-            logger.debug("Voice: could not write backward-compat stub")
 
     # ── Helpers ──
 
