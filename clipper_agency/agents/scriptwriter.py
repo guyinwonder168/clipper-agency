@@ -63,6 +63,66 @@ def _word_count(text: str) -> int:
     return len(text.split())
 
 
+def _extract_blueprint(blueprint: dict[str, Any] | None, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Extract blueprint data from dict param or legacy kwargs."""
+    bp = blueprint or {}
+    return {
+        "story_beats": bp.get("story_beats") or kwargs.get("story_beats"),
+        "verified_facts": bp.get("verified_facts") or kwargs.get("verified_facts"),
+        "unverified_claims": bp.get("unverified_claims") or kwargs.get("unverified_claims"),
+        "format_decision": bp.get("format_decision") or kwargs.get("format_decision"),
+    }
+
+
+def _write_input_artifacts(
+    assets_cache: str, job_id: int, agent_name: str, data: dict[str, Any],
+) -> None:
+    """Persist input artifacts if assets_cache is set."""
+    if not assets_cache:
+        return
+    write_json(agent_input_file(assets_cache, job_id, agent_name), data)
+
+
+def _format_system_prompt(
+    channel_description: str, language: str, tone: str,
+    content_angle: str, rules: list[str], bp_data: dict[str, Any], topic: str,
+) -> str:
+    """Serialize blueprint data and build the formatted system prompt."""
+    safety_rules_text = "\n".join(f"- {r}" for r in rules) if rules else "None"
+    beats_json = json.dumps(bp_data.get("story_beats") or [], ensure_ascii=False, indent=2)
+    facts_json = json.dumps(bp_data.get("verified_facts") or [], ensure_ascii=False, indent=2)
+    claims_json = json.dumps(bp_data.get("unverified_claims") or [], ensure_ascii=False, indent=2)
+    decision_json = json.dumps(bp_data.get("format_decision") or {}, ensure_ascii=False, indent=2)
+
+    prompt_template = load_prompt("scriptwriter", _FALLBACK_PROMPT, PROMPTS_DIR)
+    return prompt_template.format(
+        channel_description=channel_description or "a content creator",
+        language=language or "English",
+        tone=tone or "casual",
+        content_angle=content_angle or "trending topics",
+        safety_rules_text=safety_rules_text,
+        story_beats_json=beats_json,
+        verified_facts_json=facts_json,
+        unverified_claims_json=claims_json,
+        format_decision_json=decision_json,
+        topic=topic,
+    )
+
+
+def _write_output_artifacts(
+    assets_cache: str, job_id: int, agent_name: str, result: dict[str, Any],
+) -> None:
+    """Persist output artifacts if assets_cache is set."""
+    if not assets_cache:
+        return
+    base_dir = agent_dir(assets_cache, job_id, agent_name)
+    write_json(f"{base_dir}/narrative_structure.json", result["narrative_structure"])
+    write_text(f"{base_dir}/voiceover.txt", result["voiceover_text"])
+    write_text(f"{base_dir}/caption.txt", result["caption"])
+    write_json(f"{base_dir}/hashtags.json", result["hashtags"])
+    write_json(agent_output_file(assets_cache, job_id, agent_name), result)
+
+
 class ScriptwriterAgent(BaseAgent):
     """Generates continuous voiceover narration from an edit blueprint."""
 
@@ -84,54 +144,17 @@ class ScriptwriterAgent(BaseAgent):
         blueprint: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        # Extract blueprint data — support dict param or legacy kwargs
-        bp = blueprint or {}
-        story_beats = bp.get("story_beats") or kwargs.get("story_beats")
-        verified_facts = bp.get("verified_facts") or kwargs.get("verified_facts")
-        unverified_claims = bp.get("unverified_claims") or kwargs.get("unverified_claims")
-        format_decision = bp.get("format_decision") or kwargs.get("format_decision")
-
+        bp_data = _extract_blueprint(blueprint, kwargs)
         rules = safety_rules or []
-        safety_rules_text = "\n".join(f"- {r}" for r in rules) if rules else "None"
-        logger.info("Scriptwriter: topic=%s, beats=%d", topic[:80], len(story_beats or []))
+        logger.info("Scriptwriter: job_id=%s, beats=%d", job_id, len(bp_data["story_beats"] or []))
 
-        # Persist input artifacts
-        if assets_cache:
-            write_json(
-                agent_input_file(assets_cache, job_id, self.agent_name),
-                {
-                    "job_id": job_id,
-                    "topic": topic,
-                    "story_beats": story_beats,
-                    "verified_facts": verified_facts,
-                    "unverified_claims": unverified_claims,
-                    "format_decision": format_decision,
-                    "safety_rules": rules,
-                },
-            )
+        _write_input_artifacts(assets_cache, job_id, self.agent_name, {
+            "job_id": job_id, "topic": topic, **bp_data, "safety_rules": rules,
+        })
 
-        # Serialize blueprint data for the prompt
-        beats_json = json.dumps(story_beats or [], ensure_ascii=False, indent=2)
-        facts_json = json.dumps(verified_facts or [], ensure_ascii=False, indent=2)
-        claims_json = json.dumps(unverified_claims or [], ensure_ascii=False, indent=2)
-        decision_json = json.dumps(format_decision or {}, ensure_ascii=False, indent=2)
-
-        # Load and format the prompt
-        prompt_template = load_prompt("scriptwriter", _FALLBACK_PROMPT, PROMPTS_DIR)
-        system_prompt = prompt_template.format(
-            channel_description=channel_description or "a content creator",
-            language=language or "English",
-            tone=tone or "casual",
-            content_angle=content_angle or "trending topics",
-            safety_rules_text=safety_rules_text,
-            story_beats_json=beats_json,
-            verified_facts_json=facts_json,
-            unverified_claims_json=claims_json,
-            format_decision_json=decision_json,
-            topic=topic,
+        system_prompt = _format_system_prompt(
+            channel_description, language, tone, content_angle, rules, bp_data, topic,
         )
-
-        # Build user message from research brief and topic
         user_content = f"Topic: {topic}\n\nResearch Brief: {research_brief}"
 
         settings = load_settings()
@@ -147,21 +170,17 @@ class ScriptwriterAgent(BaseAgent):
         )
 
         parsed = self._parse_script_response(response["content"])
-
-        # Validate voiceover text
         validation_errors = _validate_output(parsed)
         if validation_errors:
             logger.warning("Scriptwriter validation issues: %s", validation_errors)
 
         voiceover_text = parsed["voiceover_text"]
         word_count = _word_count(voiceover_text)
-        estimated_duration = word_count / 2.5  # ~2.5 words/sec average
+        estimated_duration = word_count / 2.5
 
         logger.info(
             "Scriptwriter: %d words, %.1fs estimated, %d narrative beats",
-            word_count,
-            estimated_duration,
-            len(parsed["narrative_structure"]),
+            word_count, estimated_duration, len(parsed["narrative_structure"]),
         )
 
         result = {
@@ -174,15 +193,7 @@ class ScriptwriterAgent(BaseAgent):
             "estimated_duration_sec": round(estimated_duration, 1),
         }
 
-        # Persist output artifacts
-        if assets_cache:
-            base_dir = agent_dir(assets_cache, job_id, self.agent_name)
-            write_json(f"{base_dir}/narrative_structure.json", result["narrative_structure"])
-            write_text(f"{base_dir}/voiceover.txt", result["voiceover_text"])
-            write_text(f"{base_dir}/caption.txt", result["caption"])
-            write_json(f"{base_dir}/hashtags.json", result["hashtags"])
-            write_json(agent_output_file(assets_cache, job_id, self.agent_name), result)
-
+        _write_output_artifacts(assets_cache, job_id, self.agent_name, result)
         return result
 
     def _parse_script_response(
