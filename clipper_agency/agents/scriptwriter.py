@@ -18,8 +18,20 @@ SCRIPTWRITER_PROMPT = """You are a TikTok scriptwriter creating engaging scripts
 Write scripts in {language} with a {tone} style.
 Focus content on: {content_angle}.
 
+VIDEO BUDGET (STRICT — do not exceed):
+- Target duration: {target_duration_sec} seconds
+- Hard limit: {hard_limit_sec} seconds
+- Speaking rate: ~{estimated_words_per_second} words/second
+- Maximum scenes: {max_scenes}
+
+STORY DIRECTION (from Researcher — you MUST follow this):
+- Format: {story_format}
+- Story count: {story_count} (do NOT add extra stories or bonus content)
+- Stories to cover: {stories_list}
+- Content angle: {content_angle}
+
 Given a research brief and topic, create:
-1. A scene-by-scene TikTok script (hook, body, CTA)
+1. A scene-by-scene TikTok script (opening_hook, story scenes, closing_cta)
 2. An engaging caption in {language}
 3. Relevant hashtags
 
@@ -34,12 +46,13 @@ Format your response as JSON:
   "estimated_duration": total_seconds
 }}
 
-Scene roles: "opening_hook", "story_N" (e.g. story_1, story_2), "closing_cta".
-Provide word_count and estimated_duration_sec for every scene.
+Scene roles MUST be one of: "opening_hook", "story_1", "story_2", ..., "closing_cta".
+Do NOT invent extra stories beyond the {story_count} provided.
+Each scene text should be {max_words_per_scene:.0f} words or fewer to stay within budget.
 
 Guidelines:
 - Hook within first 3 seconds
-- Keep total duration under 90 seconds
+- Total MUST stay under {hard_limit_sec} seconds
 - Use {tone} tone
 - Include a strong CTA (call to action)
 
@@ -66,6 +79,13 @@ class ScriptwriterAgent(BaseAgent):
         tone: str = "",
         content_angle: str = "",
         assets_cache: str = "",
+        target_duration_sec: int = 55,
+        hard_limit_sec: int = 60,
+        estimated_words_per_second: float = 2.0,
+        max_scenes: int = 8,
+        story_format: str = "",
+        story_count: int = 3,
+        stories_list: list | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         rules = safety_rules or []
@@ -85,6 +105,8 @@ class ScriptwriterAgent(BaseAgent):
         settings = load_settings()
         llm = OpenRouterClient()
         prompt = load_prompt("scriptwriter", SCRIPTWRITER_PROMPT, PROMPTS_DIR)
+        max_words_per_scene = (hard_limit_sec - 9) / max(max_scenes, 1) / estimated_words_per_second
+        stories_str = ", ".join(stories_list) if stories_list else "see research brief"
         response = llm.chat(
             model=settings.scriptwriter_model,
             messages=[
@@ -96,6 +118,14 @@ class ScriptwriterAgent(BaseAgent):
                         tone=tone or "casual",
                         content_angle=content_angle or "trending topics",
                         safety_rules_text=safety_rules_text,
+                        target_duration_sec=target_duration_sec,
+                        hard_limit_sec=hard_limit_sec,
+                        estimated_words_per_second=estimated_words_per_second,
+                        max_scenes=max_scenes,
+                        story_format=story_format or "three_story_roundup",
+                        story_count=story_count,
+                        stories_list=stories_str,
+                        max_words_per_scene=max_words_per_scene,
                     ),
                 },
                 {

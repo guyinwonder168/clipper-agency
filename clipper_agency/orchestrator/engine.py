@@ -924,13 +924,37 @@ class Orchestrator:
                           g6.evaluate())
 
         mark_agent_running(conn, job_id, "scriptwriter")
+
+        # Wire validated_direction and budget params to Scriptwriter
+        direction = research_output.get("validated_direction")
+        direction_kwargs: dict[str, Any] = {}
+        resolved_angle = content_angle
+        if direction:
+            direction_kwargs = {
+                "story_format": direction.format,
+                "story_count": direction.story_count,
+                "stories_list": direction.stories,
+            }
+            if direction.content_angle:
+                resolved_angle = direction.content_angle
+        cp_config = load_settings().content_planning
+        if cp_config:
+            direction_kwargs.update({
+                "target_duration_sec": cp_config.target_duration_sec,
+                "hard_limit_sec": cp_config.hard_limit_sec,
+                "estimated_words_per_second": cp_config.estimated_words_per_second,
+            })
+            story_count = direction.story_count if direction else cp_config.max_stories_per_video
+            direction_kwargs["max_scenes"] = story_count * 2 + 2
+
         script_output = self._run_scriptwriter(
             job_id=job_id, topic=topic,
             research_brief=research_output.get("research_brief", ""),
             safety_rules=safety_rules,
             channel_description=channel_description,
-            language=language, tone=tone, content_angle=content_angle,
+            language=language, tone=tone, content_angle=resolved_angle,
             assets_cache=assets_cache,
+            **direction_kwargs,
         )
         self._complete_agent(conn, assets_cache, job_id, "scriptwriter")
 

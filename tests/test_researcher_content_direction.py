@@ -1,6 +1,8 @@
 import json
+from unittest.mock import patch
 
-from clipper_agency.agents.researcher import ResearcherAgent
+from clipper_agency.agents.researcher import RESEARCH_PROMPT, ResearcherAgent
+from clipper_agency.config.schema import AppSettings, ContentPlanningConfig
 
 
 class TestResearcherContentDirection:
@@ -52,3 +54,51 @@ class TestResearcherContentDirection:
         assert isinstance(result["research_brief"], str)
         assert "summary" in result["research_brief"]
         assert result["content_direction"]["selected_story_count"] == 3
+
+
+class TestResearcherPromptBudgetParams:
+    """Verify RESEARCH_PROMPT includes timeline budget parameters."""
+
+    def test_prompt_contains_budget_template_vars(self):
+        assert "{target_duration_sec}" in RESEARCH_PROMPT
+        assert "{hard_limit_sec}" in RESEARCH_PROMPT
+        assert "{estimated_words_per_second}" in RESEARCH_PROMPT
+        assert "{max_stories_per_video}" in RESEARCH_PROMPT
+
+    def test_prompt_uses_max_stories_in_selected_story_count(self):
+        assert "1-{max_stories_per_video}" in RESEARCH_PROMPT
+
+    def test_synthesize_research_formats_budget_from_config(self):
+        agent = ResearcherAgent()
+        cp = ContentPlanningConfig(
+            target_duration_sec=45,
+            hard_limit_sec=55,
+            estimated_words_per_second=2.5,
+            max_stories_per_video=2,
+        )
+        settings = AppSettings(content_planning=cp)
+
+        with (
+            patch("clipper_agency.agents.researcher.load_settings", return_value=settings),
+            patch.object(
+                agent, "_parse_synthesis_response",
+                return_value={"research_brief": "brief", "content_direction": None},
+            ),
+        ):
+            mock_llm_response = {"content": json.dumps({"research_brief": "brief"})}
+            with patch(
+                "clipper_agency.agents.researcher.OpenRouterClient"
+            ) as MockLLM:
+                MockLLM.return_value.chat.return_value = mock_llm_response
+                agent._synthesize_research(
+                    aggregated={"sources": [{"text": "source data"}]},
+                    topic="test topic",
+                    safety_rules=[],
+                )
+                call_args = MockLLM.return_value.chat.call_args
+                system_msg = call_args.kwargs["messages"][0]["content"]
+                assert "Target duration: 45 seconds" in system_msg
+                assert "Hard limit: 55 seconds" in system_msg
+                assert "2.5 words/second" in system_msg
+                assert "Max stories allowed: 2" in system_msg
+                assert "1-2" in system_msg
