@@ -48,3 +48,13 @@ class TestScriptDurationGate:
     def test_empty_scenes_zero_duration(self):
         dur = estimate_script_duration_sec([], words_per_sec=2.0, pause_buffer=0.5)
         assert dur == 0.0
+
+    def test_custom_words_per_sec_honored(self):
+        """Verify non-default WPS changes the estimate."""
+        scenes = [{"word_count": 20, "text": "x"}]
+        # 20/1.0 + 0.5*1 = 20.5
+        slow = estimate_script_duration_sec(scenes, words_per_sec=1.0)
+        # 20/2.0 + 0.5*1 = 10.5
+        fast = estimate_script_duration_sec(scenes, words_per_sec=2.0)
+        assert slow == 20.5
+        assert fast == 10.5

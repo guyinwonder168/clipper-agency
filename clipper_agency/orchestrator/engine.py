@@ -931,7 +931,10 @@ class Orchestrator:
         # Duration Gate: check script fits within time budget
         cp_config = load_settings().content_planning
         if cp_config and isinstance(script_scenes, list) and script_scenes:
-            estimated = estimate_script_duration_sec(script_scenes)
+            estimated = estimate_script_duration_sec(
+                script_scenes,
+                words_per_sec=cp_config.estimated_words_per_second,
+            )
             budget = DurationBudget(
                 target=cp_config.target_duration_sec,
                 hard=cp_config.hard_limit_sec,

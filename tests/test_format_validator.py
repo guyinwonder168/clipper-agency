@@ -60,3 +60,35 @@ class TestFormatValidator:
         assert hasattr(result, "stories")
         assert hasattr(result, "content_angle")
         assert hasattr(result, "fallback")
+
+    def test_string_story_count_coerced(self):
+        cfg = ContentPlanningConfig(max_stories_per_video=3)
+        direction = {
+            "recommended_format": "three_story_roundup",
+            "selected_story_count": "3",
+            "selected_stories": ["a", "b", "c"],
+        }
+        result = validate_content_direction(direction, cfg)
+        assert result.story_count == 3
+        assert len(result.stories) == 3
+
+    def test_float_story_count_coerced(self):
+        cfg = ContentPlanningConfig(max_stories_per_video=5)
+        direction = {
+            "recommended_format": "three_story_roundup",
+            "selected_story_count": 3.0,
+            "selected_stories": ["a", "b", "c"],
+        }
+        result = validate_content_direction(direction, cfg)
+        assert result.story_count == 3
+
+    def test_invalid_story_count_falls_back(self):
+        cfg = ContentPlanningConfig(max_stories_per_video=3)
+        direction = {
+            "recommended_format": "three_story_roundup",
+            "selected_story_count": "abc",
+            "selected_stories": [],
+        }
+        result = validate_content_direction(direction, cfg)
+        # raw_count becomes 0 after coercion failure → uses max_stories
+        assert result.story_count == 3

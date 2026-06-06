@@ -12,6 +12,7 @@ def _make_settings(target=55, hard=60):
     cp.hard_limit_sec = hard
     cp.default_format = "three_story_roundup"
     cp.max_stories_per_video = 3
+    cp.estimated_words_per_second = 2.0
     settings = MagicMock()
     settings.content_planning = cp
     settings.assets_cache = "data/assets/cache"

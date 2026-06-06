@@ -39,6 +39,10 @@ def validate_content_direction(
         fmt = config.default_format
 
     raw_count = direction.get("selected_story_count", 0) or 0
+    try:
+        raw_count = int(raw_count)
+    except (ValueError, TypeError):
+        raw_count = 0
     count = min(max(1, raw_count), config.max_stories_per_video)
     if raw_count == 0:
         count = config.max_stories_per_video
