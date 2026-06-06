@@ -1,0 +1,18 @@
+{
+  "job_id": 1,
+  "topic": "",
+  "assets_cache": "cache",
+  "output_dir": "",
+  "config_snapshot": {},
+  "agents": {
+    "researcher": {
+      "status": "completed",
+      "input": "",
+      "output": "",
+      "completed_at": "2026-06-06T15:37:08.199170+00:00"
+    }
+  },
+  "gates": {},
+  "final_outputs": {},
+  "updated_at": "2026-06-06T15:37:08.199185+00:00"
+}

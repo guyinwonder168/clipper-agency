@@ -183,3 +183,47 @@ class TestScriptwriterExecute:
         assert (base / "caption.txt").read_text(encoding="utf-8") == result["caption"]
         assert json.loads((base / "hashtags.json").read_text(encoding="utf-8")) == result["hashtags"]
         assert json.loads((base / "output.json").read_text(encoding="utf-8"))["status"] == "completed"
+
+
+class TestScriptwriterBudgetParams:
+    """Budget and story-direction params are passed into the LLM prompt."""
+
+    @staticmethod
+    def _mock_chat(content: str) -> dict:
+        return {"content": content, "model": "glm-4-9b", "usage": {}}
+
+    def test_prompt_contains_budget_params(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value=self._mock_chat(MOCK_SCRIPT_RESPONSE),
+        )
+        agent = ScriptwriterAgent()
+        agent.execute(
+            job_id=5,
+            topic="Topic",
+            research_brief="Brief",
+            story_direction={"hard_limit_sec": 60, "story_count": 3},
+        )
+        system_content = mock_chat.call_args.kwargs["messages"][0]["content"]
+        assert "60 seconds" in system_content
+        assert "3" in system_content
+
+    def test_prompt_respects_story_direction(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value=self._mock_chat(MOCK_SCRIPT_RESPONSE),
+        )
+        agent = ScriptwriterAgent()
+        agent.execute(
+            job_id=6,
+            topic="Topic",
+            research_brief="Brief",
+            story_direction={
+                "story_count": 2,
+                "stories_list": ["Story A", "Story B"],
+            },
+        )
+        system_content = mock_chat.call_args.kwargs["messages"][0]["content"]
+        assert "do NOT add extra stories" in system_content
+        assert "2" in system_content
+        assert "Story A, Story B" in system_content

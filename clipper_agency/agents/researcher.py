@@ -42,6 +42,18 @@ Analyze the provided search results and create a concise research brief.
 Rules to follow:
 {rules_text}
 
+Video duration budget:
+- Target duration: {target_duration_sec} seconds
+- Hard limit: {hard_limit_sec} seconds
+- Estimated speaking rate: {estimated_words_per_second} words/second
+- Max stories allowed: {max_stories_per_video}
+
+Calculate your recommendation carefully:
+- Each story needs ~2 scenes (narration + transition)
+- Plus 1 opening hook scene (~5s) and 1 closing CTA scene (~4s)
+- At {estimated_words_per_second} WPS, calculate: (total_seconds - 9s_overhead) / scenes_per_story / WPS = max_words_per_scene
+- Choose selected_story_count that fits within {hard_limit_sec} seconds total
+
 Search results:
 {sources_text}
 
@@ -56,7 +68,7 @@ Return a JSON response with two fields:
 2. "content_direction" — recommend the best approach for this content:
    - "recommended_format": one of "three_story_roundup", "single_story_deep", or "rapid_bulletin"
    - "reason": brief explanation
-   - "selected_story_count": number (1-6)
+   - "selected_story_count": number (1-{max_stories_per_video})
    - "selected_stories": list of story slugs or headlines
    - "content_angle": suggested angle for Scriptwriter
    - "risk_notes": any safety/caution notes
@@ -312,6 +324,7 @@ class ResearcherAgent(BaseAgent):
         )
 
         settings = load_settings()
+        cp_config = settings.content_planning
         llm = OpenRouterClient()
         response = llm.chat(
             model=settings.researcher_model,
@@ -323,7 +336,12 @@ class ResearcherAgent(BaseAgent):
                         language=language or "English",
                         tone=tone or "casual",
                         content_angle=content_angle or "trending topics",
-                        rules_text=rules_text, sources_text=sources_text
+                        rules_text=rules_text,
+                        sources_text=sources_text,
+                        target_duration_sec=cp_config.target_duration_sec if cp_config else 55,
+                        hard_limit_sec=cp_config.hard_limit_sec if cp_config else 60,
+                        estimated_words_per_second=cp_config.estimated_words_per_second if cp_config else 2.0,
+                        max_stories_per_video=cp_config.max_stories_per_video if cp_config else 3,
                     ),
                 },
                 {
@@ -349,8 +367,12 @@ class ResearcherAgent(BaseAgent):
                 stripped = stripped.removeprefix("```json").removeprefix("```")
                 stripped = stripped.removesuffix("```").strip()
             data = json.loads(stripped)
+            brief = data.get("research_brief", "")
+            # Ensure brief is always a string for write_text downstream
+            if isinstance(brief, dict):
+                brief = json.dumps(brief, indent=2)
             return {
-                "research_brief": data.get("research_brief", ""),
+                "research_brief": str(brief),
                 "content_direction": data.get("content_direction"),
             }
         except (json.JSONDecodeError, KeyError):
