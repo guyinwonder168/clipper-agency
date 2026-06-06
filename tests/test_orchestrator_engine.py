@@ -58,7 +58,7 @@ def mock_safety_hard_fail():
 
 @pytest.fixture
 def mock_research_output():
-    """Mock ResearcherAgent.execute output."""
+    """Mock SegmentProducerAgent.execute output."""
     return {
         "status": "completed",
         "research_brief": "Research findings for topic",
@@ -229,7 +229,7 @@ class TestOrchestratorRunPipeline:
             result = orch.run_pipeline(topic="Test", niche="test_niche")
 
         conn = get_connection(db_initialized)
-        expected_agents = ["safety", "researcher", "scriptwriter",
+        expected_agents = ["safety", "segment_producer", "scriptwriter",
                           "voice_producer", "visual_director", "composer", "reviewer"]
         for agent_name in expected_agents:
             row = conn.execute(
@@ -647,7 +647,7 @@ class TestOrchestratorRunPipeline:
         orch = Orchestrator(db_path=db_initialized)
         # Create real audio so G8 passes
         audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        # Simulate the real ResearcherAgent output format
+        # Simulate the real SegmentProducerAgent output format
         aggregate_sources = {
             "firecrawl_count": 2,
             "scrapecreators_count": 1,
@@ -1026,7 +1026,7 @@ class TestOrchestratorRunPipeline:
 
         assert result["status"] == "completed"
         conn = get_connection(db_initialized)
-        expected_agents = ["safety", "researcher", "scriptwriter",
+        expected_agents = ["safety", "segment_producer", "scriptwriter",
                           "voice_producer", "visual_director", "composer",
                           "reviewer"]
         for agent_name in expected_agents:
@@ -1061,7 +1061,7 @@ class TestOrchestratorRunPipeline:
         # Researcher should be completed (it ran before G4 check)
         researcher_state = conn.execute(
             "SELECT state FROM agent_states WHERE job_id=? AND agent_name=?",
-            (result["job_id"], "researcher"),
+            (result["job_id"], "segment_producer"),
         ).fetchone()
         assert researcher_state["state"] == "completed"
         # Scriptwriter was never reached
@@ -1175,7 +1175,7 @@ class TestRunPipelineFrom:
         job_id = create_job(conn, "Test topic", "test_niche",
                             config_snapshot=snapshot)
 
-        all_agents = ["safety", "researcher", "scriptwriter",
+        all_agents = ["safety", "segment_producer", "scriptwriter",
                       "voice_producer", "visual_director", "composer", "reviewer"]
         for name in all_agents:
             create_agent_state(conn, job_id, name)
@@ -1191,7 +1191,7 @@ class TestRunPipelineFrom:
         from pathlib import Path as _P
         agent_outputs = {
             "safety": {"status": "pass", "reason": "Safe"},
-            "researcher": {
+            "segment_producer": {
                 "status": "completed",
                 "research_brief": "Research brief text",
                 "sources": [{"url": "https://example.com", "title": "S1"}],
@@ -1258,7 +1258,7 @@ class TestRunPipelineFrom:
              mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
              mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
 
-             result = orch.run_pipeline_from(job_id, from_agent="researcher")
+             result = orch.run_pipeline_from(job_id, from_agent="segment_producer")
 
         assert result["status"] == "completed"
         mock_safety.assert_not_called()
@@ -1308,7 +1308,7 @@ class TestRunPipelineFrom:
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
             db_initialized, ac, od,
-            completed_agents=["safety", "researcher", "scriptwriter",
+            completed_agents=["safety", "segment_producer", "scriptwriter",
                               "voice_producer", "visual_director"],
             failed_agent="composer",
         )
@@ -1346,7 +1346,7 @@ class TestRunPipelineFrom:
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
             db_initialized, ac, od,
-            completed_agents=["safety", "researcher", "scriptwriter",
+            completed_agents=["safety", "segment_producer", "scriptwriter",
                               "voice_producer", "visual_director"],
             failed_agent="composer",
         )
@@ -1375,7 +1375,7 @@ class TestRunPipelineFrom:
     def test_run_pipeline_from_missing_job_returns_failure(self, db_initialized, tmp_path):
         """run_pipeline_from returns failure for nonexistent job."""
         orch = Orchestrator(db_path=db_initialized)
-        result = orch.run_pipeline_from(99999, from_agent="researcher")
+        result = orch.run_pipeline_from(99999, from_agent="segment_producer")
         assert result["status"] == "failed"
 
     def test_run_pipeline_from_passes_reconstructed_research_to_scriptwriter(
@@ -1386,7 +1386,7 @@ class TestRunPipelineFrom:
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
             db_initialized, ac, od,
-            completed_agents=["safety", "researcher"],
+            completed_agents=["safety", "segment_producer"],
         )
         orch = Orchestrator(db_path=db_initialized)
         video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
@@ -1419,7 +1419,7 @@ class TestRunPipelineFrom:
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
             db_initialized, ac, od,
-            completed_agents=["safety", "researcher", "scriptwriter",
+            completed_agents=["safety", "segment_producer", "scriptwriter",
                               "voice_producer", "visual_director"],
             failed_agent="composer",
         )
@@ -1461,7 +1461,7 @@ class TestRunPipelineFrom:
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
             db_initialized, ac, od,
-            completed_agents=["safety", "researcher", "scriptwriter",
+            completed_agents=["safety", "segment_producer", "scriptwriter",
                               "voice_producer", "visual_director"],
             failed_agent="composer",
         )
@@ -1555,7 +1555,7 @@ class TestRunPipelineFrom:
         # Create a job with niche_ctx already in the snapshot
         job_id = self._setup_completed_job(
             db_initialized, ac, od,
-            completed_agents=["safety", "researcher", "scriptwriter",
+            completed_agents=["safety", "segment_producer", "scriptwriter",
                               "voice_producer", "visual_director"],
             failed_agent="composer",
             config_snapshot={
@@ -1634,9 +1634,9 @@ class TestEngineHelpers:
         assert result == {"status": "pass"}
 
     def test_run_researcher_creates_agent_and_executes(self, db_initialized):
-        """_run_researcher instantiates ResearcherAgent and calls execute()."""
+        """_run_researcher instantiates SegmentProducerAgent and calls execute()."""
         orch = Orchestrator(db_path=db_initialized)
-        with patch("clipper_agency.orchestrator.engine.ResearcherAgent") as mock_cls:
+        with patch("clipper_agency.orchestrator.engine.SegmentProducerAgent") as mock_cls:
             mock_agent = MagicMock()
             mock_agent.execute.return_value = {"status": "completed"}
             mock_cls.return_value = mock_agent

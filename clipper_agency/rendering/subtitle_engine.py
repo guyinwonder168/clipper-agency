@@ -10,6 +10,7 @@ from typing import Optional
 from clipper_agency.rendering.contracts import CaptionOverlay
 
 _DEFAULT_SCENE_DURATION = 5.0
+_MAX_KEYWORD_WORDS = 6
 
 
 def build_subtitle_overlays(
@@ -61,6 +62,77 @@ def build_subtitle_overlays(
             )
 
         scene_start += duration
+
+    return overlays
+
+
+def build_keyword_captions(
+    narrative_structure: list[dict],
+    timestamps: list[dict],
+    width: int = 1080,
+    height: int = 1920,
+) -> list[CaptionOverlay]:
+    """Build keyword captions from narrative structure aligned to audio timestamps.
+
+    Each beat produces one keyword caption using ``caption_keywords``,
+    with timing derived from word-level timestamps via ``word_range``.
+
+    Args:
+        narrative_structure: List of NarrativeBeat-like dicts with
+            ``beat_id``, ``word_range`` [start_idx, end_idx], ``caption_keywords``.
+        timestamps: List of WordTimestamp-like dicts with ``word``, ``start``, ``end``.
+        width: Video width for positioning (reserved for future use).
+        height: Video height for positioning (reserved for future use).
+
+    Returns:
+        Flat list of ``CaptionOverlay`` with ``position="bottom"`` and
+        ``style="keyword"``.  Returns empty list on missing/empty inputs.
+    """
+    if not narrative_structure or not timestamps:
+        return []
+
+    overlays: list[CaptionOverlay] = []
+
+    for beat in narrative_structure:
+        keywords = beat.get("caption_keywords", [])
+        word_range = beat.get("word_range", [])
+
+        if not keywords or len(word_range) < 2:
+            continue
+
+        # Truncate to max words per caption
+        caption_text = " ".join(keywords[:_MAX_KEYWORD_WORDS])
+        if not caption_text:
+            continue
+
+        # Resolve timing from word-level timestamps
+        start_idx = max(0, min(word_range[0], len(timestamps) - 1))
+        end_idx = max(start_idx + 1, min(word_range[1], len(timestamps)))
+
+        ts_start = timestamps[start_idx]
+        ts_end = timestamps[end_idx - 1]
+
+        start_time = (
+            ts_start.get("start", 0.0) if isinstance(ts_start, dict)
+            else getattr(ts_start, "start", 0.0)
+        )
+        end_time = (
+            ts_end.get("end", start_time + 1.0) if isinstance(ts_end, dict)
+            else getattr(ts_end, "end", start_time + 1.0)
+        )
+
+        if end_time <= start_time:
+            continue
+
+        overlays.append(
+            CaptionOverlay(
+                text=caption_text,
+                start_seconds=start_time,
+                end_seconds=end_time,
+                position="bottom",
+                style="keyword",
+            )
+        )
 
     return overlays
 

@@ -28,7 +28,7 @@ from clipper_agency.rendering.primitives import escape_drawtext
 from clipper_agency.rendering.renderers.b_roll_narration import build_b_roll_narration_plan
 from clipper_agency.rendering.renderers.news_card import build_news_card_plan
 from clipper_agency.rendering.renderers.rapid_update import build_rapid_update_plan
-from clipper_agency.rendering.subtitle_engine import build_subtitle_overlays
+from clipper_agency.rendering.subtitle_engine import build_keyword_captions, build_subtitle_overlays
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,16 @@ _SAFETY_MARGIN = 0.1
 _MIN_CLIP_HEADROOM = 0.15
 _MIN_TRANSITION_DUR = 0.05
 _OUTV = "[outv]"
+
+# Audio-first smart trim constants
+_BOUNDARY_TOLERANCE = 0.15       # ±15% tolerance for boundary match
+_MAX_SLOWDOWN = 0.30             # Max 30% speed reduction
+_DURATION_CLOSE_ENOUGH = 0.05    # 50ms tolerance for duration match
+
+# Keyword caption drawtext style
+_KEYWORD_FONTSIZE = 48           # Large font for mobile readability
+_KEYWORD_BORDERW = 3             # Thick dark outline
+_KEYWORD_Y_OFFSET = 40          # Bottom margin (closer to bottom than subtitles)
 
 
 def _get_treatment_builder():
@@ -179,6 +189,31 @@ def _build_subtitle_chain(video_filter: str, script_scenes: list[dict]) -> str:
     return video_filter
 
 
+def _build_keyword_chain(video_filter: str, captions: list) -> str:
+    """Append keyword caption drawtext overlays to the video filter chain.
+
+    Uses larger font and thicker outline than subtitles for mobile readability.
+    Style: white text with dark shadow, positioned near bottom of frame.
+    """
+    if not captions:
+        return video_filter
+    video_filter = video_filter.replace(_OUTV, "[kcap_in]", 1)
+    current_label = "kcap_in"
+    for i, cap in enumerate(captions):
+        next_label = "outv" if i == len(captions) - 1 else f"kcap{i}"
+        escaped = escape_drawtext(cap.text)
+        video_filter += (
+            f";[{current_label}]drawtext=text='{escaped}'"
+            f":enable='between(t,{cap.start_seconds},{cap.end_seconds})'"
+            f":fontsize={_KEYWORD_FONTSIZE}:fontcolor=white"
+            f":borderw={_KEYWORD_BORDERW}:bordercolor=black"
+            f":shadowcolor=black:shadowx=2:shadowy=2"
+            f":x=(w-tw)/2:y=h-th-{_KEYWORD_Y_OFFSET}[{next_label}]"
+        )
+        current_label = next_label
+    return video_filter
+
+
 class ComposerAgent(BaseAgent):
     """Assembles final video from assets and audio using FFmpeg."""
 
@@ -200,6 +235,33 @@ class ComposerAgent(BaseAgent):
         output_dir: str = "",
         **kwargs: Any,
     ) -> dict[str, Any]:
+        # ── Audio-first mode ──
+        voiceover_path = kwargs.get("voiceover_path")
+        timestamps = kwargs.get("timestamps")
+        narrative_structure = kwargs.get("narrative_structure")
+
+        if voiceover_path and timestamps and narrative_structure:
+            preflight_result = self._run_preflight(output_dir, job_id)
+            if preflight_result is not None:
+                return preflight_result
+
+            assets_cache = kwargs.get("assets_cache", "")
+            agent_dir = self._record_input(
+                assets_cache, job_id,
+                len(assets or []), 1,
+            )
+            return self._execute_audio_first(
+                job_id=job_id,
+                voiceover_path=voiceover_path,
+                timestamps=timestamps,
+                narrative_structure=narrative_structure,
+                assets=assets or [],
+                output_dir=output_dir,
+                assets_cache=assets_cache,
+                agent_dir=agent_dir,
+            )
+
+        # ── Legacy per-scene mode ──
         video_assets = assets or []
         voice_files = audio_files or []
         script_scenes = kwargs.get("script_scenes", [])
@@ -741,3 +803,444 @@ class ComposerAgent(BaseAgent):
             thumbnail_path,
         ]
         run_ffmpeg_streaming(cmd, timeout=60, label="thumbnail")
+
+    # ── Audio-first smart trim helpers ──
+
+    def _probe_duration(self, clip_path: str) -> float:
+        """Get clip duration in seconds using ffprobe."""
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=duration",
+            "-of", "csv=p=0",
+            str(clip_path),
+        ]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ffprobe duration failed for {clip_path}: {result.stderr}"
+            )
+        lines = [l for l in result.stdout.strip().split("\n") if l.strip()]
+        if not lines:
+            raise RuntimeError(f"ffprobe returned no duration for {clip_path}")
+        return float(lines[0])
+
+    def _detect_scene_boundaries(self, clip_path: str) -> list[float]:
+        """Detect scene change timestamps using ffprobe keyframe analysis.
+
+        Keyframes often coincide with scene boundaries in encoded video.
+        Returns list of timestamps (seconds) or empty list on failure.
+        """
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-skip_frame", "nokey",
+            "-show_entries", "frame=pkt_pts_time",
+            "-of", "csv=p=0",
+            str(clip_path),
+        ]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return []
+
+        if result.returncode != 0:
+            return []
+
+        boundaries: list[float] = []
+        for line in result.stdout.strip().split("\n"):
+            line = line.strip()
+            if line:
+                try:
+                    boundaries.append(float(line))
+                except ValueError:
+                    continue
+        return boundaries
+
+    def _find_best_cut_point(
+        self, boundaries: list[float], target_duration: float,
+    ) -> float:
+        """Find the best scene boundary to cut at, or fall back to target."""
+        tolerance = target_duration * _BOUNDARY_TOLERANCE
+        best: float | None = None
+        best_diff = tolerance
+
+        for boundary in boundaries:
+            diff = abs(boundary - target_duration)
+            if diff <= best_diff:
+                best = boundary
+                best_diff = diff
+
+        return best if best is not None else target_duration
+
+    def _smart_trim(
+        self,
+        clip_path: str,
+        target_duration_sec: float,
+        temp_dir: Path,
+    ) -> str:
+        """Smart trim a clip to target duration.
+
+        Strategy:
+        1. Probe clip duration
+        2. Run scene boundary detection
+        3. If boundary within ±15% of target: trim at boundary + speed-adjust
+        4. If no good boundary: trim from start + speed-adjust
+        5. If clip shorter: slow down max 30% or loop
+
+        Returns path to trimmed clip.
+        """
+        clip_dur = self._probe_duration(clip_path)
+        output_path = str(
+            temp_dir / f"trimmed_{Path(clip_path).stem}.mp4"
+        )
+
+        if abs(clip_dur - target_duration_sec) < _DURATION_CLOSE_ENOUGH:
+            shutil.copy2(clip_path, output_path)
+            return output_path
+
+        if clip_dur > target_duration_sec:
+            return self._trim_long_clip(
+                clip_path, clip_dur, target_duration_sec, output_path,
+            )
+        return self._stretch_short_clip(
+            clip_path, clip_dur, target_duration_sec, output_path,
+        )
+
+    def _trim_long_clip(
+        self,
+        clip_path: str,
+        clip_dur: float,
+        target: float,
+        output_path: str,
+    ) -> str:
+        """Trim a clip that is longer than the target duration."""
+        boundaries = self._detect_scene_boundaries(clip_path)
+        cut_point = self._find_best_cut_point(boundaries, target)
+
+        speed_factor = target / cut_point
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(clip_path),
+            "-ss", "0", "-to", f"{cut_point:.4f}",
+            "-filter:v", f"setpts={speed_factor:.4f}*PTS",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-an", output_path,
+        ]
+        run_ffmpeg_streaming(cmd, timeout=120, label="smart_trim")
+        return output_path
+
+    def _stretch_short_clip(
+        self,
+        clip_path: str,
+        clip_dur: float,
+        target: float,
+        output_path: str,
+    ) -> str:
+        """Stretch or loop a clip that is shorter than the target duration."""
+        if clip_dur * (1 + _MAX_SLOWDOWN) >= target:
+            # Slowdown alone is enough
+            speed_factor = target / clip_dur
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(clip_path),
+                "-filter:v", f"setpts={speed_factor:.4f}*PTS",
+                "-t", f"{target:.4f}",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-an", output_path,
+            ]
+        else:
+            # Need to loop to fill duration
+            cmd = [
+                "ffmpeg", "-y",
+                "-stream_loop", "-1",
+                "-i", str(clip_path),
+                "-t", f"{target:.4f}",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-an", output_path,
+            ]
+        run_ffmpeg_streaming(cmd, timeout=120, label="smart_trim_stretch")
+        return output_path
+
+    # ── Audio-first composition ──
+
+    @staticmethod
+    def _compute_beat_durations(
+        narrative_structure: list[dict],
+        timestamps: list[dict],
+    ) -> list[float]:
+        """Compute duration for each beat from word-level timestamps."""
+        durations: list[float] = []
+        for beat in narrative_structure:
+            word_range = beat.get("word_range", [])
+            if len(word_range) < 2 or not timestamps:
+                durations.append(5.0)
+                continue
+
+            start_idx = max(0, min(word_range[0], len(timestamps) - 1))
+            end_idx = max(start_idx + 1, min(word_range[1], len(timestamps)))
+
+            ts_start = timestamps[start_idx]
+            ts_end = timestamps[end_idx - 1]
+
+            start_time = (
+                ts_start.get("start", 0.0) if isinstance(ts_start, dict)
+                else getattr(ts_start, "start", 0.0)
+            )
+            end_time = (
+                ts_end.get("end", start_time + 5.0) if isinstance(ts_end, dict)
+                else getattr(ts_end, "end", start_time + 5.0)
+            )
+            durations.append(max(0.5, end_time - start_time))
+        return durations
+
+    @staticmethod
+    def _enrich_audio_first_assets(
+        assets: list[dict],
+        trimmed_clips: list[str],
+        beat_durations: list[float],
+    ) -> list[dict]:
+        """Build enriched asset list for audio-first assembly."""
+        enriched: list[dict] = []
+        for i, clip_path in enumerate(trimmed_clips):
+            item: dict[str, Any] = {
+                "scene": i + 1,
+                "path": clip_path,
+                "target_duration": beat_durations[i] if i < len(beat_durations) else 5.0,
+            }
+            if i < len(assets):
+                for field in (
+                    "treatment", "transition_in", "transition_out",
+                    "transition_duration", "type", "headline",
+                ):
+                    if field in assets[i]:
+                        item[field] = assets[i][field]
+            enriched.append(item)
+        return enriched
+
+    @staticmethod
+    def _build_audio_first_cmd(
+        voiceover_path: str,
+        trimmed_clips: list[str],
+        normalized_assets: list[dict],
+        keyword_captions: list,
+        output_path: str,
+    ) -> list[str]:
+        """Build FFmpeg command for audio-first composition.
+
+        Voiceover is input 0 (audio anchor, never trimmed).
+        Visual clips are inputs 1..N, trimmed/fitted to beat durations.
+        """
+        cmd = ["ffmpeg", "-y"]
+
+        # Input 0: voiceover (audio anchor)
+        cmd.extend(["-i", voiceover_path])
+
+        # Inputs 1..N: visual clips
+        for clip in trimmed_clips:
+            cmd.extend(["-i", clip])
+
+        num_videos = len(trimmed_clips)
+
+        # Build per-input trim + transition chain
+        trim_parts: list[str] = []
+        video_labels: list[str] = []
+        builder = _get_treatment_builder()
+
+        for i in range(num_videos):
+            asset = normalized_assets[i] if i < len(normalized_assets) else {}
+            duration = asset.get("target_duration", 5)
+            treatment_filter = builder.build(asset)
+            label = f"t{i}"
+            video_labels.append(label)
+            if treatment_filter != "null":
+                trim_parts.append(
+                    f"[{i + 1}:v]{treatment_filter},"
+                    f"trim=duration={duration},"
+                    f"setpts=PTS-STARTPTS[{label}]"
+                )
+            else:
+                trim_parts.append(
+                    f"[{i + 1}:v]trim=duration={duration},"
+                    f"setpts=PTS-STARTPTS[{label}]"
+                )
+
+        video_filter = _build_transition_chain(
+            trim_parts, video_labels, normalized_assets, num_videos,
+        )
+
+        # Keyword caption chain
+        if keyword_captions:
+            video_filter = _build_keyword_chain(video_filter, keyword_captions)
+
+        cmd.extend([
+            "-filter_complex", video_filter,
+            "-map", _OUTV,
+            "-map", "0:a",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-shortest",
+            output_path,
+        ])
+        return cmd
+
+    def _execute_audio_first(
+        self,
+        job_id: int,
+        voiceover_path: str,
+        timestamps: list[dict],
+        narrative_structure: list[dict],
+        assets: list[dict],
+        output_dir: str,
+        assets_cache: str,
+        agent_dir: str,
+    ) -> dict[str, Any]:
+        """Execute audio-first composition pipeline.
+
+        Uses single voiceover as timeline anchor. Visuals are smart-trimmed
+        to match beat durations derived from word timestamps.
+        """
+        video_path = f"{output_dir}/job_{job_id}/video.mp4"
+        thumbnail_path = f"{output_dir}/job_{job_id}/thumbnail.png"
+
+        try:
+            return self._try_audio_first_assemble(
+                job_id, voiceover_path, timestamps,
+                narrative_structure, assets, output_dir,
+                video_path, thumbnail_path, assets_cache, agent_dir,
+            )
+        except subprocess.CalledProcessError as e:
+            return self._handle_ffmpeg_error(e, video_path, agent_dir)
+        except Exception as e:
+            logger.exception("Composer (audio-first): unexpected error")
+            return {
+                "status": "failed",
+                "error": str(e),
+                "video_path": video_path,
+                "thumbnail_path": "",
+            }
+
+    def _try_audio_first_assemble(
+        self,
+        job_id: int,
+        voiceover_path: str,
+        timestamps: list[dict],
+        narrative_structure: list[dict],
+        assets: list[dict],
+        output_dir: str,
+        video_path: str,
+        thumbnail_path: str,
+        assets_cache: str,
+        agent_dir: str,
+    ) -> dict[str, Any]:
+        """Attempt audio-first assembly. Raises on FFmpeg or unexpected errors."""
+        beat_durations = self._compute_beat_durations(
+            narrative_structure, timestamps,
+        )
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="composer_af_"))
+        trimmed_clips: list[str] = []
+        card_fallback_scenes: list[int] = []
+
+        try:
+            normalizer = SceneNormalizer()
+            card_gen = CardGenerator()
+
+            for i, beat_dur in enumerate(beat_durations):
+                if i >= len(assets):
+                    break
+                asset = assets[i]
+                scene_path = asset.get("path", "")
+
+                if scene_path and Path(scene_path).exists():
+                    norm_path, was_card = self._process_scene(
+                        temp_dir, normalizer, card_gen, i + 1, scene_path,
+                    )
+                    if norm_path:
+                        trimmed = self._smart_trim(
+                            norm_path, beat_dur, temp_dir,
+                        )
+                        trimmed_clips.append(trimmed)
+                    if was_card:
+                        card_fallback_scenes.append(i + 1)
+                else:
+                    # Card fallback for missing visuals
+                    card_mp4 = temp_dir / f"card_beat_{i}.mp4"
+                    card_png = temp_dir / f"card_beat_{i}.png"
+                    card_gen.generate(
+                        CardType.CONTEXT,
+                        asset.get("headline", f"Beat {i + 1}"),
+                        str(card_png),
+                    )
+                    ctv = card_to_video(
+                        str(card_png), str(card_mp4), duration=max(1, int(beat_dur)),
+                    )
+                    if ctv.success:
+                        trimmed_clips.append(str(card_mp4))
+                    card_fallback_scenes.append(i + 1)
+
+            if not trimmed_clips:
+                output = {
+                    "status": "failed",
+                    "error": "No visual assets to compose",
+                    "video_path": "",
+                    "thumbnail_path": "",
+                }
+                if agent_dir:
+                    write_json(
+                        agent_output_file(assets_cache, job_id, "composer"),
+                        output,
+                    )
+                return output
+
+            # Build keyword captions
+            keyword_captions = build_keyword_captions(
+                narrative_structure, timestamps,
+            )
+
+            # Enrich assets with beat durations and treatment metadata
+            enriched = self._enrich_audio_first_assets(
+                assets, trimmed_clips, beat_durations,
+            )
+
+            # Build and execute FFmpeg command
+            cmd = self._build_audio_first_cmd(
+                voiceover_path=voiceover_path,
+                trimmed_clips=trimmed_clips,
+                normalized_assets=enriched,
+                keyword_captions=keyword_captions,
+                output_path=video_path,
+            )
+
+            logger.info(
+                "Composer (audio-first): assembling %d clips + voiceover → %s",
+                len(trimmed_clips), video_path,
+            )
+            run_ffmpeg_streaming(cmd, timeout=600, label="audio_first")
+
+            self._generate_thumbnail(video_path, thumbnail_path)
+
+            output = {
+                "status": "completed",
+                "video_path": video_path,
+                "thumbnail_path": thumbnail_path,
+                "card_fallback_scenes": card_fallback_scenes,
+                "mode": "audio_first",
+            }
+            if agent_dir:
+                self._persist_diagnostics(agent_dir, cmd, "")
+                write_json(
+                    agent_output_file(assets_cache, job_id, "composer"), output,
+                )
+            return output
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)

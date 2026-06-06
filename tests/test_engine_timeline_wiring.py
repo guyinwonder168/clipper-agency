@@ -418,7 +418,7 @@ class TestRetryDurationGateStopsPipeline:
                 "clipper_agency.orchestrator.engine.PipelineOrder"
                 if False else
                 "clipper_agency.orchestrator.engine.PIPELINE_ORDER",
-                ["safety", "researcher", "scriptwriter",
+                ["safety", "segment_producer", "scriptwriter",
                  "voice_producer", "visual_director", "composer",
                  "reviewer"],
             ),

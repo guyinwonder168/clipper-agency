@@ -123,12 +123,12 @@ def test_mark_agent_completed_sets_state_and_output(temp_db_path):
     conn = get_connection(temp_db_path)
     initialize_schema(conn)
     job_id = create_job(conn, topic="Test", niche="test")
-    create_agent_state(conn, job_id, "researcher")
+    create_agent_state(conn, job_id, "segment_producer")
 
-    mark_agent_completed(conn, job_id, "researcher",
+    mark_agent_completed(conn, job_id, "segment_producer",
                          output_data='{"status":"completed"}')
 
-    state = get_agent_state(conn, job_id, "researcher")
+    state = get_agent_state(conn, job_id, "segment_producer")
     assert state["state"] == "completed"
     assert state["output_data"] == '{"status":"completed"}'
     assert state["completed_at"] is not None
@@ -213,13 +213,13 @@ def test_reset_agents_from_resets_target_and_downstream(temp_db_path):
     job_id = create_job(conn, topic="Test", niche="test")
 
     # Create full pipeline agents
-    for name in ["safety", "researcher", "scriptwriter",
+    for name in ["safety", "segment_producer", "scriptwriter",
                  "voice_producer", "visual_director", "composer", "reviewer"]:
         create_agent_state(conn, job_id, name)
 
     # Mark early agents completed, composer failed
     mark_agent_completed(conn, job_id, "safety")
-    mark_agent_completed(conn, job_id, "researcher")
+    mark_agent_completed(conn, job_id, "segment_producer")
     mark_agent_completed(conn, job_id, "scriptwriter")
     mark_agent_completed(conn, job_id, "voice_producer")
     mark_agent_failed(conn, job_id, "composer", "render error")
@@ -229,7 +229,7 @@ def test_reset_agents_from_resets_target_and_downstream(temp_db_path):
 
     # Upstream agents untouched
     assert get_agent_state(conn, job_id, "safety")["state"] == "completed"
-    assert get_agent_state(conn, job_id, "researcher")["state"] == "completed"
+    assert get_agent_state(conn, job_id, "segment_producer")["state"] == "completed"
     assert get_agent_state(conn, job_id, "scriptwriter")["state"] == "completed"
     assert get_agent_state(conn, job_id, "voice_producer")["state"] == "completed"
 

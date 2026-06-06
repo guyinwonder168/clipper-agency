@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from clipper_agency.agents.composer import ComposerAgent
-from clipper_agency.agents.researcher import ResearcherAgent
+from clipper_agency.agents.segment_producer import SegmentProducerAgent
 from clipper_agency.agents.reviewer import ReviewerAgent
 from clipper_agency.agents.safety import SafetyAgent
 from clipper_agency.agents.scriptwriter import ScriptwriterAgent
@@ -166,7 +166,7 @@ class Orchestrator:
                         output_dir if output_dir else "outputs",
                         config_snapshot=snapshot)
         agent_names = [
-            "safety", "researcher", "scriptwriter",
+            "safety", "segment_producer", "scriptwriter",
             "voice_producer", "visual_director", "composer", "reviewer",
         ]
         for name in agent_names:
@@ -207,17 +207,17 @@ class Orchestrator:
         g3 = GateResearchCache()
         self._record_gate(assets_cache, job_id, "G3_research_cache", g3.evaluate())
 
-        logger.info("G3: running Researcher agent")
-        mark_agent_running(conn, job_id, "researcher")
+        logger.info("G3: running Segment Producer agent")
+        mark_agent_running(conn, job_id, "segment_producer")
         research_output = self._run_researcher(
             job_id=job_id, topic=topic, safety_rules=safety_rules,
             channel_description=channel_description,
             language=language, tone=tone, content_angle=content_angle,
             output_dir=output_dir, assets_cache=assets_cache,
         )
-        self._complete_agent(conn, assets_cache, job_id, "researcher")
+        self._complete_agent(conn, assets_cache, job_id, "segment_producer")
 
-        # Format Validator: validate content_direction from Researcher
+        # Format Validator: validate content_direction from Segment Producer
         cp_config = load_settings().content_planning
         if cp_config:
             validated = validate_content_direction(
@@ -543,7 +543,7 @@ class Orchestrator:
         research_brief_path = ""
         if assets_cache:
             from clipper_agency.core.paths import agent_dir as get_agent_dir
-            rd = get_agent_dir(assets_cache, job_id, "researcher")
+            rd = get_agent_dir(assets_cache, job_id, "segment_producer")
             cp = Path(rd) / "research_contract.json"
             bp = Path(rd) / "research_brief.md"
             if cp.exists():
@@ -664,8 +664,8 @@ class Orchestrator:
                dict[str, Any], dict[str, Any]]:
         """Load completed upstream agent outputs."""
         loader = self._load_agent_output
-        research = loader(assets_cache, job_id, "researcher") \
-            if from_idx > PIPELINE_ORDER.index("researcher") else {}
+        research = loader(assets_cache, job_id, "segment_producer") \
+            if from_idx > PIPELINE_ORDER.index("segment_producer") else {}
         script = loader(assets_cache, job_id, "scriptwriter") \
             if from_idx > PIPELINE_ORDER.index("scriptwriter") else {}
         voice = loader(assets_cache, job_id, "voice_producer") \
@@ -703,7 +703,7 @@ class Orchestrator:
         assets_cache: str, output_dir: str, from_idx: int,
     ) -> tuple[dict[str, Any] | None, dict | None]:
         """Run research if needed. Returns (research_output, abort)."""
-        if from_idx > PIPELINE_ORDER.index("researcher"):
+        if from_idx > PIPELINE_ORDER.index("segment_producer"):
             return None, None
         research_result = self._stage_research(
             conn, job_id, topic, safety_rules, channel_description,
@@ -1029,7 +1029,7 @@ class Orchestrator:
                         safety_rules: list[str] | None = None,
                         output_dir: str = "outputs",
                         **kwargs: Any) -> dict[str, Any]:
-        agent = ResearcherAgent()
+        agent = SegmentProducerAgent()
         return agent.execute(job_id=job_id, topic=topic,
                              safety_rules=safety_rules or [],
                              output_dir=output_dir, **kwargs)

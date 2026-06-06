@@ -53,38 +53,38 @@ def test_agent_llm_config():
 
 def test_config_hierarchy_defaults():
     hierarchy = ConfigHierarchy()
-    assert hierarchy.get("researcher", "model") == "mimo-v2-flash"
+    assert hierarchy.get("segment_producer", "model") == "mimo-v2-flash"
 
 
 def test_config_hierarchy_niche_override():
     hierarchy = ConfigHierarchy()
-    hierarchy.set_niche_override("researcher", "model", "qwen3-32b")
-    assert hierarchy.get("researcher", "model") == "qwen3-32b"
+    hierarchy.set_niche_override("segment_producer", "model", "qwen3-32b")
+    assert hierarchy.get("segment_producer", "model") == "qwen3-32b"
 
 
 def test_config_hierarchy_job_override_wins():
     hierarchy = ConfigHierarchy()
-    hierarchy.set_niche_override("researcher", "model", "qwen3-32b")
-    hierarchy.set_job_override("researcher", "model", "deepseek-v3.2")
-    assert hierarchy.get("researcher", "model") == "deepseek-v3.2"
+    hierarchy.set_niche_override("segment_producer", "model", "qwen3-32b")
+    hierarchy.set_job_override("segment_producer", "model", "deepseek-v3.2")
+    assert hierarchy.get("segment_producer", "model") == "deepseek-v3.2"
 
 
 def test_agent_defaults_preset():
     ad = AgentDefaults()
-    assert "researcher" in ad.agents
-    assert ad.agents["researcher"]["model"] == "mimo-v2-flash"
+    assert "segment_producer" in ad.agents
+    assert ad.agents["segment_producer"]["model"] == "mimo-v2-flash"
 
 
 def test_config_hierarchy_account_override():
     """Account override takes precedence over niche but loses to job."""
     hierarchy = ConfigHierarchy()
-    hierarchy.set_niche_override("researcher", "model", "qwen3-32b")
-    hierarchy.set_account_override("researcher", "model", "gemini-2.5-flash")
+    hierarchy.set_niche_override("segment_producer", "model", "qwen3-32b")
+    hierarchy.set_account_override("segment_producer", "model", "gemini-2.5-flash")
     # Account beats niche
-    assert hierarchy.get("researcher", "model") == "gemini-2.5-flash"
+    assert hierarchy.get("segment_producer", "model") == "gemini-2.5-flash"
     # Job still beats account
-    hierarchy.set_job_override("researcher", "model", "deepseek-v3.2")
-    assert hierarchy.get("researcher", "model") == "deepseek-v3.2"
+    hierarchy.set_job_override("segment_producer", "model", "deepseek-v3.2")
+    assert hierarchy.get("segment_producer", "model") == "deepseek-v3.2"
 
 
 def test_config_hierarchy_account_override_for_unknown_agent():

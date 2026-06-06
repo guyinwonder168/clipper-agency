@@ -9,7 +9,7 @@ class AgentDefaults:
     PRESETS = {
         "budget_east": {
             "safety": {"model": "glm-4-9b", "temperature": 0.1, "max_tokens": 256},
-            "researcher": {"model": "mimo-v2-flash", "temperature": 0.3, "max_tokens": 2048},
+            "segment_producer": {"model": "mimo-v2-flash", "temperature": 0.3, "max_tokens": 2048},
             "scriptwriter": {"model": "qwen3-32b", "temperature": 0.7, "max_tokens": 2048},
             "voice_producer": {"model": None},  # No LLM for voice
             "visual_director": {"model": "mimo-v2-flash", "temperature": 0.5, "max_tokens": 1024},

@@ -381,7 +381,7 @@ def job_resume(job_id: int) -> None:
 
 # ── test-agent subcommand ──────────────────────────────────────────────────
 
-AGENT_NAMES = ["safety", "researcher", "scriptwriter", "voice", "visual", "composer", "reviewer"]
+AGENT_NAMES = ["safety", "segment_producer", "scriptwriter", "voice", "visual", "composer", "reviewer"]
 
 
 def _parse_script(script: str | None, fallback: list[dict]) -> list[dict]:
@@ -441,7 +441,7 @@ def _dispatch_test_agent(
 
     dispatch = {
         "safety": lambda: _run_safety(instance, topic, rules),
-        "researcher": lambda: _run_researcher(instance, topic, rules, max_results, output_dir),
+        "segment_producer": lambda: _run_researcher(instance, topic, rules, max_results, output_dir),
         "scriptwriter": lambda: _run_scriptwriter(instance, topic, rules, brief),
         "voice": lambda: _run_voice(instance, script, output_dir),
         "visual": lambda: _run_visual(instance, topic, script, auto_research_output, output_dir),
@@ -492,7 +492,7 @@ def test_agent(
     import json
     import time
     from clipper_agency.agents.safety import SafetyAgent
-    from clipper_agency.agents.researcher import ResearcherAgent
+    from clipper_agency.agents.segment_producer import SegmentProducerAgent
     from clipper_agency.agents.scriptwriter import ScriptwriterAgent
     from clipper_agency.agents.voice_producer import VoiceProducerAgent
     from clipper_agency.agents.visual_director import VisualDirectorAgent
@@ -504,7 +504,7 @@ def test_agent(
 
     agent_map = {
         "safety": SafetyAgent,
-        "researcher": ResearcherAgent,
+        "researcher": SegmentProducerAgent,
         "scriptwriter": ScriptwriterAgent,
         "voice": VoiceProducerAgent,
         "visual": VisualDirectorAgent,
@@ -523,7 +523,7 @@ def test_agent(
     auto_research_output: dict = {}
     if auto_research and agent in ("scriptwriter", "visual"):
         click.echo("\n[auto-research] Running researcher first...")
-        researcher = ResearcherAgent()
+        researcher = SegmentProducerAgent()
         auto_research_output = researcher.execute(
             job_id=0, topic=topic, safety_rules=rules,
             max_results=max_results, output_dir=resolved_output,

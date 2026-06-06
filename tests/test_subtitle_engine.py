@@ -1,10 +1,11 @@
-"""Tests for subtitle_engine — build_subtitle_overlays, build_hook_overlay, validate_tiktok_output."""
+"""Tests for subtitle_engine — build_subtitle_overlays, build_hook_overlay, build_keyword_captions, validate_tiktok_output."""
 
 import pytest
 
 from clipper_agency.rendering.contracts import CaptionOverlay
 from clipper_agency.rendering.subtitle_engine import (
     build_hook_overlay,
+    build_keyword_captions,
     build_subtitle_overlays,
     validate_tiktok_output,
 )
@@ -247,3 +248,149 @@ def test_tiktok_validation_flags_missing_pix_fmt():
     result = validate_tiktok_output(cmd)
 
     assert result["pix_fmt_yuv420p"] is False
+
+
+# ---------------------------------------------------------------------------
+# build_keyword_captions
+# ---------------------------------------------------------------------------
+
+
+def _make_timestamps(n: int, words_per_sec: float = 2.0) -> list[dict]:
+    """Generate n word timestamps at a fixed words-per-second rate."""
+    ts = []
+    for i in range(n):
+        start = i / words_per_sec
+        end = (i + 1) / words_per_sec
+        ts.append({"word": f"w{i}", "start": start, "end": end})
+    return ts
+
+
+class TestBuildKeywordCaptions:
+    """Keyword caption tests: format, positioning, beat alignment, style."""
+
+    def test_basic_two_beats(self):
+        """Two beats produce two keyword captions with correct timing."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 4], "caption_keywords": ["hello", "world"]},
+            {"beat_id": 2, "word_range": [4, 8], "caption_keywords": ["foo", "bar"]},
+        ]
+        timestamps = _make_timestamps(8)
+
+        result = build_keyword_captions(narrative, timestamps)
+
+        assert len(result) == 2
+        assert result[0].text == "hello world"
+        assert result[0].start_seconds == 0.0
+        assert result[0].end_seconds == pytest.approx(2.0)
+        assert result[1].text == "foo bar"
+        assert result[1].start_seconds == pytest.approx(2.0)
+        assert result[1].end_seconds == pytest.approx(4.0)
+
+    def test_max_6_words_truncation(self):
+        """Keywords beyond 6 are truncated."""
+        narrative = [
+            {
+                "beat_id": 1,
+                "word_range": [0, 5],
+                "caption_keywords": [f"kw{i}" for i in range(10)],
+            },
+        ]
+        timestamps = _make_timestamps(5)
+
+        result = build_keyword_captions(narrative, timestamps)
+
+        assert len(result) == 1
+        words = result[0].text.split()
+        assert len(words) == 6
+
+    def test_position_is_bottom(self):
+        """All keyword captions have position='bottom'."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 3], "caption_keywords": ["test"]},
+        ]
+        timestamps = _make_timestamps(3)
+
+        result = build_keyword_captions(narrative, timestamps)
+
+        assert result[0].position == "bottom"
+
+    def test_style_is_keyword(self):
+        """All keyword captions have style='keyword'."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 3], "caption_keywords": ["test"]},
+        ]
+        timestamps = _make_timestamps(3)
+
+        result = build_keyword_captions(narrative, timestamps)
+
+        assert result[0].style == "keyword"
+
+    def test_beat_alignment_keywords_change_at_boundaries(self):
+        """Each beat gets different keywords aligned to its word range."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 3], "caption_keywords": ["intro"]},
+            {"beat_id": 2, "word_range": [3, 7], "caption_keywords": ["main", "story"]},
+            {"beat_id": 3, "word_range": [7, 10], "caption_keywords": ["closing"]},
+        ]
+        timestamps = _make_timestamps(10)
+
+        result = build_keyword_captions(narrative, timestamps)
+
+        assert len(result) == 3
+        # Each caption has different text
+        assert result[0].text == "intro"
+        assert result[1].text == "main story"
+        assert result[2].text == "closing"
+        # Timings are sequential (no gaps from continuous word timestamps)
+        assert result[1].start_seconds == pytest.approx(result[0].end_seconds)
+
+    def test_empty_narrative_returns_empty(self):
+        """Empty narrative_structure returns empty list."""
+        timestamps = _make_timestamps(5)
+        assert build_keyword_captions([], timestamps) == []
+
+    def test_empty_timestamps_returns_empty(self):
+        """Empty timestamps returns empty list."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 3], "caption_keywords": ["test"]},
+        ]
+        assert build_keyword_captions(narrative, []) == []
+
+    def test_none_inputs_returns_empty(self):
+        """None inputs return empty list."""
+        assert build_keyword_captions([], []) == []
+
+    def test_missing_word_range_skipped(self):
+        """Beat without word_range is skipped."""
+        narrative = [
+            {"beat_id": 1, "caption_keywords": ["test"]},
+        ]
+        timestamps = _make_timestamps(5)
+
+        result = build_keyword_captions(narrative, timestamps)
+
+        assert result == []
+
+    def test_missing_caption_keywords_skipped(self):
+        """Beat without caption_keywords is skipped."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 3]},
+        ]
+        timestamps = _make_timestamps(5)
+
+        result = build_keyword_captions(narrative, timestamps)
+
+        assert result == []
+
+    def test_word_range_out_of_bounds_clamped(self):
+        """Word range exceeding timestamp count is clamped."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 100], "caption_keywords": ["ok"]},
+        ]
+        timestamps = _make_timestamps(5)
+
+        result = build_keyword_captions(narrative, timestamps)
+
+        assert len(result) == 1
+        # end_time should be from last timestamp, not crash
+        assert result[0].end_seconds > 0

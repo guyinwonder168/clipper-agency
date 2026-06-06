@@ -26,14 +26,14 @@ def _create_debug_job(tmp_path, monkeypatch):
 
     job_cache = assets_cache / f"job_{job_id}"
     final_dir = output_dir / f"job_{job_id}"
-    (job_cache / "agents" / "researcher").mkdir(parents=True)
+    (job_cache / "agents" / "segment_producer").mkdir(parents=True)
     (job_cache / "agents" / "voice_producer" / "voices").mkdir(parents=True)
     (job_cache / "agents" / "composer").mkdir(parents=True)
     (job_cache / "gates").mkdir(parents=True)
     final_dir.mkdir(parents=True)
 
     (job_cache / "manifest.json").write_text(json.dumps({"job_id": job_id}), encoding="utf-8")
-    (job_cache / "agents" / "researcher" / "research_brief.md").write_text("# Research brief", encoding="utf-8")
+    (job_cache / "agents" / "segment_producer" / "research_brief.md").write_text("# Research brief", encoding="utf-8")
     (job_cache / "agents" / "voice_producer" / "provider_attempts.json").write_text(
         json.dumps([{"provider": "gemini_tts", "status": "http_403"}]),
         encoding="utf-8",
@@ -114,7 +114,7 @@ def test_job_debug_commands_missing_job_return_nonzero(tmp_path, monkeypatch):
 # ── Phase 13: job-retry / job-resume CLI ────────────────────────────
 
 PIPELINE_AGENTS = [
-    "safety", "researcher", "scriptwriter",
+    "safety", "segment_producer", "scriptwriter",
     "voice_producer", "visual_director", "composer", "reviewer",
 ]
 
@@ -132,7 +132,7 @@ def _create_failed_pipeline_job(tmp_path, monkeypatch):
         create_agent_state(conn, job_id, name)
 
     # Upstream agents completed
-    for name in ["safety", "researcher", "scriptwriter", "voice_producer"]:
+    for name in ["safety", "segment_producer", "scriptwriter", "voice_producer"]:
         mark_agent_completed(conn, job_id, name)
 
     # visual_director completed

@@ -116,7 +116,7 @@ def _inventory_roots(roots: list[Path]) -> list[dict[str, Any]]:
 
 def _previews(cache_root: Path) -> dict[str, Any]:
     preview_paths = {
-        "research_brief.md": cache_root / "agents" / "researcher" / "research_brief.md",
+        "research_brief.md": cache_root / "agents" / "segment_producer" / "research_brief.md",
         "provider_attempts.json": cache_root / "agents" / "voice_producer" / "provider_attempts.json",
         "ffmpeg_stderr.log": cache_root / "agents" / "composer" / "ffmpeg_stderr.log",
     }

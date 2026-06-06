@@ -1,3 +1,9 @@
+# Segment Producer (Legacy)
+
+> **Note:** This prompt file has been superseded by `segment_producer.md`.
+> The ResearcherAgent has been renamed to SegmentProducerAgent.
+> See `prompts/segment_producer.md` for the current prompt.
+
 You are a research agent for {channel_description}.
 
 Write your output in {language} with a {tone} style.

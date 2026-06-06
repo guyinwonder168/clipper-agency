@@ -275,7 +275,7 @@ def _create_debug_job(tmp_path):
     mark_agent_failed(conn, job_id, "voice_producer", "All TTS providers failed")
 
     job_cache = assets_cache / f"job_{job_id}"
-    (job_cache / "agents" / "researcher").mkdir(parents=True)
+    (job_cache / "agents" / "segment_producer").mkdir(parents=True)
     (job_cache / "agents" / "voice_producer").mkdir(parents=True)
     (job_cache / "agents" / "composer").mkdir(parents=True)
     (job_cache / "agents" / "voice_producer" / "voices").mkdir(parents=True)
@@ -283,7 +283,7 @@ def _create_debug_job(tmp_path):
     (output_dir / f"job_{job_id}").mkdir(parents=True)
 
     (job_cache / "manifest.json").write_text(json.dumps({"job_id": job_id}), encoding="utf-8")
-    (job_cache / "agents" / "researcher" / "research_brief.md").write_text("# Brief\nUseful context", encoding="utf-8")
+    (job_cache / "agents" / "segment_producer" / "research_brief.md").write_text("# Brief\nUseful context", encoding="utf-8")
     (job_cache / "agents" / "voice_producer" / "provider_attempts.json").write_text(
         json.dumps([{"provider": "elevenlabs", "status": "missing_key"}]),
         encoding="utf-8",
@@ -379,11 +379,11 @@ def _create_retryable_job(tmp_path):
                             "assets_cache": str(assets_cache),
                         })
 
-    for name in ["safety", "researcher", "scriptwriter",
+    for name in ["safety", "segment_producer", "scriptwriter",
                  "voice_producer", "visual_director", "composer", "reviewer"]:
         create_agent_state(conn, job_id, name)
 
-    for name in ["safety", "researcher", "scriptwriter",
+    for name in ["safety", "segment_producer", "scriptwriter",
                  "voice_producer", "visual_director"]:
         mark_agent_completed(conn, job_id, name)
 

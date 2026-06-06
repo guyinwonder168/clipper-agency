@@ -9,8 +9,8 @@ from clipper_agency.core.artifacts import read_json
 from clipper_agency.core.paths import (
     agent_dir,
     agent_output_file,
-    researcher_brief_file,
-    researcher_contract_file,
+    segment_producer_brief_file,
+    segment_producer_contract_file,
 )
 
 
@@ -133,11 +133,11 @@ def validate_agent_cache(
         return ValidationResult(False, [f"output.json corrupt for {agent_name}: {exc}"])
 
     # 2. Agent-specific artifact checks.
-    if agent_name == "researcher":
+    if agent_name in ("researcher", "segment_producer"):
         r1 = validate_research_contract(
-            researcher_contract_file(assets_cache, job_id))
+            segment_producer_contract_file(assets_cache, job_id))
         r2 = validate_research_brief(
-            researcher_brief_file(assets_cache, job_id))
+            segment_producer_brief_file(assets_cache, job_id))
         all_issues.extend(r1.issues)
         all_issues.extend(r2.issues)
 
