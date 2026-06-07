@@ -533,13 +533,13 @@ class TestComposerTransitions:
         assert "concat=n=2:v=1" in fc
 
     def test_xfade_offset_calculated_correctly(self):
-        """scene[0] dur=5, crossfade dur=0.3 → offset=5-0.3-0.1=4.6."""
+        """scene[0] dur=5, crossfade dur=0.5 → offset=5-0.5-0.1=4.4."""
         cmd = _build_two_scene_cmd(
             {"target_duration": 5, "transition_out": "crossfade"},
             {"target_duration": 5},
         )
         fc = _filter_complex(cmd)
-        assert "offset=4.6" in fc
+        assert "offset=4.4" in fc
 
     def test_xfade_uses_custom_transition_duration(self):
         """Asset with transition_duration override uses that value."""

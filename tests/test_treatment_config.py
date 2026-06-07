@@ -44,7 +44,7 @@ class TestTreatmentConfig:
         assert tr is not None
         assert isinstance(tr, TransitionDef)
         assert tr.name == "crossfade"
-        assert tr.default_duration == 0.3
+        assert tr.default_duration == 0.5
         assert tr.ffmpeg_filter is not None
 
     def test_get_transition_hard_cut_null_filter(self, config):
