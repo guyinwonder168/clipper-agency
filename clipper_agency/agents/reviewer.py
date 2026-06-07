@@ -6,7 +6,7 @@ from typing import Any
 
 from clipper_agency.agents.base import BaseAgent
 from clipper_agency.agents.prompts import PROMPTS_DIR, load_prompt
-from clipper_agency.config.loader import load_settings
+from clipper_agency.config.loader import get_agent_config
 from clipper_agency.llm.client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
@@ -173,11 +173,11 @@ class ReviewerAgent(BaseAgent):
         results_text = _format_programmatic_results(programmatic_results)
 
         # 3. LLM review
-        settings = load_settings()
+        agent_cfg = get_agent_config("reviewer")
         llm = OpenRouterClient()
         prompt = load_prompt("reviewer", REVIEWER_PROMPT, PROMPTS_DIR)
         response = llm.chat(
-            model=settings.reviewer_model,
+            model=agent_cfg["model"],
             messages=[
                 {
                     "role": "system",
@@ -195,8 +195,8 @@ class ReviewerAgent(BaseAgent):
                     ),
                 },
             ],
-            temperature=0.2,
-            max_tokens=1024,
+            temperature=agent_cfg["temperature"],
+            max_completion_tokens=agent_cfg.get("max_completion_tokens"),
         )
         review = self._parse_review_response(response["content"])
         logger.info(

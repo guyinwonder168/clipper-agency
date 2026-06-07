@@ -1,0 +1,78 @@
+"""Tests for config/model_cache — OpenRouter model metadata caching."""
+
+import json
+import time
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+
+def test_get_model_metadata_returns_cached_data(tmp_path, monkeypatch):
+    """get_model_metadata reads from cache file."""
+    from clipper_agency.config.model_cache import get_model_metadata
+
+    cache_data = {
+        "fetched_at": time.time(),
+        "models": {
+            "test-model": {"context_length": 8192, "max_completion_tokens": 4096},
+        },
+    }
+    cache_file = tmp_path / "model_cache.json"
+    cache_file.write_text(json.dumps(cache_data))
+    monkeypatch.setattr("clipper_agency.config.model_cache._CACHE_PATH", cache_file)
+
+    result = get_model_metadata("test-model")
+    assert result is not None
+    assert result["max_completion_tokens"] == 4096
+
+
+def test_get_model_metadata_returns_none_for_unknown(tmp_path, monkeypatch):
+    """Unknown model name returns None."""
+    from clipper_agency.config.model_cache import get_model_metadata
+
+    cache_file = tmp_path / "model_cache.json"
+    cache_file.write_text(json.dumps({"fetched_at": time.time(), "models": {}}))
+    monkeypatch.setattr("clipper_agency.config.model_cache._CACHE_PATH", cache_file)
+
+    assert get_model_metadata("nonexistent-model") is None
+
+
+def test_refresh_model_cache_writes_file(tmp_path, monkeypatch):
+    """refresh_model_cache fetches API and writes cache."""
+    from clipper_agency.config.model_cache import refresh_model_cache
+
+    cache_file = tmp_path / "model_cache.json"
+    monkeypatch.setattr("clipper_agency.config.model_cache._CACHE_PATH", cache_file)
+
+    mock_response = {
+        "data": [
+            {"id": "test-model", "context_length": 8192, "max_completion_tokens": 4096},
+        ],
+    }
+    with patch("httpx.Client") as mock_client_cls:
+        mock_client = mock_client_cls.return_value.__enter__.return_value
+        mock_client.get.return_value.json.return_value = mock_response
+        mock_client.get.return_value.raise_for_status.return_value = None
+
+        refresh_model_cache(force=True)
+
+    assert cache_file.exists()
+    data = json.loads(cache_file.read_text())
+    assert "test-model" in data["models"]
+    assert data["models"]["test-model"]["max_completion_tokens"] == 4096
+
+
+def test_cache_not_refreshed_when_fresh(tmp_path, monkeypatch):
+    """Cache < 7 days old is not refreshed (unless force)."""
+    from clipper_agency.config.model_cache import refresh_model_cache
+
+    cache_file = tmp_path / "model_cache.json"
+    fresh_data = {"fetched_at": time.time(), "models": {}}
+    cache_file.write_text(json.dumps(fresh_data))
+    monkeypatch.setattr("clipper_agency.config.model_cache._CACHE_PATH", cache_file)
+
+    with patch("httpx.Client") as mock_client_cls:
+        refresh_model_cache(force=False)
+        # httpx.Client should NOT be instantiated for fresh cache
+        mock_client_cls.assert_not_called()

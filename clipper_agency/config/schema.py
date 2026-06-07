@@ -94,12 +94,12 @@ class AppSettings(BaseSettings):
     assets_cache: Path = Field(default=Path("assets/cache"))
     output_dir: Path = Field(default=Path("outputs"))
 
-    # Per-agent LLM models (overridable via .env)
-    safety_model: str = "mimo-v2-flash"
-    researcher_model: str = "mimo-v2-flash"
-    scriptwriter_model: str = "mimo-v2-flash"
-    visual_director_model: str = "mimo-v2-flash"
-    reviewer_model: str = "mimo-v2-flash"
+    # Per-agent LLM models (overridable via .env, empty = use hierarchy preset)
+    safety_model: str = ""
+    researcher_model: str = ""
+    scriptwriter_model: str = ""
+    visual_director_model: str = ""
+    reviewer_model: str = ""
 
     # Default LLM
     llm: LLMConfig = Field(default_factory=LLMConfig)

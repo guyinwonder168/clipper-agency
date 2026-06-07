@@ -23,7 +23,7 @@ class OpenRouterClient:
         model: str,
         messages: list[dict[str, str]],
         temperature: float = 0.7,
-        max_tokens: int = 1024,
+        max_completion_tokens: int | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Send a chat completion request.
@@ -54,7 +54,8 @@ class OpenRouterClient:
                     "model": model,
                     "messages": messages,
                     "temperature": temperature,
-                    "max_tokens": max_tokens,
+                    "reasoning_effort": "none",
+                    **({"max_completion_tokens": max_completion_tokens} if max_completion_tokens is not None else {}),
                     **kwargs,
                 },
             )

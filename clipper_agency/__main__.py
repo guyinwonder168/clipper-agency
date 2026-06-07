@@ -7,7 +7,7 @@ import click
 from dotenv import load_dotenv
 
 from clipper_agency import __version__
-from clipper_agency.config.loader import load_niche, load_settings
+from clipper_agency.config.loader import get_agent_config, load_niche, load_settings
 from clipper_agency.core.logging import setup_logging, get_logger
 from clipper_agency.db.queries import PIPELINE_ORDER
 from clipper_agency.orchestrator.engine import Orchestrator
@@ -51,13 +51,14 @@ def _log_startup_info() -> None:
     logger.info("Clipper Agency v%s starting", __version__)
     logger.info("DB path: %s", settings.db_path)
     logger.info("Output dir: %s", settings.output_dir)
+    agent_names = ["safety", "segment_producer", "scriptwriter", "visual_director", "reviewer"]
+    agent_models = []
+    for name in agent_names:
+        cfg = get_agent_config(name)
+        agent_models.append(cfg["model"] or "none")
     logger.info(
         "Agent models: safety=%s segment_producer=%s scriptwriter=%s visual_director=%s reviewer=%s",
-        settings.safety_model,
-        settings.researcher_model,
-        settings.scriptwriter_model,
-        settings.visual_director_model,
-        settings.reviewer_model,
+        *agent_models,
     )
     # API key status (presence only — no values leaked)
     for key in [

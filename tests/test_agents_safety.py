@@ -115,6 +115,10 @@ class TestSafetyExecute:
         assert result["requires_cautious_wording"] is True
 
     def test_execute_passes_safety_rules_to_llm(self, mocker):
+        mocker.patch(
+            "clipper_agency.agents.safety.get_agent_config",
+            return_value={"model": "glm-4.7-flash", "temperature": 0.1, "max_completion_tokens": None},
+        )
         mock_chat = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",
             return_value=self._mock_chat(
@@ -132,8 +136,8 @@ class TestSafetyExecute:
         user_content = messages[1]["content"]
         assert "no_defamation" in user_content
         assert call_args.kwargs["temperature"] == 0.1
-        assert call_args.kwargs["max_tokens"] == 256
-        assert call_args.kwargs["model"] == "mimo-v2-flash"
+        assert call_args.kwargs["max_completion_tokens"] is None
+        assert call_args.kwargs["model"] == "glm-4.7-flash"
 
     def test_execute_defaults_empty_safety_rules(self, mocker):
         mock_chat = mocker.patch(
@@ -149,6 +153,10 @@ class TestSafetyExecute:
         mock_chat.assert_called_once()
 
     def test_execute_calls_llm_with_correct_model(self, mocker):
+        mocker.patch(
+            "clipper_agency.agents.safety.get_agent_config",
+            return_value={"model": "glm-4.7-flash", "temperature": 0.1, "max_completion_tokens": None},
+        )
         mock_chat = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",
             return_value=self._mock_chat(
@@ -157,7 +165,7 @@ class TestSafetyExecute:
         )
         agent = SafetyAgent()
         agent.execute(job_id=1, topic="Test")
-        assert mock_chat.call_args.kwargs["model"] == "mimo-v2-flash"
+        assert mock_chat.call_args.kwargs["model"] == "glm-4.7-flash"
 
     def test_execute_uses_prompt_file_when_available(self, mocker, tmp_path):
         prompts_dir = tmp_path / "prompts"

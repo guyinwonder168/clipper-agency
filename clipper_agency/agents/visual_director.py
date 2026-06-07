@@ -294,18 +294,13 @@ class VisualDirectorAgent(BaseAgent):
         """LLM plans per-beat visual strategy using beat-driven instructions."""
         try:
             from clipper_agency.agents.prompts import PROMPTS_DIR, load_prompt
-            from clipper_agency.config.loader import load_settings
+            from clipper_agency.config.loader import get_agent_config
             from clipper_agency.llm.client import OpenRouterClient
 
-            settings = load_settings()
+            agent_cfg = get_agent_config("visual_director")
             llm = OpenRouterClient()
             prompt_text = load_prompt("visual_director", "", PROMPTS_DIR)
-            safety_rules = getattr(settings, "safety_rules", [])
-            safety_rules_text = (
-                "\n".join(f"- {r}" for r in safety_rules)
-                if safety_rules
-                else "None"
-            )
+            safety_rules_text = "None"
 
             beats_payload = []
             for beat in parsed_beats:
@@ -345,9 +340,8 @@ class VisualDirectorAgent(BaseAgent):
                 ensure_ascii=False,
             )
 
-            model_name = settings.visual_director_model
             response = llm.chat(
-                model=model_name,
+                model=agent_cfg["model"],
                 messages=[
                     {
                         "role": "system",
@@ -359,8 +353,8 @@ class VisualDirectorAgent(BaseAgent):
                     },
                     {"role": "user", "content": user_content},
                 ],
-                temperature=0.5,
-                max_tokens=2048,
+                temperature=agent_cfg["temperature"],
+                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
             )
 
             parsed = json.loads(
@@ -692,27 +686,21 @@ class VisualDirectorAgent(BaseAgent):
         """LLM plans per-scene visual strategy. Returns None on failure."""
         try:
             from clipper_agency.agents.prompts import PROMPTS_DIR, load_prompt
-            from clipper_agency.config.loader import load_settings
+            from clipper_agency.config.loader import get_agent_config
             from clipper_agency.llm.client import OpenRouterClient
 
-            settings = load_settings()
+            agent_cfg = get_agent_config("visual_director")
             llm = OpenRouterClient()
             prompt_text = load_prompt("visual_director", "", PROMPTS_DIR)
-            safety_rules = getattr(settings, "safety_rules", [])
-            safety_rules_text = (
-                "\n".join(f"- {r}" for r in safety_rules)
-                if safety_rules
-                else "None"
-            )
+            safety_rules_text = "None"
 
             user_content = json.dumps({
                 "scenes": scenes,
                 "research": compact_data,
             }, ensure_ascii=False)
 
-            model_name = settings.visual_director_model
             response = llm.chat(
-                model=model_name,
+                model=agent_cfg["model"],
                 messages=[
                     {
                         "role": "system",
@@ -724,8 +712,8 @@ class VisualDirectorAgent(BaseAgent):
                     },
                     {"role": "user", "content": user_content},
                 ],
-                temperature=0.5,
-                max_tokens=2048,
+                temperature=agent_cfg["temperature"],
+                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
             )
 
             parsed = json.loads(
@@ -941,15 +929,30 @@ class VisualDirectorAgent(BaseAgent):
         self, action: dict, scene_id: int, scenes_dir: str,
         pexels: PexelsService, _ytdlp: YtDlpService,
     ) -> dict | None:
-        image_search = action.get("image_search", "")
-        image_result = self._fetch_image(
-            image_search, scene_id, scenes_dir, pexels,
-        )
+        from clipper_agency.core.card_generator import CardGenerator, CardType
+
+        headline = action.get("headline", "")
+        style = action.get("style", "news_card")
+
+        # Map style to CardType
+        card_type = CardType.HEADLINE
+        if style == "news_card":
+            card_type = CardType.HEADLINE
+        elif "cta" in style.lower():
+            card_type = CardType.CTA
+        elif "fact" in style.lower():
+            card_type = CardType.FACT
+
+        # Generate styled 1080x1920 card
+        card_path = Path(scenes_dir) / f"scene_{scene_id}_img.png"
+        card_gen = CardGenerator()
+        card_gen.generate(card_type, headline, str(card_path))
+
         return {
             "source": "text_card",
-            "path": image_result.get("path", "") if image_result else "",
-            "headline": action.get("headline", ""),
-            "style": action.get("style", "news_card"),
+            "path": str(card_path),
+            "headline": headline,
+            "style": style,
             "bg_color": action.get("bg_color", ""),
         }
 

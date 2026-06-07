@@ -6,7 +6,7 @@ from typing import Any
 
 from clipper_agency.agents.base import BaseAgent
 from clipper_agency.agents.prompts import PROMPTS_DIR, load_prompt
-from clipper_agency.config.loader import load_settings
+from clipper_agency.config.loader import get_agent_config
 from clipper_agency.core.artifacts import write_json, write_text
 from clipper_agency.core.paths import agent_input_file, agent_output_file, agent_dir
 from clipper_agency.llm.client import OpenRouterClient
@@ -49,11 +49,11 @@ class SafetyAgent(BaseAgent):
         if assets_cache:
             write_json(agent_input_file(assets_cache, job_id, self.agent_name), input_data)
 
-        settings = load_settings()
+        settings_cfg = get_agent_config("safety")
         llm = OpenRouterClient()
         prompt = load_prompt("safety", SAFETY_PROMPT, PROMPTS_DIR)
         response = llm.chat(
-            model=settings.safety_model,
+            model=settings_cfg["model"],
             messages=[
                 {"role": "system", "content": prompt},
                 {
@@ -61,8 +61,8 @@ class SafetyAgent(BaseAgent):
                     "content": f"Topic: {topic}\nRules: {rules}",
                 },
             ],
-            temperature=0.1,
-            max_tokens=256,
+            temperature=settings_cfg["temperature"],
+            max_completion_tokens=settings_cfg.get("max_completion_tokens"),
         )
         result = self._parse_response(response["content"])
         if assets_cache:

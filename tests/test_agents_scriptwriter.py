@@ -144,13 +144,17 @@ class TestScriptwriterExecute:
         assert "mark_rumors_as_unconfirmed" in system_content
 
     def test_execute_model_and_temperature(self, mocker):
+        mocker.patch(
+            "clipper_agency.agents.scriptwriter.get_agent_config",
+            return_value={"model": "qwen3-32b", "temperature": 0.7, "max_completion_tokens": None},
+        )
         mock_chat = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",
             return_value=self._mock_chat(MOCK_VOICEOVER_RESPONSE),
         )
         agent = ScriptwriterAgent()
         agent.execute(job_id=3, topic="Topic", research_brief="Brief")
-        assert mock_chat.call_args.kwargs["model"] == "mimo-v2-flash"
+        assert mock_chat.call_args.kwargs["model"] == "qwen3-32b"
         assert mock_chat.call_args.kwargs["temperature"] == 0.7
 
     def test_execute_handles_llm_failure(self, mocker):

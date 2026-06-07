@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from clipper_agency.agents.base import BaseAgent
-from clipper_agency.config.loader import load_settings
+from clipper_agency.config.loader import get_agent_config, load_settings
 from clipper_agency.core.artifacts import write_json, write_text
 from clipper_agency.core.paths import (
     agent_dir,
@@ -395,9 +395,10 @@ class SegmentProducerAgent(BaseAgent):
 
         settings = load_settings()
         cp_config = settings.content_planning
+        agent_cfg = get_agent_config("segment_producer")
         llm = OpenRouterClient()
         response = llm.chat(
-            model=settings.researcher_model,
+            model=agent_cfg["model"],
             messages=[
                 {
                     "role": "system",
@@ -419,8 +420,8 @@ class SegmentProducerAgent(BaseAgent):
                     "content": f"Research topic: {topic}",
                 },
             ],
-            temperature=0.3,
-            max_tokens=1024,
+            temperature=agent_cfg["temperature"],
+            max_completion_tokens=agent_cfg.get("max_completion_tokens"),
         )
         parsed = self._parse_synthesis_response(response["content"])
         return {

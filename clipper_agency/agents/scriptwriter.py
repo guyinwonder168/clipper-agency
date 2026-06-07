@@ -7,7 +7,7 @@ from typing import Any
 
 from clipper_agency.agents.base import BaseAgent
 from clipper_agency.agents.prompts import PROMPTS_DIR, load_prompt
-from clipper_agency.config.loader import load_settings
+from clipper_agency.config.loader import get_agent_config
 from clipper_agency.core.artifacts import write_json, write_text
 from clipper_agency.core.paths import agent_dir, agent_input_file, agent_output_file
 from clipper_agency.llm.client import OpenRouterClient
@@ -157,16 +157,16 @@ class ScriptwriterAgent(BaseAgent):
         )
         user_content = f"Topic: {topic}\n\nResearch Brief: {research_brief}"
 
-        settings = load_settings()
+        agent_cfg = get_agent_config("scriptwriter")
         llm = OpenRouterClient()
         response = llm.chat(
-            model=settings.scriptwriter_model,
+            model=agent_cfg["model"],
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            temperature=0.7,
-            max_tokens=2048,
+            temperature=agent_cfg["temperature"],
+            max_completion_tokens=agent_cfg.get("max_completion_tokens"),
         )
 
         parsed = self._parse_script_response(response["content"])

@@ -239,6 +239,10 @@ class TestReviewerExecute:
         assert "Best caption ever" in user_content
 
     def test_execute_llm_config(self, mocker):
+        mocker.patch(
+            "clipper_agency.agents.reviewer.get_agent_config",
+            return_value={"model": "gemini-2.5-flash", "temperature": 0.2, "max_completion_tokens": None},
+        )
         mock_chat = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",
             return_value=self._mock_chat(MOCK_REVIEW_PASS),
@@ -250,7 +254,7 @@ class TestReviewerExecute:
             script=[{"scene": 1, "text": "Test", "duration": 3}],
             caption="Caption",
         )
-        assert mock_chat.call_args.kwargs["model"] == "mimo-v2-flash"
+        assert mock_chat.call_args.kwargs["model"] == "gemini-2.5-flash"
         assert mock_chat.call_args.kwargs["temperature"] == 0.2
 
     def test_execute_uses_prompt_file_when_available(self, mocker, tmp_path):
