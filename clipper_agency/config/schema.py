@@ -1,6 +1,7 @@
 """Pydantic models for Clipper Agency configuration."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -93,12 +94,12 @@ class AppSettings(BaseSettings):
     assets_cache: Path = Field(default=Path("assets/cache"))
     output_dir: Path = Field(default=Path("outputs"))
 
-    # Per-agent LLM models (overridable via .env)
-    safety_model: str = "mimo-v2-flash"
-    researcher_model: str = "mimo-v2-flash"
-    scriptwriter_model: str = "mimo-v2-flash"
-    visual_director_model: str = "mimo-v2-flash"
-    reviewer_model: str = "mimo-v2-flash"
+    # Per-agent LLM models (overridable via .env, empty = use hierarchy preset)
+    safety_model: str = ""
+    researcher_model: str = ""
+    scriptwriter_model: str = ""
+    visual_director_model: str = ""
+    reviewer_model: str = ""
 
     # Default LLM
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -117,3 +118,142 @@ class AppSettings(BaseSettings):
 
     # Content planning
     content_planning: ContentPlanningConfig = Field(default_factory=ContentPlanningConfig)
+
+
+# ---------------------------------------------------------------------------
+# Audio-First Architecture models (v2.0 redesign)
+# ---------------------------------------------------------------------------
+
+
+# -- Segment Producer (Phase A) --
+
+
+class VerifiedFact(BaseModel):
+    """A fact with verification status and safe wording for narration."""
+
+    fact: str
+    source_url: str
+    confidence: Literal["verified", "likely", "unconfirmed"]
+    safe_wording: str
+
+
+class UnverifiedClaim(BaseModel):
+    """A claim that is unconfirmed, with safe wording label."""
+
+    claim: str
+    label: str  # "rumor", "unconfirmed", etc.
+    safe_wording: str
+
+
+class AssetCandidate(BaseModel):
+    """A candidate visual asset found during research."""
+
+    type: str  # "tiktok_clip", "screenshot", "photo", "text_card", "text_overlay"
+    url: str = ""  # Empty for text_overlay / text_card types
+    reason: str
+    source: str = ""  # "scrapecreators", "firecrawl", "pexels", "llm"
+    page_url: str = ""
+    title: str = ""
+    relevance_score: float = 0.0
+    provenance: str = ""  # "primary_clip", "supporting_context"
+    related_beat_id: int | None = None
+    story_id: str = ""
+    license_status: str = "unknown"
+
+
+class BeatFallback(BaseModel):
+    """Fallback visual plan when no primary asset is available."""
+
+    type: str  # "text_card", "ken_burns_photo", etc.
+    headline: str
+    image_search: str = ""
+
+
+class StoryBeat(BaseModel):
+    """A single beat in the edit blueprint produced by the Segment Producer."""
+
+    beat_id: int
+    role: str  # "hook", "main_claim", "evidence", "reaction", "closing_cta"
+    narration_goal: str
+    spoken_point: str
+    safe_wording: str
+    visual_must_show: str
+    visual_must_not_show: str
+    overlay_text: str
+    caption_keywords: list[str]
+    asset_candidates: list[AssetCandidate]
+    fallback: BeatFallback
+    evidence_source: str = ""
+    risk_note: str = ""
+
+
+class FormatDecision(BaseModel):
+    """Format selection made by the Segment Producer based on available assets."""
+
+    format: Literal[
+        "single_story_deep_dive",
+        "three_story_roundup",
+        "two_story_highlight",
+        "text_only",
+    ]
+    story_count: int
+    rationale: str
+    video_asset_ratio: float
+
+
+class ReferenceStyle(BaseModel):
+    """Reference style parameters derived from the Segment Producer's research."""
+
+    format: str
+    target_duration_sec: int
+    hook_duration_sec: float
+    avg_scene_duration_sec: float
+    caption_style: str
+    transition_style: str
+    visual_priority: list[str]
+
+
+# -- Voice Producer (Phase B) --
+
+
+class WordTimestamp(BaseModel):
+    """A single word with its start and end time in the voiceover audio."""
+
+    word: str
+    start: float
+    end: float
+
+
+class VoiceoverOutput(BaseModel):
+    """Output contract for the Voice Producer's single continuous voiceover."""
+
+    status: str
+    voiceover_path: str
+    voiceover_duration_sec: float
+    timestamps: list[WordTimestamp]
+    provider: str
+
+
+# -- Scriptwriter (Phase B) --
+
+
+class NarrativeBeat(BaseModel):
+    """A narrative section mapped to a story beat with word range."""
+
+    beat_id: int
+    section: str  # "hook", "story_1", "story_1_reveal", "closing_cta"
+    description: str
+    word_range: list[int]  # [start_word_index, end_word_index]
+    overlay_text: str
+    caption_keywords: list[str]
+
+
+# -- Reviewer (Phase D) --
+
+
+class QualityCheckResult(BaseModel):
+    """Result of a single quality check performed by the Reviewer."""
+
+    check_name: str
+    passed: bool
+    details: dict

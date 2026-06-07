@@ -60,14 +60,14 @@ def gate_result_file(assets_cache: str | Path, job_id: int, gate_name: str) -> s
     return str(Path(job_cache_dir(assets_cache, job_id)) / "gates" / f"{gate_name}.json")
 
 
-def researcher_brief_file(assets_cache: str | Path, job_id: int) -> str:
-    """Path to the Researcher human-readable Markdown brief."""
-    return str(Path(agent_dir(assets_cache, job_id, "researcher")) / "research_brief.md")
+def segment_producer_brief_file(assets_cache: str | Path, job_id: int) -> str:
+    """Path to the Segment Producer human-readable Markdown brief."""
+    return str(Path(agent_dir(assets_cache, job_id, "segment_producer")) / "research_brief.md")
 
 
-def researcher_contract_file(assets_cache: str | Path, job_id: int) -> str:
-    """Path to the Researcher normalized machine-readable contract."""
-    return str(Path(agent_dir(assets_cache, job_id, "researcher")) / "research_contract.json")
+def segment_producer_contract_file(assets_cache: str | Path, job_id: int) -> str:
+    """Path to the Segment Producer normalized machine-readable contract."""
+    return str(Path(agent_dir(assets_cache, job_id, "segment_producer")) / "research_contract.json")
 
 
 def voice_scene_file(assets_cache: str | Path, job_id: int, scene_id: int) -> str:

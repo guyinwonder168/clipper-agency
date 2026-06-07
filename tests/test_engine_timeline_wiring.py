@@ -1,4 +1,4 @@
-"""Tests for engine.py timeline pipeline wiring."""
+"""Tests for engine.py pipeline wiring (audio-first architecture)."""
 
 from unittest.mock import MagicMock, patch
 
@@ -165,76 +165,13 @@ class TestDurationGateWired:
 
 @patch("clipper_agency.orchestrator.engine.get_connection")
 @patch("clipper_agency.orchestrator.engine.initialize_schema")
-class TestTimelineReconcilerWired:
-    """Verify timeline reconciler fires after Voice Producer."""
+class TestAudioFirstDataFlow:
+    """Verify audio-first data flows between agents (no timeline)."""
 
-    def test_over_limit_timeline_fails_pipeline(
+    def test_stage_content_returns_2_tuple(
         self, mock_schema, mock_conn,
     ):
-        from clipper_agency.orchestrator.engine import Orchestrator
-        from clipper_agency.orchestrator.gates import GateResult
-
-        conn = MagicMock()
-        mock_conn.return_value = conn
-        mock_schema.return_value = None
-
-        # Hard limit = 35s but audio totals 60s
-        settings = _make_settings(target=30, hard=35)
-        script_scenes = [
-            {"scene": 1, "role": "opening_hook", "text": "hook",
-             "word_count": 5, "estimated_duration_sec": 5.0},
-            {"scene": 2, "role": "body", "text": "story one story one",
-             "word_count": 10, "estimated_duration_sec": 10.0},
-        ]
-        script_output = {"script": script_scenes, "caption": "test"}
-        voice_output = {
-            "audio_files": ["a1.wav", "a2.wav"],
-            "audio_metadata": [
-                {"scene": 1, "audio_path": "a1.wav",
-                 "audio_duration_sec": 20.0},
-                {"scene": 2, "audio_path": "a2.wav",
-                 "audio_duration_sec": 40.0},
-            ],
-            "status": "ok",
-        }
-        pass_gate = GateResult(passed=True, severity="info",
-                               message="ok", data={})
-
-        with (
-            patch(
-                "clipper_agency.orchestrator.engine.load_settings",
-                return_value=settings,
-            ),
-            patch(
-                "clipper_agency.orchestrator.engine.GateAudioValidation",
-                return_value=MagicMock(evaluate=MagicMock(
-                    return_value=pass_gate)),
-            ),
-            patch.object(
-                Orchestrator, "_run_content_scriptwriter",
-                return_value=script_output,
-            ),
-            patch.object(
-                Orchestrator, "_run_voice_producer",
-                return_value=voice_output,
-            ),
-            patch.object(Orchestrator, "_record_gate"),
-            patch.object(Orchestrator, "_complete_agent"),
-        ):
-            orch = Orchestrator.__new__(Orchestrator)
-            orch.db_path = "test.db"
-            result = orch._stage_content(
-                conn, 1, "topic", [], "channel",
-                "id", "casual", "gossip", {}, "cache", "out",
-            )
-
-        assert isinstance(result, dict)
-        assert result.get("status") == "failed"
-        assert result.get("failed_at") == "timeline_reconciler"
-
-    def test_within_limit_returns_timeline(
-        self, mock_schema, mock_conn,
-    ):
+        """_stage_content returns (script_output, voice_output) — no timeline."""
         from clipper_agency.orchestrator.engine import Orchestrator
         from clipper_agency.orchestrator.gates import GateResult
 
@@ -244,20 +181,14 @@ class TestTimelineReconcilerWired:
 
         settings = _make_settings(target=30, hard=60)
         script_scenes = [
-            {"scene": 1, "role": "opening_hook", "text": "hook",
-             "word_count": 5, "estimated_duration_sec": 5.0},
-            {"scene": 2, "role": "body", "text": "story one",
-             "word_count": 10, "estimated_duration_sec": 10.0},
+            {"scene": 1, "text": "hook", "word_count": 5,
+             "estimated_duration_sec": 5.0},
         ]
         script_output = {"script": script_scenes, "caption": "test"}
         voice_output = {
-            "audio_files": ["a1.wav", "a2.wav"],
-            "audio_metadata": [
-                {"scene": 1, "audio_path": "a1.wav",
-                 "audio_duration_sec": 5.0},
-                {"scene": 2, "audio_path": "a2.wav",
-                 "audio_duration_sec": 10.0},
-            ],
+            "voiceover_path": "voiceover.mp3",
+            "voiceover_duration_sec": 5.0,
+            "audio_files": ["voiceover.mp3"],
             "status": "ok",
         }
         pass_gate = GateResult(passed=True, severity="info",
@@ -291,39 +222,24 @@ class TestTimelineReconcilerWired:
                 "id", "casual", "gossip", {}, "cache", "out",
             )
 
-        # Should return tuple of 3 items: (script, voice, timeline)
+        # Should return tuple of 2 items: (script, voice)
         assert isinstance(result, tuple)
-        assert len(result) == 3
-        _script, _voice, timeline = result
-        assert len(timeline) == 2
-        assert timeline[0].target_duration_sec == 5.0
-        assert timeline[1].target_duration_sec == 10.0
+        assert len(result) == 2
+        _script, _voice = result
+        assert _voice["voiceover_path"] == "voiceover.mp3"
 
-
-@patch("clipper_agency.orchestrator.engine.get_connection")
-@patch("clipper_agency.orchestrator.engine.initialize_schema")
-class TestTimelinePassedToDownstream:
-    """Verify timeline kwarg reaches Visual Director and Composer."""
-
-    def test_composition_receives_timeline(
+    def test_composition_receives_voiceover_data(
         self, mock_schema, mock_conn,
     ):
+        """Verify Composer receives voiceover_path, timestamps, narrative_structure."""
         from clipper_agency.orchestrator.engine import Orchestrator
         from clipper_agency.orchestrator.gates import GateResult
-        from clipper_agency.orchestrator.timeline import TimelineItem
 
         conn = MagicMock()
         mock_conn.return_value = conn
         mock_schema.return_value = None
 
         settings = _make_settings()
-        timeline = [
-            TimelineItem(
-                scene=1, role="body", text="test", audio_path="a.wav",
-                audio_duration_sec=5.0, start_sec=0.0, end_sec=5.0,
-                target_duration_sec=5.0,
-            ),
-        ]
         visual_output = {
             "assets": [{"path": "img.jpg", "type": "image"}],
             "status": "ok",
@@ -331,6 +247,16 @@ class TestTimelinePassedToDownstream:
         compose_output = {"video_path": "out.mp4", "status": "ok"}
         pass_gate = GateResult(passed=True, severity="info",
                                message="ok", data={})
+
+        voice_output = {
+            "voiceover_path": "vo.mp3",
+            "timestamps": [{"word": "test", "start": 0.0, "end": 0.5}],
+            "audio_files": ["vo.mp3"],
+        }
+        script_output = {
+            "script": [],
+            "narrative_structure": [{"beat": 1}],
+        }
 
         with (
             patch(
@@ -350,7 +276,7 @@ class TestTimelinePassedToDownstream:
             patch.object(
                 Orchestrator, "_run_visual_director_phase",
                 return_value=visual_output,
-            ) as mock_vd,
+            ),
             patch.object(
                 Orchestrator, "_run_composer",
                 return_value=compose_output,
@@ -361,18 +287,14 @@ class TestTimelinePassedToDownstream:
             orch = Orchestrator.__new__(Orchestrator)
             orch.db_path = "test.db"
             result = orch._stage_composition(
-                conn, 1, "topic", {}, {"script": []},
-                {"audio_files": []}, "cache", "out",
-                timeline=timeline,
+                conn, 1, "topic", {}, script_output,
+                voice_output, "cache", "out",
             )
 
-        # Verify Visual Director received timeline
-        vd_call_kwargs = mock_vd.call_args
-        assert vd_call_kwargs.kwargs.get("timeline") == timeline
-
-        # Verify Composer received timeline
-        composer_call_kwargs = mock_composer.call_args
-        assert composer_call_kwargs.kwargs.get("timeline") == timeline
+        composer_kwargs = mock_composer.call_args.kwargs
+        assert composer_kwargs.get("voiceover_path") == "vo.mp3"
+        assert len(composer_kwargs.get("timestamps", [])) == 1
+        assert composer_kwargs.get("narrative_structure") == [{"beat": 1}]
 
 
 @patch("clipper_agency.orchestrator.engine.get_connection")
@@ -418,7 +340,7 @@ class TestRetryDurationGateStopsPipeline:
                 "clipper_agency.orchestrator.engine.PipelineOrder"
                 if False else
                 "clipper_agency.orchestrator.engine.PIPELINE_ORDER",
-                ["safety", "researcher", "scriptwriter",
+                ["safety", "segment_producer", "scriptwriter",
                  "voice_producer", "visual_director", "composer",
                  "reviewer"],
             ),

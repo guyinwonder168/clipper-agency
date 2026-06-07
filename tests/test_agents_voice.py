@@ -1,4 +1,4 @@
-"""Tests for VoiceProducerAgent."""
+"""Tests for VoiceProducerAgent — single audio generation."""
 
 from unittest import mock
 
@@ -15,103 +15,162 @@ class TestVoiceProducerName:
         assert agent.agent_name == "voice_producer"
 
 
-class TestVoiceProducerGenerate:
-    """Voice generation with mocked ElevenLabs."""
+class TestVoiceProducerSingleAudio:
+    """Voice generation via single continuous voiceover text."""
 
-    def test_execute_generates_voice_files(self, mocker, monkeypatch):
+    def test_execute_with_voiceover_text(self, mocker, monkeypatch):
         monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
-        mock_generate = mocker.patch(
-            "clipper_agency.services.elevenlabs.ElevenLabsService.generate_voice",
-            return_value="/tmp/output/job_1/scene_1.mp3",
+        mock_ts = mocker.patch(
+            "clipper_agency.services.elevenlabs.ElevenLabsService"
+            ".generate_voice_with_timestamps",
+            return_value=(b"audio_bytes", [
+                {"char": "H", "start": 0.0, "end": 0.05},
+                {"char": "i", "start": 0.05, "end": 0.1},
+            ]),
+        )
+        mocker.patch(
+            "clipper_agency.agents.voice_producer.VoiceProducerAgent"
+            "._probe_audio_duration",
+            return_value=0.5,
         )
         agent = VoiceProducerAgent()
-        script = [
-            {"scene": 1, "text": "Hey TikTok!", "duration": 3},
-            {"scene": 2, "text": "Did you hear about this?", "duration": 5},
-        ]
         result = agent.execute(
             job_id=1,
-            script=script,
-            output_dir="/tmp/output",
+            voiceover_text="Hi",
             voice_id="JBFqnCBsd6RMkjVDRZzb",
         )
-        assert result["status"] == "completed"
-        assert mock_generate.call_count == 2
-        assert len(result["audio_files"]) == 2
-        attempts = result.get("attempts", [])
-        assert len(attempts) == 1
-        assert attempts[0]["provider"] == "elevenlabs"
+        assert result["status"] == "success"
+        assert result["voiceover_path"]
+        assert result["voiceover_duration_sec"] == 0.5
+        assert result["provider"] == "elevenlabs"
+        mock_ts.assert_called_once()
 
-    def test_generate_passes_correct_params(self, mocker, monkeypatch):
+    def test_execute_passes_correct_params(self, mocker, monkeypatch):
         monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
-        mock_generate = mocker.patch(
-            "clipper_agency.services.elevenlabs.ElevenLabsService.generate_voice",
-            return_value="/tmp/output/job_1/scene_1.mp3",
+        mock_ts = mocker.patch(
+            "clipper_agency.services.elevenlabs.ElevenLabsService"
+            ".generate_voice_with_timestamps",
+            return_value=(b"audio", []),
+        )
+        mocker.patch(
+            "clipper_agency.agents.voice_producer.VoiceProducerAgent"
+            "._probe_audio_duration",
+            return_value=1.0,
         )
         agent = VoiceProducerAgent()
         agent.execute(
             job_id=1,
-            script=[{"scene": 1, "text": "Hello world", "duration": 5}],
-            output_dir="/tmp/output",
+            voiceover_text="Hello world",
             voice_id="voice123",
         )
-        mock_generate.assert_called_once_with(
-            "Hello world",
-            "voice123",
-            mock.ANY,
-        )
+        mock_ts.assert_called_once_with("Hello world", "voice123")
 
     def test_execute_defaults_voice_id(self, mocker, monkeypatch):
         monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
-        mock_generate = mocker.patch(
-            "clipper_agency.services.elevenlabs.ElevenLabsService.generate_voice",
-            return_value="/tmp/output/job_1/scene_1.mp3",
+        mock_ts = mocker.patch(
+            "clipper_agency.services.elevenlabs.ElevenLabsService"
+            ".generate_voice_with_timestamps",
+            return_value=(b"audio", []),
+        )
+        mocker.patch(
+            "clipper_agency.agents.voice_producer.VoiceProducerAgent"
+            "._probe_audio_duration",
+            return_value=1.0,
         )
         agent = VoiceProducerAgent()
-        result = agent.execute(
-            job_id=1,
-            script=[{"scene": 1, "text": "Test", "duration": 3}],
-            output_dir="/tmp/output",
-        )
-        assert result["status"] == "completed"
-        call_kwargs = mock_generate.call_args
-        assert call_kwargs[0][1] == "JBFqnCBsd6RMkjVDRZzb"
+        agent.execute(job_id=1, voiceover_text="Test")
+        call_args = mock_ts.call_args
+        assert call_args[0][1] == "JBFqnCBsd6RMkjVDRZzb"
 
-    def test_execute_handles_empty_script(self, mocker, monkeypatch):
+    def test_execute_handles_empty_text(self, mocker, monkeypatch):
         monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
-        mock_generate = mocker.patch(
-            "clipper_agency.services.elevenlabs.ElevenLabsService.generate_voice",
+        mock_ts = mocker.patch(
+            "clipper_agency.services.elevenlabs.ElevenLabsService"
+            ".generate_voice_with_timestamps",
         )
         agent = VoiceProducerAgent()
-        result = agent.execute(
-            job_id=1,
-            script=[],
-            output_dir="/tmp/output",
-        )
+        result = agent.execute(job_id=1, voiceover_text="")
         assert result["status"] == "completed"
-        assert result["audio_files"] == []
-        mock_generate.assert_not_called()
+        assert result["timestamps"] == []
+        mock_ts.assert_not_called()
 
     def test_execute_handles_elevenlabs_failure(self, mocker, monkeypatch):
         monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
 
-        def failing_generate(text, voice_id, output_path):
+        def failing_ts(text, voice_id):
             raise Exception("ElevenLabs API error")
 
         mocker.patch(
-            "clipper_agency.services.elevenlabs.ElevenLabsService.generate_voice",
-            side_effect=failing_generate,
+            "clipper_agency.services.elevenlabs.ElevenLabsService"
+            ".generate_voice_with_timestamps",
+            side_effect=failing_ts,
         )
-        # Ensure no other keys are present so fallback doesn't kick in
+        # Ensure no fallback providers
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         monkeypatch.delenv("FISHAUDIO_API_KEY", raising=False)
 
         agent = VoiceProducerAgent()
         result = agent.execute(
             job_id=1,
-            script=[{"scene": 1, "text": "Test", "duration": 3}],
-            output_dir="/tmp/output",
+            voiceover_text="Test voiceover",
         )
         assert result["status"] == "failed"
-        assert "error" in result
-        assert "All TTS providers failed" in result["error"]
+        assert "All TTS providers failed" in result.get("error", "")
+
+    def test_output_contract_matches_voiceover_output_model(self, mocker, monkeypatch):
+        """Output should include all VoiceoverOutput schema fields."""
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
+        mocker.patch(
+            "clipper_agency.services.elevenlabs.ElevenLabsService"
+            ".generate_voice_with_timestamps",
+            return_value=(b"audio", [
+                {"char": "H", "start": 0.0, "end": 0.05},
+                {"char": "i", "start": 0.05, "end": 0.1},
+            ]),
+        )
+        mocker.patch(
+            "clipper_agency.agents.voice_producer.VoiceProducerAgent"
+            "._probe_audio_duration",
+            return_value=0.5,
+        )
+        agent = VoiceProducerAgent()
+        result = agent.execute(job_id=1, voiceover_text="Hi")
+
+        # VoiceoverOutput required fields
+        assert "status" in result
+        assert "voiceover_path" in result
+        assert "voiceover_duration_sec" in result
+        assert "timestamps" in result
+        assert "provider" in result
+
+        # Backward compat fields
+        assert "audio_files" in result
+        assert "attempts" in result
+
+    def test_timestamps_contain_word_start_end(self, mocker, monkeypatch):
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
+        char_ts = [
+            {"char": "H", "start": 0.0, "end": 0.05},
+            {"char": "e", "start": 0.05, "end": 0.1},
+            {"char": "l", "start": 0.1, "end": 0.15},
+            {"char": "l", "start": 0.15, "end": 0.2},
+            {"char": "o", "start": 0.2, "end": 0.25},
+        ]
+        mocker.patch(
+            "clipper_agency.services.elevenlabs.ElevenLabsService"
+            ".generate_voice_with_timestamps",
+            return_value=(b"audio", char_ts),
+        )
+        mocker.patch(
+            "clipper_agency.agents.voice_producer.VoiceProducerAgent"
+            "._probe_audio_duration",
+            return_value=0.5,
+        )
+        agent = VoiceProducerAgent()
+        result = agent.execute(job_id=1, voiceover_text="Hello")
+
+        ts = result["timestamps"]
+        assert len(ts) == 1
+        assert ts[0]["word"] == "Hello"
+        assert ts[0]["start"] == 0.0
+        assert ts[0]["end"] == 0.25

@@ -257,28 +257,28 @@ class TestValidateAgentCache:
         assert result.passed is True
 
     def test_researcher_valid_with_contract_and_brief(self, tmp_path: Path):
-        """Researcher needs output.json + research_contract.json + research_brief.md."""
+        """Segment Producer needs output.json + research_contract.json + research_brief.md."""
         cache = self._cache_root(tmp_path)
-        agent = Path(cache) / "job_1" / "agents" / "researcher"
+        agent = Path(cache) / "job_1" / "agents" / "segment_producer"
         _write_json(agent / "output.json", {"status": "completed"})
         _write_json(agent / "research_contract.json", {
             "topic": "Test", "video_sources": [], "context_sources": [],
             "cache_key": "t", "cache_freshness": "fresh",
         })
         (agent / "research_brief.md").write_text("# Brief\nContent")
-        result = validate_agent_cache(cache, 1, "researcher")
+        result = validate_agent_cache(cache, 1, "segment_producer")
         assert result.passed is True
 
     def test_researcher_fails_missing_brief(self, tmp_path: Path):
-        """Researcher with contract but no brief should fail."""
+        """Segment Producer with contract but no brief should fail."""
         cache = self._cache_root(tmp_path)
-        agent = Path(cache) / "job_1" / "agents" / "researcher"
+        agent = Path(cache) / "job_1" / "agents" / "segment_producer"
         _write_json(agent / "output.json", {"status": "completed"})
         _write_json(agent / "research_contract.json", {
             "topic": "Test", "video_sources": [], "context_sources": [],
             "cache_key": "t", "cache_freshness": "fresh",
         })
-        result = validate_agent_cache(cache, 1, "researcher")
+        result = validate_agent_cache(cache, 1, "segment_producer")
         assert result.passed is False
 
     def test_scriptwriter_valid(self, tmp_path: Path):

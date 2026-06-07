@@ -29,10 +29,10 @@ def test_load_prompt_returns_fallback_when_file_empty(tmp_path):
     assert result == "Fallback prompt"
 
 
-def test_researcher_prompt_has_channel_description_placeholder():
-    """researcher.md must contain {channel_description} placeholder."""
+def test_segment_producer_prompt_has_channel_description_placeholder():
+    """segment_producer.md must contain {channel_description} placeholder."""
     from clipper_agency.agents.prompts import PROMPTS_DIR
-    content = (PROMPTS_DIR / "researcher.md").read_text()
+    content = (PROMPTS_DIR / "segment_producer.md").read_text()
     assert "{channel_description}" in content
 
 

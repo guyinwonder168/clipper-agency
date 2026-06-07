@@ -21,7 +21,7 @@
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue?logo=python">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-783%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-989%20passing-brightgreen">
   <img alt="Coverage" src="https://img.shields.io/badge/coverage-93%25-brightgreen">
   <img alt="FFmpeg" src="https://img.shields.io/badge/FFmpeg-5.0%2B-orange?logo=ffmpeg">
   <img alt="SonarCloud" src="https://img.shields.io/badge/SonarCloud-passing-brightgreen?logo=sonarcloud">
@@ -35,10 +35,10 @@
 ## Pipeline
 
 ```
-Topic → G1 → Safety → G2 → Researcher (content_direction) → G3-G5 → Format Validator → Scriptwriter (budget) → Script Gate → Voice → G8 → Timeline Reconciler → Visual (timeline-aware) → G9 → Composer (timeline-obedient) → G10 → Reviewer → Output
+Topic → G1 → Safety → G2 → Segment Producer (story_beats + edit blueprint) → G3-G5 → Scriptwriter (continuous voiceover) → Script Gate → Voice Producer (single audio + word timestamps) → G8 → Visual Director (beat-driven, audio-aware) → G9 → Composer (smart trim + keyword captions) → G10 → Reviewer (quality gates) → Output
 ```
 
-Each step is **gated** (pass/soft-fail/hard-fail). Agents communicate through **database state** — no direct agent-to-agent calls.
+Each step is **gated** (pass/soft-fail/hard-fail). Agents communicate through **database state** — no direct agent-to-agent calls. Audio-first architecture: voiceover generated first, visuals fitted to audio timeline.
 
 ### Output Package
 
@@ -132,16 +132,15 @@ clipper_agency/
 ├── config/                  # Pydantic config loader & hierarchy
 ├── core/                    # Shared utilities, logging, safe paths
 ├── db/                      # SQLite schema, queries, connection
-├── orchestrator/            # Gated state machine, format validator & timeline reconciler
+├── orchestrator/            # Gated state machine
 │   ├── engine.py
 │   ├── gates.py
 │   ├── validator.py          # Content direction format validator
-│   ├── duration_gate.py      # Script duration gate (pre-TTS)
-│   └── timeline.py           # Canonical timeline reconciler
+│   └── duration_gate.py      # Script duration gate (pre-TTS)
 ├── agents/                  # 7 pipeline agents
 │   ├── base.py
 │   ├── safety.py
-│   ├── researcher.py
+│   ├── segment_producer.py   # Formerly researcher — edit blueprint + story beats
 │   ├── scriptwriter.py
 │   ├── voice_producer.py
 │   ├── visual_director.py
@@ -222,7 +221,7 @@ python3 -m pytest -m "not integration and not external"
 python3 -m pytest -m integration
 ```
 
-Tests live in `tests/` mirroring the package structure. Currently **783 tests** at **93%+ line coverage**.
+Tests live in `tests/` mirroring the package structure. Currently **989 tests** at **93%+ line coverage**.
 
 ---
 
@@ -241,6 +240,6 @@ Tests live in `tests/` mirroring the package structure. Currently **783 tests** 
 
 ## Status
 
-**✅ MVP Complete** — Phases 0-19 implemented. Treatment system, scene normalizer, LLM-driven visual director, template rendering engine, audio sequencing, subtitle overlays, xfade transitions. Tier 4 (timeline-aware orchestration) design accepted, pending implementation.
+**✅ MVP Complete** — Phases 0-19 implemented + Audio-First Continuous Voiceover (v2.0.0 architecture redesign). Segment Producer with edit blueprint, continuous voiceover with word timestamps, beat-driven visual planning, smart scene trimming, keyword captions, reviewer quality gates.
 
-783 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing
+989 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing

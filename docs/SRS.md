@@ -1,8 +1,8 @@
 # Clipper Agency — Software Requirements Specification
 
-**Version:** 2.9
-**Date:** 2026-06-06
-**Status:** Tier 4 Design Accepted — Timeline-Aware Agent Orchestration (pending implementation)
+**Version:** 3.0
+**Date:** 2026-06-07
+**Status:** v2.0.0 Architecture Redesign Complete — Audio-First Continuous Voiceover Implemented
 **Related:** `docs/PRD.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
@@ -30,13 +30,13 @@
 |----|-------------|----------|-------|
 | FR-01 | Gated agent pipeline executes topic-to-output with pass/soft-fail/hard-fail at every transition | P0 | MVP |
 | FR-02 | Safety Agent pre-checks topic before any paid generation using ultra-cheap model (GLM-4-9B) | P0 | MVP |
-| FR-03 | Researcher Agent gathers context + source URLs + music candidates via ScrapeCreators + Firecrawl | P0 | MVP |
+| FR-03 | Segment Producer Agent (formerly Researcher) gathers context + source URLs + music candidates via ScrapeCreators + Firecrawl, outputs structured edit blueprint with story_beats (visual_must_show/must_not_show, asset_candidates, overlay_text, caption_keywords), format_decision, verified_facts with safe_wording, unverified_claims, and do_not_use list. 5 sub-roles: Fact Checker, Viral Analyst, Clip Scout, Story Producer, Edit Planner. Renamed from `researcher.py` → `segment_producer.py`. See `docs/adr/0021-audio-first-continuous-voiceover.md` | P0 | MVP |
 | FR-04 | Post-research risk gate: second safety check after real entities/claims/URLs are known | P0 | MVP |
-| FR-05 | Scriptwriter Agent writes script + caption in niche tone, rotates angle from creative history | P0 | MVP |
-| FR-06 | Voice Producer generates voiceover only after script validation using fallback order: ElevenLabs → Google AI Studio Gemini TTS → Fish Audio → fail clearly | P0 | MVP |
-| FR-07 | Visual Director uses LLM to plan per-scene visual strategy from compacted research data, then executes plan with dispatch table (tiktok_clip, pexels_video, pexels_image, text_card). 3-tier image fallback for text cards: Pexels photo search → Firecrawl article image → gradient card. Falls back to legacy sequential planning when LLM unavailable. Configurable via `VISUAL_DIRECTOR_MODEL` env var | P0 | MVP |
-| FR-08 | Composer assembles video via FFmpeg: scenes, transitions, captions, audio mixing, thumbnail. Template-driven rendering via `clipper_agency/rendering/` engine with per-template adapters (News Card, B-Roll Narration, Rapid Update) for structured caption overlays, transitions, and template thumbnails | P0 | MVP |
-| FR-09 | Reviewer Agent performs quality + safety + duplicate check (multimodal). Max 2 retries by Admin/Creative Lead | P0 | MVP |
+| FR-05 | Scriptwriter Agent writes continuous voiceover narration (75-110 words, no emojis, spoken-word style) from Segment Producer's story_beats. Outputs voiceover_text + narrative_structure (beat_id, section, word_range, overlay_text, caption_keywords) + caption + hashtags. Removes per-scene max_words_per_scene formula in favor of total word budget | P0 | MVP |
+| FR-06 | Voice Producer generates continuous voiceover via single TTS call (1 call instead of 8 per-scene = 87.5% cost reduction) with word-level timestamps. Primary: ElevenLabs `/with-timestamps` endpoint (character-level alignment grouped into words). Fallback: Gemini TTS (silence detection for approximate timing) → Fish Audio → fail clearly. Voice files and metadata saved under `ASSETS_CACHE/job_{id}/agents/voice_producer/` | P0 | MVP |
+| FR-07 | Visual Director uses LLM to plan beat-driven visual strategy from story_beats + word-level timestamps. Each beat carries visual_must_show/visual_must_not_show rules, asset_candidates, and exact audio durations. Visual hierarchy: direct source clip → official screenshot → subject portrait with Ken Burns → text card → generic stock (abstract topics only). 3-tier image fallback for text cards: Pexels photo search → Firecrawl article image → gradient card. Falls back to legacy sequential planning when LLM unavailable. Sequential execution: Voice Producer must complete before Visual Director starts | P0 | MVP |
+| FR-08 | Composer assembles video with single audio timeline (voiceover.mp3 as immutable anchor). Smart scene trimming: ffprobe keyframe boundary detection with ±15% tolerance, speed adjustment up to ±20% (imperceptible). Keyword captions (max 6 words, beat-aligned, bottom-positioned) replace full-sentence subtitles. Never trims or speeds up audio. Template-driven rendering via `clipper_agency/rendering/` engine with per-template adapters | P0 | MVP |
+| FR-09 | Reviewer Agent performs 4 programmatic quality checks: (1) AV sync validation (audio vs visual duration drift < 0.5s), (2) caption quality (short keywords, max 6 words, not full sentences), (3) fact safety (unverified claims use safe wording, no definitive accusations), (4) narrative structure (beat completeness). Plus multimodal quality + safety + duplicate check. Max 2 retries by Admin/Creative Lead | P0 | MVP |
 | FR-10 | Output packager produces `video.mp4` + `caption.txt` + `thumbnail.png` + `metadata.json` | P0 | MVP |
 | FR-11 | Research cache with Time To Live (TTL): fresh <60min, stale 60-240min, expired >240min or new Asia/Jakarta day | P0 | MVP |
 | FR-12 | Creative memory: pre-generation check prevents repetition; post-generation update records usage | P0 | MVP |
@@ -53,12 +53,12 @@
 | FR-34 | Audio sequencer: per-scene audio+video concat with two modes — Mode A (paired video+audio when no xfade) and Mode B (audio-only concat when xfade handles video). Pads missing audio with silence sources (anullsrc). Replaces broken amix that played all voice tracks simultaneously. Implemented in `clipper_agency/rendering/audio_sequencer.py` | P0 | MVP |
 | FR-35 | Subtitle engine: converts script scene text into timed CaptionOverlay objects with absolute timestamps across scenes. Builds hook overlay (first 3s center-positioned caption) and validates TikTok output requirements (pix_fmt, faststart, libx264, aac, bitrate, shortest). Implemented in `clipper_agency/rendering/subtitle_engine.py` | P0 | MVP |
 | FR-36 | Composer production output: xfade/concat mixed transition chain with offset calculation (cumulative_duration - trans_duration - safety_margin), duration clamping (min of transition_duration, min(prev_dur, next_dur) - headroom), fallback to crossfade for unknown transitions. Production flags: `-pix_fmt yuv420p`, `-movflags +faststart`, H.264/AAC codecs. Subtitle drawtext filters chained with `enable='between(t,start,end)'` and escape_drawtext for special characters | P0 | MVP |
-| FR-37 | Researcher content direction: Researcher LLM synthesis must include structured `content_direction` (recommended format, story rank, content angle, risk notes). Orchestrator validates direction deterministically | P0 | MVP (Proposed) |
-| FR-38 | Scriptwriter budget obedience: Scriptwriter must obey validated content direction, word budget, and scene roles (opening_hook, story_1..N, cta). Must emit `word_count` and `estimated_duration_sec` per scene | P0 | MVP (Proposed) |
-| FR-39 | Voice Producer duration metadata: Voice Producer must measure actual audio duration per scene via ffprobe and return `audio_metadata` with `audio_duration_sec`, `audio_path`, and `provider` fields | P0 | MVP (Proposed) |
-| FR-40 | Orchestrator Timeline Reconciler: Combines Researcher content_direction, Scriptwriter roles/durations, Voice Producer actual audio durations, and niche/platform config into canonical timeline with per-scene start/end times. Fails pipeline before Visual Director if total audio exceeds hard limit | P0 | MVP (Proposed) |
-| FR-41 | Visual Director timeline-aware planning: Visual Director must consume reconciled timeline for scene durations and visual instructions. Must create opening card for `opening_hook` and CTA card for `cta` roles | P0 | MVP (Proposed) |
-| FR-42 | Composer timeline-obedient rendering: Composer must obey timeline durations, pair timeline audio paths with visual scenes, generate subtitles from timeline text, and respect opening hook/CTA roles. Must fail if timeline/audio/visual contracts are inconsistent | P0 | MVP (Proposed) |
+| FR-37 | Segment Producer edit blueprint: outputs story_beats with per-beat visual instructions (visual_must_show, visual_must_not_show, asset_candidates, overlay_text, caption_keywords), format_decision (single_story_deep_dive / three_story_roundup / two_story_highlight), verified_facts with safe_wording, unverified_claims, and do_not_use list. Supersedes FR-37 (proposed content_direction) with richer beat contract | P0 | MVP |
+| FR-38 | Scriptwriter continuous voiceover: writes single voiceover_text (75-110 words, no emojis, spoken-word style) from story_beats. Outputs narrative_structure mapping beats to word ranges with overlay_text and caption_keywords per beat. Total word budget replaces per-scene formula | P0 | MVP |
+| FR-39 | Voice Producer single audio with timestamps: generates continuous voiceover via 1 TTS call (87.5% cost reduction). Returns voiceover.mp3 + word-level timestamps via ElevenLabs `/with-timestamps` (character-level grouped to words). Gemini TTS/Fish Audio fallback with silence-detection approximate timing | P0 | MVP |
+| FR-40 | Shared schema contract via `config/schema.py`: 11 Pydantic models (StoryBeat, FormatDecision, VerifiedFact, UnverifiedClaim, VisualInstruction, AssetCandidate, KeywordCaption, VoiceSettings, VoiceProviderResult, ContentBrief, NarrativeSection) defining cross-agent data contracts | P0 | MVP |
+| FR-41 | Beat-driven visual planning: Visual Director consumes story_beats + word timestamps + visual rules. Each beat has exact audio duration from timestamps. Sequential Voice→Visual execution enforced in engine | P0 | MVP |
+| FR-42 | Audio-first composition: voiceover.mp3 is immutable timeline anchor (never trimmed). Composer smart-trims visuals at keyframe boundaries, overlays keyword captions (max 6 words, beat-aligned), speed-adjusts visuals ±20% to match audio | P0 | MVP |
 
 ### 2.2 User Interfaces
 
@@ -76,7 +76,7 @@
 |----|-------------|----------|-------|
 | FR-22 | Configuration hierarchy: Agent defaults → Niche → Account → Job-level overrides | P0 | MVP |
 | FR-23 | All agent settings configurable per level (LLM model, prompt version, temperature, max tokens, voice ID) | P0 | MVP |
-| FR-24 | Per-agent LLM model configuration via environment variables (`SAFETY_MODEL`, `RESEARCHER_MODEL`, `SCRIPTWRITER_MODEL`, `REVIEWER_MODEL`, `VISUAL_DIRECTOR_MODEL`) with sensible defaults | P0 | MVP |
+| FR-24 | Per-agent LLM model configuration via environment variables (`SAFETY_MODEL`, `SEGMENT_PRODUCER_MODEL`, `SCRIPTWRITER_MODEL`, `REVIEWER_MODEL`, `VISUAL_DIRECTOR_MODEL`) with sensible defaults | P0 | MVP |
 | FR-25 | Structured logging for all external API calls, agent executions, and pipeline state transitions with configurable log level (`LOG_LEVEL`) | P0 | MVP |
 | FR-26 | Config versioning with diff and rollback | P0 | MVP |
 | FR-27 | Niche profiles swappable without code changes | P0 | MVP |
@@ -130,7 +130,7 @@ Stage 2: + Serper. Stage 2+: + DuckDuckGo site-filtered.
 - If Gemini TTS is missing or fails, `FISHAUDIO_API_KEY` set → try `FishAudioService` (s2-pro model, `/v1/tts` endpoint).
 - If all providers are missing or fail, pipeline stops with a clear error and sanitized attempts are persisted under the job workspace.
 
-ScrapeCreators credits reserved for TikTok video URLs, creator profiles, engagement data, and song metadata. Results cached with TTL to minimize credit burn. Researcher preserves raw ScrapeCreators/Firecrawl payloads and normalized research artifacts under `ASSETS_CACHE/job_{id}/agents/researcher/`.
+ScrapeCreators credits reserved for TikTok video URLs, creator profiles, engagement data, and song metadata. Results cached with TTL to minimize credit burn. Segment Producer preserves raw ScrapeCreators/Firecrawl payloads and normalized research artifacts under `ASSETS_CACHE/job_{id}/agents/segment_producer/`.
 
 ### 4.3 External Services (Future)
 

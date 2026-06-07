@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from clipper_agency.agents.composer import ComposerAgent, _has_xfade_transitions
+from clipper_agency.agents.composer import (
+    ComposerAgent,
+    _build_keyword_chain,
+    _has_xfade_transitions,
+)
+from clipper_agency.rendering.contracts import CaptionOverlay
 from clipper_agency.rendering.primitives import escape_drawtext
 
 
@@ -407,8 +412,8 @@ class TestComposerTreatmentFilters:
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
-        # No treatment filter — just trim+setpts, mapped to [outv] for single scene
-        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS[outv]" in filter_complex
+        # No treatment filter — just trim+setpts+fps, mapped to [outv] for single scene
+        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS,fps=30[outv]" in filter_complex
         assert "crop=" not in filter_complex
         assert "scale=" not in filter_complex
         assert "-pix_fmt" in cmd
@@ -467,7 +472,7 @@ class TestComposerTreatmentFilters:
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
         # Single scene: trim output maps directly to [outv].
-        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS[outv]" in filter_complex
+        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS,fps=30[outv]" in filter_complex
         assert "-pix_fmt" in cmd
         assert "yuv420p" in cmd
         assert "-movflags" in cmd
@@ -528,13 +533,13 @@ class TestComposerTransitions:
         assert "concat=n=2:v=1" in fc
 
     def test_xfade_offset_calculated_correctly(self):
-        """scene[0] dur=5, crossfade dur=0.3 → offset=5-0.3-0.1=4.6."""
+        """scene[0] dur=5, crossfade dur=0.5 → offset=5-0.5-0.1=4.4."""
         cmd = _build_two_scene_cmd(
             {"target_duration": 5, "transition_out": "crossfade"},
             {"target_duration": 5},
         )
         fc = _filter_complex(cmd)
-        assert "offset=4.6" in fc
+        assert "offset=4.4" in fc
 
     def test_xfade_uses_custom_transition_duration(self):
         """Asset with transition_duration override uses that value."""
@@ -993,9 +998,10 @@ class TestComposerUnifiedPipeline:
         assert "anullsrc" in fc
         # Assert — no subtitle drawtext
         assert "drawtext" not in fc
-        # Assert — basic trim+setpts present
+        # Assert — basic trim+setpts+fps present
         assert "trim=duration=" in fc
         assert "setpts=PTS-STARTPTS" in fc
+        assert "fps=30" in fc
         # Assert — video output label
         assert "[outv]" in fc
         assert "[outa]" in fc
@@ -1038,7 +1044,7 @@ class TestComposerEdgeCases:
         fc = _filter_complex(cmd)
 
         # Assert
-        assert "[0:v]trim=duration=4.0,setpts=PTS-STARTPTS[outv]" in fc
+        assert "[0:v]trim=duration=4.0,setpts=PTS-STARTPTS,fps=30[outv]" in fc
         assert "xfade=" not in fc
         assert "concat=" not in fc
 
@@ -1098,6 +1104,51 @@ class TestComposerEdgeCases:
         assert "crop=ih*9/16:ih,scale=1080:1920,setsar=1/1" in fc
         # Assert — hook_big_caption substitutes {text} with headline
         assert "drawtext=text='Big News!'" in fc
+
+    # ── Test: fps=30 normalises timebase for xfade compatibility ──
+
+    def test_fps30_normalises_timebase_for_xfade(self):
+        """Every scene gets fps=30 so xfade never sees mismatched timebases."""
+        valid = ["/tmp/img.png", "/tmp/vid.mp4"]
+        assets = [
+            _make_asset(
+                valid[0], duration=5.0, treatment="ken_burns_zoom_in",
+                type="image", transition_out="crossfade",
+            ),
+            _make_asset(
+                valid[1], duration=5.0, treatment="cinematic_crop",
+                type="video",
+            ),
+        ]
+
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Both scenes must have fps=30 after setpts for uniform timebase
+        assert "setpts=PTS-STARTPTS,fps=30" in fc
+        assert fc.count("fps=30") >= 2
+
+    # ── Test: audio-first also normalises fps for xfade compatibility ──
+
+    def test_audio_first_fps30_normalises_timebase(self):
+        """Audio-first path also adds fps=30 for uniform timebases."""
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voice.mp3",
+            trimmed_clips=["/tmp/v1.mp4", "/tmp/v2.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/v1.mp4", "target_duration": 5,
+                 "treatment": "cinematic_crop", "type": "video"},
+                {"scene": 2, "path": "/tmp/v2.mp4", "target_duration": 5},
+            ],
+            keyword_captions=[],
+            output_path="/tmp/out.mp4",
+        )
+
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        assert "setpts=PTS-STARTPTS,fps=30" in fc
+        assert fc.count("fps=30") >= 2
 
     # ── Test 4: transition_duration=0 still uses xfade path ──
 
@@ -1261,3 +1312,355 @@ class TestComposerEdgeCases:
         assert "concat=n=4:v=0:a=1[outa]" in fc
         assert "anullsrc=r=44100" in fc
         assert "amix" not in fc
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Smart Trim
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestComposerSmartTrim:
+    """Smart trim: scene boundary detection, trimming, stretching."""
+
+    def test_smart_trim_with_scene_boundary(self, tmp_path, mocker):
+        """Clip longer than target; boundary near target → trim at boundary."""
+        agent = ComposerAgent()
+
+        # Clip is 10s, target is 5s
+        mocker.patch.object(agent, "_probe_duration", return_value=10.0)
+        # Scene boundary at 5.1s (within ±15% of 5.0 → tolerance = 0.75)
+        mocker.patch.object(
+            agent, "_detect_scene_boundaries", return_value=[2.0, 5.1, 8.0],
+        )
+        mock_ffmpeg = mocker.patch(
+            "clipper_agency.agents.composer.run_ffmpeg_streaming",
+        )
+
+        result = agent._smart_trim(
+            "/tmp/clip.mp4", 5.0, tmp_path,
+        )
+
+        assert mock_ffmpeg.called
+        cmd = mock_ffmpeg.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        # Should trim at boundary 5.1
+        assert "-to" in cmd
+        assert "5.1" in cmd_str
+        # Speed-adjust to exactly 5.0s
+        assert "setpts=" in cmd_str
+
+    def test_smart_trim_no_good_boundary(self, tmp_path, mocker):
+        """No boundary near target → simple trim from start."""
+        agent = ComposerAgent()
+
+        mocker.patch.object(agent, "_probe_duration", return_value=10.0)
+        # Boundaries far from target 5.0
+        mocker.patch.object(
+            agent, "_detect_scene_boundaries", return_value=[1.0, 8.5],
+        )
+        mock_ffmpeg = mocker.patch(
+            "clipper_agency.agents.composer.run_ffmpeg_streaming",
+        )
+
+        result = agent._smart_trim(
+            "/tmp/clip.mp4", 5.0, tmp_path,
+        )
+
+        assert mock_ffmpeg.called
+        cmd = mock_ffmpeg.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        # Should trim to target duration (no boundary match)
+        assert "-to" in cmd
+        assert "5.0" in cmd_str or "5." in cmd_str
+
+    def test_smart_trim_clip_shorter_slowdown(self, tmp_path, mocker):
+        """Clip shorter than target; slowdown within 30% is enough."""
+        agent = ComposerAgent()
+
+        # Clip is 4.0s, target is 5.0s → need 25% slowdown (within 30% limit)
+        mocker.patch.object(agent, "_probe_duration", return_value=4.0)
+        mock_ffmpeg = mocker.patch(
+            "clipper_agency.agents.composer.run_ffmpeg_streaming",
+        )
+
+        result = agent._smart_trim(
+            "/tmp/clip.mp4", 5.0, tmp_path,
+        )
+
+        assert mock_ffmpeg.called
+        cmd = mock_ffmpeg.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        # Should use setpts to slow down
+        assert "setpts=" in cmd_str
+        # speed factor = 5.0/4.0 = 1.25
+        assert "1.25" in cmd_str
+
+    def test_smart_trim_clip_shorter_needs_loop(self, tmp_path, mocker):
+        """Clip much shorter; needs looping to fill target."""
+        agent = ComposerAgent()
+
+        # Clip is 2.0s, target is 5.0s → max slowdown = 2.0*1.3=2.6 < 5.0
+        mocker.patch.object(agent, "_probe_duration", return_value=2.0)
+        mock_ffmpeg = mocker.patch(
+            "clipper_agency.agents.composer.run_ffmpeg_streaming",
+        )
+
+        result = agent._smart_trim(
+            "/tmp/clip.mp4", 5.0, tmp_path,
+        )
+
+        assert mock_ffmpeg.called
+        cmd = mock_ffmpeg.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        # Should use stream_loop
+        assert "-stream_loop" in cmd_str
+        assert "-1" in cmd_str
+
+    def test_smart_trim_close_enough_copies(self, tmp_path, mocker):
+        """Clip within 50ms of target → just copy."""
+        agent = ComposerAgent()
+
+        mocker.patch.object(agent, "_probe_duration", return_value=5.02)
+        mock_ffmpeg = mocker.patch(
+            "clipper_agency.agents.composer.run_ffmpeg_streaming",
+        )
+        mock_copy = mocker.patch("shutil.copy2")
+
+        agent._smart_trim("/tmp/clip.mp4", 5.0, tmp_path)
+
+        mock_copy.assert_called_once()
+        mock_ffmpeg.assert_not_called()
+
+
+class TestComposerComputeBeatDurations:
+    """_compute_beat_durations: word ranges → beat durations."""
+
+    def test_basic_beat_durations(self):
+        """Two beats with 3 and 4 words → correct durations."""
+        narrative = [
+            {"word_range": [0, 3]},
+            {"word_range": [3, 7]},
+        ]
+        timestamps = [
+            {"word": "w0", "start": 0.0, "end": 0.5},
+            {"word": "w1", "start": 0.5, "end": 1.0},
+            {"word": "w2", "start": 1.0, "end": 1.5},
+            {"word": "w3", "start": 1.5, "end": 2.0},
+            {"word": "w4", "start": 2.0, "end": 2.5},
+            {"word": "w5", "start": 2.5, "end": 3.0},
+            {"word": "w6", "start": 3.0, "end": 3.5},
+        ]
+
+        result = ComposerAgent._compute_beat_durations(narrative, timestamps)
+
+        assert len(result) == 2
+        assert result[0] == pytest.approx(1.5)   # 0.0 → 1.5
+        assert result[1] == pytest.approx(2.0)    # 1.5 → 3.5
+
+    def test_missing_word_range_covers_full_timestamps(self):
+        """Beat without word_range covers full timestamp range."""
+        narrative = [{"beat_id": 1}]
+        timestamps = [{"word": "w", "start": 0, "end": 1}]
+
+        result = ComposerAgent._compute_beat_durations(narrative, timestamps)
+
+        assert result == [pytest.approx(1.0)]
+
+    def test_empty_inputs_returns_empty(self):
+        """Empty inputs return empty list."""
+        assert ComposerAgent._compute_beat_durations([], []) == []
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Audio-First Assembly
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestComposerAudioFirstCmd:
+    """_build_audio_first_cmd: voiceover anchor, visuals fitted to beats."""
+
+    def test_voiceover_is_audio_anchor(self):
+        """Voiceover (input 0) is mapped as audio, never trimmed."""
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voiceover.mp3",
+            trimmed_clips=["/tmp/clip1.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/clip1.mp4", "target_duration": 5},
+            ],
+            keyword_captions=[],
+            output_path="/tmp/output.mp4",
+        )
+
+        # Voiceover should be first input: ["ffmpeg", "-y", "-i", "/tmp/voiceover.mp3", ...]
+        assert cmd[3] == "/tmp/voiceover.mp3"
+        # Audio mapped directly from input 0
+        assert "-map" in cmd
+        idx_map = cmd.index("-map")
+        assert cmd[idx_map + 1] == "[outv]"
+        assert cmd[idx_map + 3] == "0:a"
+        # No [outa] filter
+        assert "[outa]" not in " ".join(cmd)
+
+    def test_visual_inputs_offset_by_one(self):
+        """Visual inputs are 1-indexed (voiceover is input 0)."""
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voice.mp3",
+            trimmed_clips=["/tmp/v1.mp4", "/tmp/v2.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/v1.mp4", "target_duration": 5},
+                {"scene": 2, "path": "/tmp/v2.mp4", "target_duration": 5},
+            ],
+            keyword_captions=[],
+            output_path="/tmp/out.mp4",
+        )
+
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        # Visual inputs should reference [1:v] and [2:v], not [0:v]
+        assert "[1:v]" in fc
+        assert "[2:v]" in fc
+        assert "[0:v]" not in fc
+
+    def test_no_per_scene_audio_concat(self):
+        """Audio-first mode has no audio_sequencer or [outa] filter."""
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voice.mp3",
+            trimmed_clips=["/tmp/v1.mp4", "/tmp/v2.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/v1.mp4", "target_duration": 5,
+                 "transition_out": "hard_cut"},
+                {"scene": 2, "path": "/tmp/v2.mp4", "target_duration": 5},
+            ],
+            keyword_captions=[],
+            output_path="/tmp/out.mp4",
+        )
+
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        # No audio concat or anullsrc — audio comes from voiceover
+        assert "concat=n=2:v=0:a=1" not in fc
+        assert "anullsrc" not in fc
+        assert "[outa]" not in fc
+
+    def test_keyword_captions_in_filter(self):
+        """Keyword captions produce drawtext in filter_complex."""
+        captions = [
+            CaptionOverlay(
+                text="hello world", start_seconds=0.0, end_seconds=2.5,
+                position="bottom", style="keyword",
+            ),
+            CaptionOverlay(
+                text="main story", start_seconds=2.5, end_seconds=5.0,
+                position="bottom", style="keyword",
+            ),
+        ]
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voice.mp3",
+            trimmed_clips=["/tmp/v1.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/v1.mp4", "target_duration": 5},
+            ],
+            keyword_captions=captions,
+            output_path="/tmp/out.mp4",
+        )
+
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        assert "drawtext" in fc
+        assert "hello world" in fc
+        assert "main story" in fc
+        assert "fontsize=48" in fc
+        assert "borderw=3" in fc
+        assert "shadowcolor=black" in fc
+
+    def test_no_keyword_captions_no_drawtext(self):
+        """Empty keyword_captions → no drawtext in filter."""
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voice.mp3",
+            trimmed_clips=["/tmp/v1.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/v1.mp4", "target_duration": 5},
+            ],
+            keyword_captions=[],
+            output_path="/tmp/out.mp4",
+        )
+
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        assert "drawtext" not in fc
+        assert "kcap_in" not in fc
+
+
+class TestBuildKeywordChain:
+    """Module-level _build_keyword_chain: drawtext overlay construction."""
+
+    def test_keyword_chain_replaces_outv(self):
+        """Keyword chain replaces [outv] with [kcap_in] and chains drawtext."""
+        captions = [
+            CaptionOverlay(
+                text="keyword1", start_seconds=0.0, end_seconds=3.0,
+                position="bottom", style="keyword",
+            ),
+        ]
+        result = _build_keyword_chain("[outv]", captions)
+
+        assert "[kcap_in]" in result
+        assert "drawtext" in result
+        assert "keyword1" in result
+        assert "[outv]" in result  # Final output relabeled back
+
+    def test_keyword_chain_empty_captions_passthrough(self):
+        """Empty captions list → filter unchanged."""
+        result = _build_keyword_chain("[outv]filter_here", [])
+        assert result == "[outv]filter_here"
+
+    def test_keyword_chain_multiple_captions(self):
+        """Multiple captions chain correctly."""
+        captions = [
+            CaptionOverlay(
+                text="first", start_seconds=0.0, end_seconds=2.5,
+                position="bottom", style="keyword",
+            ),
+            CaptionOverlay(
+                text="second", start_seconds=2.5, end_seconds=5.0,
+                position="bottom", style="keyword",
+            ),
+        ]
+        result = _build_keyword_chain("[outv]", captions)
+
+        assert result.count("drawtext") == 2
+        assert "first" in result
+        assert "second" in result
+        assert "between(t,0.0,2.5)" in result
+        assert "between(t,2.5,5.0)" in result
+
+
+class TestComposerEnrichAudioFirstAssets:
+    """_enrich_audio_first_assets: merge trimmed clips + beat durations + treatments."""
+
+    def test_enrich_preserves_treatment_metadata(self):
+        """Treatment and transition metadata pass through from original assets."""
+        assets = [
+            {
+                "path": "/orig/clip1.mp4",
+                "treatment": "cinematic_crop",
+                "transition_out": "hard_cut",
+                "headline": "Big News",
+            },
+        ]
+        trimmed = ["/tmp/trimmed_clip1.mp4"]
+        durations = [5.5]
+
+        result = ComposerAgent._enrich_audio_first_assets(
+            assets, trimmed, durations,
+        )
+
+        assert len(result) == 1
+        assert result[0]["target_duration"] == 5.5
+        assert result[0]["path"] == "/tmp/trimmed_clip1.mp4"
+        assert result[0]["treatment"] == "cinematic_crop"
+        assert result[0]["transition_out"] == "hard_cut"
+        assert result[0]["headline"] == "Big News"
+
+    def test_enrich_defaults_duration_to_5(self):
+        """Missing beat duration defaults to 5.0."""
+        result = ComposerAgent._enrich_audio_first_assets(
+            [], ["/tmp/clip.mp4"], [],
+        )
+        assert result[0]["target_duration"] == 5.0

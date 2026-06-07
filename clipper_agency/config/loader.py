@@ -91,3 +91,46 @@ def load_config(config_path: str | None = None) -> dict:
             user_config = yaml.safe_load(f) or {}
         result.update(user_config)
     return result
+
+
+_SETTINGS_MODEL_MAP = {
+    "safety": "safety_model",
+    "segment_producer": "researcher_model",
+    "scriptwriter": "scriptwriter_model",
+    "visual_director": "visual_director_model",
+    "reviewer": "reviewer_model",
+}
+
+
+def get_agent_config(agent_name: str) -> dict:
+    """Resolve agent config: hierarchy preset → model metadata → .env overrides.
+
+    Returns dict with keys: model, temperature, max_completion_tokens.
+    """
+    from clipper_agency.config.hierarchy import ConfigHierarchy
+    from clipper_agency.config.model_cache import get_model_metadata
+
+    hierarchy = ConfigHierarchy()
+    model = hierarchy.get(agent_name, "model")
+    temperature = hierarchy.get(agent_name, "temperature")
+
+    # .env override for model
+    settings = load_settings()
+    settings_field = _SETTINGS_MODEL_MAP.get(agent_name)
+    if settings_field:
+        env_model = getattr(settings, settings_field, None)
+        if env_model:
+            model = env_model
+
+    # Model metadata from cache
+    max_completion_tokens = None
+    if model:
+        meta = get_model_metadata(model)
+        if meta and meta.get("max_completion_tokens"):
+            max_completion_tokens = meta["max_completion_tokens"]
+
+    return {
+        "model": model,
+        "temperature": temperature if temperature is not None else 0.7,
+        "max_completion_tokens": max_completion_tokens,
+    }

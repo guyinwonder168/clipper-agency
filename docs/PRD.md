@@ -1,8 +1,8 @@
 # Clipper Agency — Product Requirements Document
 
-**Version:** 2.9
-**Date:** 2026-06-06
-**Status:** Tier 4 Design Accepted — Timeline-Aware Agent Orchestration (pending implementation)
+**Version:** 3.0
+**Date:** 2026-06-07
+**Status:** v2.0.0 Architecture Redesign Complete — Audio-First Continuous Voiceover Implemented
 **Related:** `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
@@ -77,7 +77,7 @@ Intermediate execution material is not part of the final upload package. Each jo
 | ID | Requirement | Priority | Stage |
 |----|-------------|----------|-------|
 | PR-01 | Automated video generation from trending topics via gated agent pipeline | P0 | MVP |
-| PR-02 | Agent pipeline: Safety → Researcher (content_direction) → Orchestrator Format Validator → Scriptwriter (word/time budget) → Script Duration Gate → Voice → Timeline Reconciler → Visual (timeline-aware) → Compose (timeline-obedient) → Review. Each step gated with pass/soft-fail/hard-fail rules. See `docs/technical_design.md` §3 for full gate definitions. | P0 | MVP |
+| PR-02 | Agent pipeline: Safety → Segment Producer (story_beats + edit blueprint + verified facts + visual instructions) → Scriptwriter (continuous voiceover from story beats, 75-110 words, no emojis) → Voice Producer (single TTS call with word-level timestamps) → Visual Director (beat-driven, audio-aware, visual_must_show rules) → Composer (smart scene trimming at keyframe boundaries, keyword captions aligned to audio timeline) → Reviewer (AV sync + caption quality + fact safety + narrative structure checks). Sequential voice→visual. Each step gated with pass/soft-fail/hard-fail rules. See `docs/technical_design.md` §3 for full gate definitions. See `docs/adr/0021-audio-first-continuous-voiceover.md` for architecture rationale. | P0 | MVP |
 | PR-03 | Web dashboard for job management and agent configuration | P0 | MVP |
 | PR-04 | CLI for direct pipeline execution | P0 | MVP |
 | PR-05 | Ready-to-upload output package (video + caption + thumbnail + metadata) | P0 | MVP |
@@ -104,7 +104,7 @@ Intermediate execution material is not part of the final upload package. Each jo
 | PR-26 | Treatment system: YAML-defined visual treatments (Ken Burns zoom/pan, cinematic crop, B-roll, slow-motion, lower-third slide, text card reveal, hook caption, fade-to-black) with transitions (crossfade, hard cut, wipe left, dissolve, circle open) and FPS/pacing rules, applied automatically by Visual Director and Composer without code changes | P0 | MVP |
 | PR-27 | Scene normalizer: unify mixed-asset framerates to 30fps target, normalize SAR to 1:1, apply Ken Burns zoompan for static images, validate clip duration bounds (1-5s), enforce consistent encoding parameters across all scenes before composition | P0 | MVP |
 | PR-28 | Per-scene audio sequencing with silence padding, timed subtitle overlays from script text via drawtext, xfade/concat mixed transition chain with duration clamping and safety margins, and TikTok-ready production output flags (yuv420p, faststart, H.264/AAC) | P0 | MVP |
-| PR-29 | Timeline-aware content planning and cross-agent reconciliation: Researcher recommends content direction (format + story selection), Orchestrator validates and derives word/time budgets, Scriptwriter obeys budgets with scene roles and estimated durations, Voice Producer measures actual audio durations, Orchestrator Timeline Reconciler creates canonical timeline, Visual Director plans assets from timeline, Composer renders timeline-obedient output with synced audio/subtitles/opening/CTA | P0 | MVP (Proposed) |
+| PR-29 | Audio-first continuous voiceover architecture: Segment Producer outputs story_beats (visual_must_show/must_not_show, asset_candidates, edit blueprint), Scriptwriter writes continuous narration (75-110 words, no emojis, spoken-word style), Voice Producer generates single voiceover.mp3 with word-level timestamps via ElevenLabs `/with-timestamps` (87.5% TTS cost reduction vs per-scene), Visual Director plans beat-driven visuals against audio timeline with visual rules, Composer smart-trims at keyframe boundaries and overlays keyword captions (max 6 words, beat-aligned), Reviewer validates AV sync + caption quality + fact safety + narrative structure. See `docs/adr/0021-audio-first-continuous-voiceover.md` | P0 | MVP |
 
 ---
 
@@ -232,7 +232,7 @@ When no source clips or stock footage are available, the Visual Director generat
 | Premium East | ~$0.015 | ~$0.03 | ~$0.045 |
 | Premium West | ~$0.04 | ~$0.03 | ~$0.07 |
 
-> **Voice cost note:** Costs vary by provider. Provider order is quality/availability-first: ElevenLabs → Google AI Studio Gemini TTS → Fish Audio → fail clearly. Fish Audio ($15/1M chars) is ~6.7× cheaper than ElevenLabs ($100/1M chars). At ~200 chars/video, Fish Audio costs ~$0.003 vs ElevenLabs ~$0.02/video. Estimates above use ElevenLabs pricing as baseline. ElevenLabs and Fish Audio currently require paid plans; Gemini TTS uses the configured Google AI Studio quota/key.
+> **Voice cost note:** Audio-first architecture uses a single continuous TTS call instead of 8 per-scene calls — **87.5% reduction in TTS API credits** per video. Costs vary by provider. Provider order is quality/availability-first: ElevenLabs → Google AI Studio Gemini TTS → Fish Audio → fail clearly. Fish Audio ($15/1M chars) is ~6.7× cheaper than ElevenLabs ($100/1M chars). At ~200 chars/video, Fish Audio costs ~$0.003 vs ElevenLabs ~$0.02/video. Estimates above use ElevenLabs pricing as baseline. ElevenLabs and Fish Audio currently require paid plans; Gemini TTS uses the configured Google AI Studio quota/key.
 
 ### Financial Visibility
 

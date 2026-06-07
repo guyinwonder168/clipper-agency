@@ -135,3 +135,57 @@ class TestBuildChannelDescription:
         )
         desc = build_channel_description(niche)
         assert desc  # non-empty
+
+
+class TestGetAgentConfig:
+    """get_agent_config() — resolves model + temperature from hierarchy."""
+
+    def test_get_agent_config_returns_model_and_temperature(self, monkeypatch):
+        """get_agent_config resolves model + temperature from hierarchy."""
+        from clipper_agency.config.loader import get_agent_config
+
+        monkeypatch.setattr(
+            "clipper_agency.config.model_cache.get_model_metadata",
+            lambda _: {"context_length": 8192, "max_completion_tokens": 4096},
+        )
+        # Mock load_settings to return settings with empty model fields
+        # (simulates no .env overrides, hierarchy is the source of truth)
+        from clipper_agency.config.schema import AppSettings
+        empty_settings = AppSettings(
+            _env_file=None,
+            OPENROUTER_API_KEY="test",
+            safety_model="",
+            researcher_model="",
+            scriptwriter_model="",
+            visual_director_model="",
+            reviewer_model="",
+        )
+        monkeypatch.setattr(
+            "clipper_agency.config.loader.load_settings",
+            lambda: empty_settings,
+        )
+        result = get_agent_config("safety")
+        assert result["model"] == "glm-4.7-flash"
+        assert result["temperature"] == 0.1
+        assert result["max_completion_tokens"] == 4096
+
+    def test_get_agent_config_env_override(self, monkeypatch):
+        """SAFETY_MODEL env var overrides hierarchy preset."""
+        from clipper_agency.config.loader import get_agent_config
+
+        monkeypatch.setattr(
+            "clipper_agency.config.model_cache.get_model_metadata",
+            lambda _: {"context_length": 8192, "max_completion_tokens": 4096},
+        )
+        from clipper_agency.config.schema import AppSettings
+        override_settings = AppSettings(
+            _env_file=None,
+            OPENROUTER_API_KEY="test",
+            safety_model="custom-model",
+        )
+        monkeypatch.setattr(
+            "clipper_agency.config.loader.load_settings",
+            lambda: override_settings,
+        )
+        result = get_agent_config("safety")
+        assert result["model"] == "custom-model"

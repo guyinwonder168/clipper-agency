@@ -7,7 +7,7 @@ import click
 from dotenv import load_dotenv
 
 from clipper_agency import __version__
-from clipper_agency.config.loader import load_niche, load_settings
+from clipper_agency.config.loader import get_agent_config, load_niche, load_settings
 from clipper_agency.core.logging import setup_logging, get_logger
 from clipper_agency.db.queries import PIPELINE_ORDER
 from clipper_agency.orchestrator.engine import Orchestrator
@@ -51,13 +51,14 @@ def _log_startup_info() -> None:
     logger.info("Clipper Agency v%s starting", __version__)
     logger.info("DB path: %s", settings.db_path)
     logger.info("Output dir: %s", settings.output_dir)
+    agent_names = ["safety", "segment_producer", "scriptwriter", "visual_director", "reviewer"]
+    agent_models = []
+    for name in agent_names:
+        cfg = get_agent_config(name)
+        agent_models.append(cfg["model"] or "none")
     logger.info(
-        "Agent models: safety=%s researcher=%s scriptwriter=%s visual_director=%s reviewer=%s",
-        settings.safety_model,
-        settings.researcher_model,
-        settings.scriptwriter_model,
-        settings.visual_director_model,
-        settings.reviewer_model,
+        "Agent models: safety=%s segment_producer=%s scriptwriter=%s visual_director=%s reviewer=%s",
+        *agent_models,
     )
     # API key status (presence only — no values leaked)
     for key in [
@@ -381,7 +382,7 @@ def job_resume(job_id: int) -> None:
 
 # ── test-agent subcommand ──────────────────────────────────────────────────
 
-AGENT_NAMES = ["safety", "researcher", "scriptwriter", "voice", "visual", "composer", "reviewer"]
+AGENT_NAMES = ["safety", "segment_producer", "scriptwriter", "voice", "visual", "composer", "reviewer"]
 
 
 def _parse_script(script: str | None, fallback: list[dict]) -> list[dict]:
@@ -394,7 +395,7 @@ def _run_safety(instance: object, topic: str, rules: list[str]) -> dict:
     return instance.execute(job_id=0, topic=topic, safety_rules=rules)
 
 
-def _run_researcher(instance: object, topic: str, rules: list[str], max_results: int, output_dir: str) -> dict:
+def _run_segment_producer(instance: object, topic: str, rules: list[str], max_results: int, output_dir: str) -> dict:
     return instance.execute(job_id=0, topic=topic, safety_rules=rules, max_results=max_results, output_dir=output_dir)
 
 
@@ -441,7 +442,7 @@ def _dispatch_test_agent(
 
     dispatch = {
         "safety": lambda: _run_safety(instance, topic, rules),
-        "researcher": lambda: _run_researcher(instance, topic, rules, max_results, output_dir),
+        "segment_producer": lambda: _run_segment_producer(instance, topic, rules, max_results, output_dir),
         "scriptwriter": lambda: _run_scriptwriter(instance, topic, rules, brief),
         "voice": lambda: _run_voice(instance, script, output_dir),
         "visual": lambda: _run_visual(instance, topic, script, auto_research_output, output_dir),
@@ -461,7 +462,7 @@ def _dispatch_test_agent(
 @click.argument("agent", type=click.Choice(AGENT_NAMES))
 @click.option("--topic", "-t", default="Test topic", help="Topic for the agent")
 @click.option("--safety-rules", default="no_defamation,mark_rumors_as_unconfirmed", help="Comma-separated safety rules")
-@click.option("--max-results", default=3, help="Max search results (researcher only)")
+@click.option("--max-results", default=3, help="Max search results (segment_producer only)")
 @click.option("--research-brief", default=None, help="Research brief text (scriptwriter only)")
 @click.option("--auto-research", is_flag=True, help="Run researcher first to feed scriptwriter/visual")
 @click.option("--script", default=None, help="Script JSON string (voice/visual/reviewer/composer)")
@@ -480,19 +481,19 @@ def test_agent(
 ) -> None:
     """Run a single agent independently for testing/debugging.
 
-    AGENT is one of: safety, researcher, scriptwriter, voice,
+    AGENT is one of: safety, segment_producer, scriptwriter, voice,
     visual, composer, reviewer.
 
     \b
     Examples:
       python -m clipper_agency test-agent safety -t "Agnez Mo"
-      python -m clipper_agency test-agent researcher -t "Agnez Mo" --max-results 2
+      python -m clipper_agency test-agent segment_producer -t "Agnez Mo" --max-results 2
       python -m clipper_agency test-agent scriptwriter -t "Agnez Mo" --auto-research
     """
     import json
     import time
     from clipper_agency.agents.safety import SafetyAgent
-    from clipper_agency.agents.researcher import ResearcherAgent
+    from clipper_agency.agents.segment_producer import SegmentProducerAgent
     from clipper_agency.agents.scriptwriter import ScriptwriterAgent
     from clipper_agency.agents.voice_producer import VoiceProducerAgent
     from clipper_agency.agents.visual_director import VisualDirectorAgent
@@ -504,7 +505,7 @@ def test_agent(
 
     agent_map = {
         "safety": SafetyAgent,
-        "researcher": ResearcherAgent,
+        "segment_producer": SegmentProducerAgent,
         "scriptwriter": ScriptwriterAgent,
         "voice": VoiceProducerAgent,
         "visual": VisualDirectorAgent,
@@ -519,11 +520,11 @@ def test_agent(
 
     start = time.monotonic()
 
-    # ── Auto-research: run researcher first to feed downstream ──────────
+    # ── Auto-research: run segment_producer first to feed downstream ──────
     auto_research_output: dict = {}
     if auto_research and agent in ("scriptwriter", "visual"):
-        click.echo("\n[auto-research] Running researcher first...")
-        researcher = ResearcherAgent()
+        click.echo("\n[auto-research] Running segment_producer first...")
+        researcher = SegmentProducerAgent()
         auto_research_output = researcher.execute(
             job_id=0, topic=topic, safety_rules=rules,
             max_results=max_results, output_dir=resolved_output,

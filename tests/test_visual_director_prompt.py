@@ -43,3 +43,29 @@ class TestVisualDirectorPrompt:
     def test_prompt_output_includes_transition_field(self):
         text = self._load()
         assert '"transition_in"' in text
+
+    def test_prompt_contains_beat_driven_instructions(self):
+        """Beat-driven mode instructions present in prompt."""
+        text = self._load()
+        assert "beat_driven" in text.lower()
+        assert "story_beats" in text.lower()
+
+    def test_prompt_contains_visual_hierarchy(self):
+        """Visual selection hierarchy documented in prompt."""
+        text = self._load()
+        assert "asset_candidates" in text.lower()
+        assert "visual_must_show" in text.lower()
+        assert "visual_must_not_show" in text.lower()
+
+    def test_prompt_contains_do_not_use_rule(self):
+        text = self._load()
+        assert "do_not_use" in text.lower()
+
+    def test_prompt_contains_beat_role_guidance(self):
+        text = self._load()
+        assert "hook" in text.lower()
+        assert "closing_cta" in text.lower()
+
+    def test_prompt_contains_duration_from_timestamps_rule(self):
+        text = self._load()
+        assert "duration_sec" in text or "timestamps" in text.lower()

@@ -1,4 +1,12 @@
-"""Researcher Agent — web search and content research synthesis."""
+"""Segment Producer Agent — research, fact-checking, story structuring, and edit planning.
+
+Combines 5 specialist roles:
+  1. Fact Checker — verify claims, label confidence, produce safe wording.
+  2. Viral Analyst — decide video format based on asset availability.
+  3. Clip Scout — evaluate source clips for quality and relevance.
+  4. Story Producer — structure narrative into story beats.
+  5. Edit Planner — plan visual requirements per beat.
+"""
 
 import json
 import logging
@@ -7,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from clipper_agency.agents.base import BaseAgent
-from clipper_agency.config.loader import load_settings
+from clipper_agency.config.loader import get_agent_config, load_settings
 from clipper_agency.core.artifacts import write_json, write_text
 from clipper_agency.core.paths import (
     agent_dir,
@@ -15,10 +23,10 @@ from clipper_agency.core.paths import (
     agent_output_file,
     ensure_research_cache_dir,
     firecrawl_cache_file,
-    researcher_brief_file,
-    researcher_contract_file,
     research_brief_cache_file,
     scrapecreators_cache_file,
+    segment_producer_brief_file,
+    segment_producer_contract_file,
 )
 from clipper_agency.llm.client import OpenRouterClient
 from clipper_agency.services.firecrawl_service import FirecrawlService
@@ -32,12 +40,18 @@ MAX_SOURCE_CHARS = 40_000  # ~10K tokens worth of text
 MAX_CHARS_PER_SOURCE = 500
 
 
-RESEARCH_PROMPT = """You are a research assistant for {channel_description}.
+SEGMENT_PRODUCER_PROMPT = """You are a Segment Producer for {channel_description}.
+
+You combine 5 specialist roles:
+
+1. **Fact Checker** — Verify every claim. Label as "verified", "likely", or "unconfirmed". If unconfirmed, provide safe wording.
+2. **Viral Analyst** — Decide video format based on asset availability. Choose the format that maximizes engagement.
+3. **Clip Scout** — Evaluate every source clip for quality. Reject blurry, irrelevant, or misleading footage.
+4. **Story Producer** — Structure the narrative into story beats. Every beat must serve the story arc.
+5. **Edit Planner** — Plan the edit blueprint. Decide what visual goes with each beat.
 
 Write your output in {language} with a {tone} style.
 Focus research on: {content_angle}.
-
-Analyze the provided search results and create a concise research brief.
 
 Rules to follow:
 {rules_text}
@@ -48,16 +62,10 @@ Video duration budget:
 - Estimated speaking rate: {estimated_words_per_second} words/second
 - Max stories allowed: {max_stories_per_video}
 
-Calculate your recommendation carefully:
-- Each story needs ~2 scenes (narration + transition)
-- Plus 1 opening hook scene (~5s) and 1 closing CTA scene (~4s)
-- At {estimated_words_per_second} WPS, calculate: (total_seconds - 9s_overhead) / scenes_per_story / WPS = max_words_per_scene
-- Choose selected_story_count that fits within {hard_limit_sec} seconds total
-
 Search results:
 {sources_text}
 
-Return a JSON response with two fields:
+You MUST produce a JSON response with these fields:
 
 1. "research_brief" — concise brief covering:
    - Key facts and verified information
@@ -65,18 +73,68 @@ Return a JSON response with two fields:
    - Content suggestions for short-form video
    - Any risks or sensitive topics to handle carefully
 
-2. "content_direction" — recommend the best approach for this content:
-   - "recommended_format": one of "three_story_roundup", "single_story_deep", or "rapid_bulletin"
+2. "content_direction" — format and story selection:
+   - "recommended_format": one of "single_story_deep_dive", "three_story_roundup", "two_story_highlight", or "text_only"
    - "reason": brief explanation
    - "selected_story_count": number (1-{max_stories_per_video})
    - "selected_stories": list of story slugs or headlines
    - "content_angle": suggested angle for Scriptwriter
    - "risk_notes": any safety/caution notes
+
+3. "story_beats" — array of beats, each with:
+   - "beat_id": sequential integer (1, 2, 3...)
+   - "role": one of "hook", "main_claim", "evidence", "reaction", "closing_cta"
+   - "narration_goal": what the narrator should communicate
+   - "spoken_point": the actual talking point (1-2 sentences)
+   - "safe_wording": legally safe version of the claim
+   - "visual_must_show": what the visual MUST display
+   - "visual_must_not_show": what the visual must NOT display
+   - "overlay_text": short on-screen text (max 6 words)
+   - "caption_keywords": 2-4 keywords for subtitle display
+   - "asset_candidates": array of {{"type", "url", "reason"}} for visual assets
+   - "fallback": {{"type", "headline", "image_search"}} if no asset found
+   - "evidence_source": URL or "none"
+   - "risk_note": "" or risk warning
+
+4. "format_decision" — structured format choice:
+   - "format": one of "single_story_deep_dive", "three_story_roundup", "two_story_highlight", "text_only"
+   - "story_count": number of stories
+   - "rationale": why this format
+   - "video_asset_ratio": ratio of clips available vs needed (0.0-1.0)
+
+5. "verified_facts" — array of {{"fact", "source_url", "confidence", "safe_wording"}}
+
+6. "unverified_claims" — array of {{"claim", "label", "safe_wording"}}
+
+7. "do_not_use" — array of strings: visual types/sources to avoid
+
+8. "reference_style" — production parameters:
+   - "format": chosen format
+   - "target_duration_sec": target duration
+   - "hook_duration_sec": hook duration (2-3 seconds)
+   - "avg_scene_duration_sec": average scene duration
+   - "caption_style": "keyword" or "full"
+   - "transition_style": "hard_cut" or "crossfade"
+   - "visual_priority": ordered list of visual types
+
+Rules:
+- Every beat must have a clear visual plan (asset or fallback)
+- If a claim is unconfirmed, use safe wording
+- Hook beat must be attention-grabbing within 2 seconds
+- Closing CTA must include engagement prompt
+- Target 35-60 seconds total
+- First beat (hook) should be 2-3 seconds
+- Use {language}, {tone} tone
+- Apply safety_rules from niche config
 """
 
 
-class ResearcherAgent(BaseAgent):
-    """Researches a topic using web search tools and LLM synthesis.
+class SegmentProducerAgent(BaseAgent):
+    """Segment Producer: research, fact-check, story structure, and edit planning.
+
+    Combines 5 specialist roles (Fact Checker, Viral Analyst, Clip Scout,
+    Story Producer, Edit Planner) to produce a comprehensive edit blueprint
+    with story beats, format decisions, and asset evaluations.
 
     Caches ScrapeCreators and Firecrawl API responses per job so
     expensive API calls are only made once per topic/job run.
@@ -84,7 +142,7 @@ class ResearcherAgent(BaseAgent):
 
     @property
     def agent_name(self) -> str:
-        return "researcher"
+        return "segment_producer"
 
     def execute(
         self,
@@ -118,15 +176,32 @@ class ResearcherAgent(BaseAgent):
         firecrawl_data = self._get_firecrawl(topic, max_results, output_dir, job_id)
         aggregated = self._aggregate_data(firecrawl_data, scrapecreators_data)
 
+        # ── 1b. Extract visual asset candidates from raw sources ────────
+        discovered_candidates = self._build_asset_candidates_from_sources(
+            firecrawl_data, scrapecreators_data,
+        )
+
         # ── 2. Synthesize research brief (cached or live LLM) ───────────
-        brief = self._get_research_brief(aggregated, topic, rules, output_dir, job_id,
-                                          channel_description, language, tone, content_angle)
+        synthesis = self._get_research_brief(
+            aggregated, topic, rules, output_dir, job_id,
+            channel_description, language, tone, content_angle,
+        )
 
         result = {
             "status": "completed",
-            "research_brief": brief,
+            "research_brief": synthesis["research_brief"],
             "sources": aggregated,
             "risk_flags": [],
+            "story_beats": synthesis.get("story_beats", []),
+            "format_decision": synthesis.get("format_decision"),
+            "asset_candidates": self._merge_asset_candidates(
+                synthesis.get("asset_candidates", []),
+                discovered_candidates,
+            ),
+            "do_not_use": synthesis.get("do_not_use", []),
+            "verified_facts": synthesis.get("verified_facts", []),
+            "unverified_claims": synthesis.get("unverified_claims", []),
+            "reference_style": synthesis.get("reference_style"),
         }
         if assets_cache:
             result.update(
@@ -134,7 +209,7 @@ class ResearcherAgent(BaseAgent):
                     assets_cache=assets_cache,
                     job_id=job_id,
                     topic=topic,
-                    brief=brief,
+                    brief=synthesis["research_brief"],
                     firecrawl_data=firecrawl_data,
                     scrapecreators_data=scrapecreators_data,
                     output=result,
@@ -150,20 +225,20 @@ class ResearcherAgent(BaseAgent):
         cache_path = scrapecreators_cache_file(output_dir, job_id)
 
         if os.path.exists(cache_path):
-            logger.info("Researcher: ScrapeCreators cache HIT (%s)", cache_path)
+            logger.info("Segment Producer: ScrapeCreators cache HIT (%s)", cache_path)
             with open(cache_path) as fh:
                 return json.load(fh)
 
-        logger.info("Researcher: ScrapeCreators cache MISS — calling API")
+        logger.info("Segment Producer: ScrapeCreators cache MISS — calling API")
         try:
             service = ScrapeCreatorsService()
             data = service.search_tiktok_videos(topic)
             with open(cache_path, "w") as fh:
                 json.dump(data, fh, indent=2)
-            logger.debug("Researcher: saved %d results to %s", len(data), cache_path)
+            logger.debug("Segment Producer: saved %d results to %s", len(data), cache_path)
             return data
         except Exception:
-            logger.exception("Researcher: ScrapeCreators API failed")
+            logger.exception("Segment Producer: ScrapeCreators API failed")
             return []
 
     def _get_firecrawl(
@@ -172,20 +247,20 @@ class ResearcherAgent(BaseAgent):
         cache_path = firecrawl_cache_file(output_dir, job_id)
 
         if os.path.exists(cache_path):
-            logger.info("Researcher: Firecrawl cache HIT (%s)", cache_path)
+            logger.info("Segment Producer: Firecrawl cache HIT (%s)", cache_path)
             with open(cache_path) as fh:
                 return json.load(fh)
 
-        logger.info("Researcher: Firecrawl cache MISS — calling API")
+        logger.info("Segment Producer: Firecrawl cache MISS — calling API")
         try:
             service = FirecrawlService()
             data = service.search(topic, max_results)
             with open(cache_path, "w") as fh:
                 json.dump(data, fh, indent=2)
-            logger.debug("Researcher: saved %d Firecrawl results to %s", len(data), cache_path)
+            logger.debug("Segment Producer: saved %d Firecrawl results to %s", len(data), cache_path)
             return data
         except Exception:
-            logger.exception("Researcher: Firecrawl API failed")
+            logger.exception("Segment Producer: Firecrawl API failed")
             return []
 
     # ── research brief synthesis (with cache + token guard) ─────────────────
@@ -201,23 +276,26 @@ class ResearcherAgent(BaseAgent):
         language: str = "",
         tone: str = "",
         content_angle: str = "",
-    ) -> str:
+    ) -> dict[str, Any]:
         cache_path = research_brief_cache_file(output_dir, job_id)
 
         if os.path.exists(cache_path):
-            logger.info("Researcher: research_brief cache HIT (%s)", cache_path)
+            logger.info("Segment Producer: research_brief cache HIT (%s)", cache_path)
             with open(cache_path) as fh:
-                return json.load(fh)["research_brief"]
+                cached = json.load(fh)
+                # Backward-compatible: old cache may only have research_brief
+                if "story_beats" not in cached:
+                    cached["story_beats"] = []
+                return cached
 
-        logger.info("Researcher: research_brief cache MISS — calling LLM")
+        logger.info("Segment Producer: research_brief cache MISS — calling LLM")
         result = self._synthesize_research(aggregated, topic, safety_rules,
-                                            channel_description, language, tone, content_angle)
-        brief = result["research_brief"]
+                                           channel_description, language, tone, content_angle)
 
         with open(cache_path, "w") as fh:
-            json.dump({"research_brief": brief}, fh, indent=2)
-        logger.debug("Researcher: saved research_brief to %s", cache_path)
-        return brief
+            json.dump(result, fh, indent=2)
+        logger.debug("Segment Producer: saved research_brief to %s", cache_path)
+        return result
 
     # ── helpers ─────────────────────────────────────────────────────────────
 
@@ -231,6 +309,60 @@ class ResearcherAgent(BaseAgent):
             "total_sources": len(sources),
             "sources": sources,
         }
+
+    @staticmethod
+    def _build_asset_candidates_from_sources(
+        firecrawl_data: list[dict],
+        scrapecreators_data: list[dict],
+    ) -> list[dict]:
+        """Build visual asset candidates from raw research sources."""
+        candidates: list[dict] = []
+        for item in scrapecreators_data:
+            url = item.get("url", "")
+            if not url:
+                continue
+            candidates.append({
+                "type": "tiktok_clip",
+                "url": url,
+                "reason": item.get("title") or item.get("desc") or "ScrapeCreators video candidate",
+                "source": "scrapecreators",
+                "page_url": url,
+                "title": item.get("title", ""),
+                "relevance_score": 0.9,
+                "provenance": "primary_clip",
+                "license_status": "unknown",
+            })
+        for item in firecrawl_data:
+            url = item.get("url", "")
+            if not url:
+                continue
+            candidates.append({
+                "type": "screenshot",
+                "url": url,
+                "reason": item.get("description") or item.get("title") or "Firecrawl supporting context",
+                "source": "firecrawl",
+                "page_url": url,
+                "title": item.get("title", ""),
+                "relevance_score": 0.7,
+                "provenance": "supporting_context",
+                "license_status": "unknown",
+            })
+        return candidates
+
+    @staticmethod
+    def _merge_asset_candidates(*candidate_groups: list[dict]) -> list[dict]:
+        """Merge asset candidate groups, deduplicating by URL."""
+        seen_urls: set[str] = set()
+        merged: list[dict] = []
+        for group in candidate_groups:
+            for candidate in group:
+                url = candidate.get("url", "")
+                key = url or json.dumps(candidate, sort_keys=True)
+                if key in seen_urls:
+                    continue
+                seen_urls.add(key)
+                merged.append(candidate)
+        return merged
 
     def _persist_contract_artifacts(
         self,
@@ -251,8 +383,8 @@ class ResearcherAgent(BaseAgent):
         entities_path = base / "normalized" / "entities.json"
         risk_flags_path = base / "normalized" / "risk_flags.json"
 
-        brief_path = researcher_brief_file(assets_cache, job_id)
-        contract_path = researcher_contract_file(assets_cache, job_id)
+        brief_path = segment_producer_brief_file(assets_cache, job_id)
+        contract_path = segment_producer_contract_file(assets_cache, job_id)
         write_json(raw_scrapecreators_path, scrapecreators_data)
         write_json(raw_firecrawl_path, firecrawl_data)
         write_text(brief_path, brief)
@@ -261,6 +393,9 @@ class ResearcherAgent(BaseAgent):
         write_json(music_candidates_path, [])
         write_json(entities_path, {})
         write_json(risk_flags_path, [])
+
+        asset_candidates_path = base / "normalized" / "asset_candidates.json"
+        write_json(asset_candidates_path, output.get("asset_candidates", []))
 
         contract = {
             "topic": topic,
@@ -272,6 +407,8 @@ class ResearcherAgent(BaseAgent):
             "music_candidates": [],
             "entities": {},
             "risk_flags": [],
+            "asset_candidates": output.get("asset_candidates", []),
+            "asset_candidates_path": str(asset_candidates_path),
             "cache_key": f"job_{job_id}:{topic}",
             "cache_freshness": "fresh",
         }
@@ -305,7 +442,7 @@ class ResearcherAgent(BaseAgent):
             total_chars += len(text)
             if total_chars >= MAX_SOURCE_CHARS:
                 logger.warning(
-                    "Researcher: source text truncated at %d chars "
+                    "Segment Producer: source text truncated at %d chars "
                     "(%d of %d sources used to avoid LLM context overflow)",
                     total_chars,
                     len(trimmed),
@@ -317,7 +454,7 @@ class ResearcherAgent(BaseAgent):
         rules_text = "\n".join(f"- {r}" for r in safety_rules) if safety_rules else "None"
 
         logger.info(
-            "Researcher: synthesizing research "
+            "Segment Producer: synthesizing research "
             "(%d sources, %d chars of text)",
             len(trimmed),
             len(sources_text),
@@ -325,13 +462,14 @@ class ResearcherAgent(BaseAgent):
 
         settings = load_settings()
         cp_config = settings.content_planning
+        agent_cfg = get_agent_config("segment_producer")
         llm = OpenRouterClient()
         response = llm.chat(
-            model=settings.researcher_model,
+            model=agent_cfg["model"],
             messages=[
                 {
                     "role": "system",
-                    "content": RESEARCH_PROMPT.format(
+                    "content": SEGMENT_PRODUCER_PROMPT.format(
                         channel_description=channel_description or "a content creator",
                         language=language or "English",
                         tone=tone or "casual",
@@ -349,18 +487,25 @@ class ResearcherAgent(BaseAgent):
                     "content": f"Research topic: {topic}",
                 },
             ],
-            temperature=0.3,
-            max_tokens=1024,
+            temperature=agent_cfg["temperature"],
+            max_completion_tokens=agent_cfg.get("max_completion_tokens"),
         )
         parsed = self._parse_synthesis_response(response["content"])
         return {
             "research_brief": parsed["research_brief"],
             "content_direction": parsed.get("content_direction"),
             "source_count": len(sources),
+            "story_beats": parsed.get("story_beats", []),
+            "format_decision": parsed.get("format_decision"),
+            "asset_candidates": parsed.get("asset_candidates", []),
+            "do_not_use": parsed.get("do_not_use", []),
+            "verified_facts": parsed.get("verified_facts", []),
+            "unverified_claims": parsed.get("unverified_claims", []),
+            "reference_style": parsed.get("reference_style"),
         }
 
     def _parse_synthesis_response(self, content: str) -> dict[str, Any]:
-        """Parse LLM synthesis response into research_brief + content_direction."""
+        """Parse LLM synthesis response into research_brief + structured fields."""
         try:
             stripped = content.strip()
             if stripped.startswith("```"):
@@ -374,6 +519,23 @@ class ResearcherAgent(BaseAgent):
             return {
                 "research_brief": str(brief),
                 "content_direction": data.get("content_direction"),
+                "story_beats": data.get("story_beats", []),
+                "format_decision": data.get("format_decision"),
+                "asset_candidates": data.get("asset_candidates", []),
+                "do_not_use": data.get("do_not_use", []),
+                "verified_facts": data.get("verified_facts", []),
+                "unverified_claims": data.get("unverified_claims", []),
+                "reference_style": data.get("reference_style"),
             }
         except (json.JSONDecodeError, KeyError):
-            return {"research_brief": content, "content_direction": None}
+            return {
+                "research_brief": content,
+                "content_direction": None,
+                "story_beats": [],
+                "format_decision": None,
+                "asset_candidates": [],
+                "do_not_use": [],
+                "verified_facts": [],
+                "unverified_claims": [],
+                "reference_style": None,
+            }

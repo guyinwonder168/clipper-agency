@@ -1,8 +1,8 @@
 # Clipper Agency — Technical Design Document
 
-**Version:** 4.0
-**Date:** 2026-06-06
-**Status:** Tier 4 Design Accepted — Timeline-Aware Agent Orchestration (pending implementation)
+**Version:** 5.0
+**Date:** 2026-06-07
+**Status:** v2.0.0 Architecture Redesign Complete — Audio-First Continuous Voiceover Implemented
 **Related:** `docs/PRD.md`, `docs/SRS.md`, `docs/requirements_traceability.md`
 
 ---
@@ -14,14 +14,14 @@
 Seven MVP agents, each independently configurable and observable. Orchestrator coordinates via database-driven state. Creative Director deferred to Stage 2.
 
 ```
-                     DASHBOARD (Web UI)
-   Safety | Researcher | Scriptwriter | Voice | Visual | Composer | Reviewer
-                     ┌───────────────────────┐
-                     │     ORCHESTRATOR      │
-                     │ Gated State Machine   │
-                     └──────┬────────────────┘
-                            ▼
-                     DATABASE (SQLite → PG)
+                      DASHBOARD (Web UI)
+   Safety | Segment Producer | Scriptwriter | Voice | Visual | Composer | Reviewer
+                      ┌───────────────────────┐
+                      │     ORCHESTRATOR      │
+                      │ Gated State Machine   │
+                      └──────┬────────────────┘
+                             ▼
+                      DATABASE (SQLite → PG)
 ```
 
 **Why Fully Agentic:** Each agent independently testable, configurable, observable. Scales naturally. Avoids rigid monolith and limited-visibility structured pipeline.
@@ -110,23 +110,20 @@ Stage 2+:
 3.  Gate G2: Lightweight Cost + Credit Estimate
 4.  Agent A1: Safety Pre-Check (ultra-cheap model)
 5.  Gate G3: Research Cache Check
-6.  Agent A2: Researcher (ScrapeCreators + Firecrawl + content_direction)
+6.  Agent A2: Segment Producer (ScrapeCreators + Firecrawl + story_beats + edit blueprint)
 7.  Gate G4: Post-Research Risk Gate
 8.  Gate G5: Source Quality Gate
-9.  Orchestrator Format Validator (deterministic, config-driven)
-10. Gate G6: Creative Memory Gate
-11. Agent A3: Scriptwriter (budget-obedient, scene roles + word count + estimated duration)
-12. Gate G_NEW: Script Duration Gate (word-count estimate before TTS)
-13. Agent A4: Voice Producer (ElevenLabs → Gemini TTS → Fish Audio + audio_metadata)
-14. Gate G8: Audio Validation Gate
-15. Orchestrator Timeline Reconciler (canonical timeline; fails before Visual if over hard limit)
-16. Gate G_NEW: Timeline Validation Gate
-17. Agent A5: Visual Director (timeline-aware, opening card + CTA card)
-18. Gate G9: Asset Validation Gate
-19. Agent A6: Composer (timeline-obedient, per-scene audio + subtitles + xfade)
-20. Gate G10: Deterministic Video Validation (configurable duration limit)
-21. Agent A7: Reviewer (multimodal)
-22. Output Package
+9.  Gate G6: Creative Memory Gate
+10. Agent A3: Scriptwriter (continuous voiceover from story beats, 75-110 words)
+11. Gate G7: Script Validation Gate
+12. Agent A4: Voice Producer (single TTS call + word-level timestamps)
+13. Gate G8: Audio Validation Gate
+14. Agent A5: Visual Director (beat-driven, audio-aware, visual_must_show rules)
+15. Gate G9: Asset Validation Gate
+16. Agent A6: Composer (single audio timeline, smart trimming, keyword captions)
+17. Gate G10: Deterministic Video Validation
+18. Agent A7: Reviewer (AV sync + caption quality + fact safety + narrative structure)
+19. Output Package
 ```
 
 ### 3.2 Gate Definitions
@@ -226,27 +223,14 @@ Stage 2+:
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Validate voiceover files and duration metadata before downstream visual/render spend |
-| **Input** | Audio file paths, `audio_metadata` (per-scene duration via ffprobe), expected durations |
-| **Check type** | Deterministic (file exists, file size > 0, duration metadata present, total within hard limit) |
-| **Pass** | Audio files valid, metadata present, duration consistent |
-| **Soft fail** | Minor duration deviation — log, continue |
-| **Hard fail** | File missing, 0 bytes, no metadata, total exceeds hard limit |
+| **Purpose** | Validate continuous voiceover file, duration, and word-level timestamps before downstream visual/render spend |
+| **Input** | Voiceover file path (`voiceover.mp3`), `voiceover_duration_sec`, word-level timestamps, expected word count range (75-110) |
+| **Check type** | Deterministic (file exists, file size > 0, duration metadata present, timestamps non-empty, total within hard limit) |
+| **Pass** | Audio file valid, metadata present, timestamps extracted, duration within limit |
+| **Soft fail** | Minor duration deviation or fewer timestamps than expected — log, continue |
+| **Hard fail** | File missing, 0 bytes, no metadata, no timestamps, total exceeds hard limit |
 | **Cost protection** | Prevents Visual Director and Composer spend when audio is broken or too long |
-| **Next** | Timeline Reconciler if pass/soft-fail. Admin/Creative Lead if hard fail. |
-
-#### G_NEW: Timeline Validation Gate
-
-| Field | Value |
-|-------|-------|
-| **Purpose** | Validate canonical timeline before visual planning and rendering spend |
-| **Input** | `reconciled_timeline.json` |
-| **Check type** | Deterministic |
-| **Pass** | Timeline internally consistent, per-scene start/end times aligned, total ≤ hard limit, all roles present |
-| **Soft fail** | Not applicable |
-| **Hard fail** | Inconsistent timeline, total exceeds hard limit, missing audio files, missing scene roles |
-| **Cost protection** | Prevents Visual Director and Composer spend on impossible timelines |
-| **Next** | Admin/Creative Lead if hard fail. A5 if pass. |
+| **Next** | Visual Director if pass/soft-fail. Admin/Creative Lead if hard fail. |
 
 #### G9: Asset Validation Gate
 
@@ -280,8 +264,8 @@ Each job has a state tracked in the database:
 
 ```text
 CREATED → PREFLIGHT → COST_ESTIMATED → SAFETY_CHECKED → RESEARCHING
-→ RESEARCH_REVIEWED → SOURCES_VALIDATED → FORMAT_VALIDATED → MEMORY_CHECKED → SCRIPTING
-→ SCRIPT_DURATION_CHECKED → VOICING → AUDIO_VALIDATED → TIMELINE_RECONCILED
+→ RESEARCH_REVIEWED → SOURCES_VALIDATED → MEMORY_CHECKED → SCRIPTING
+→ SCRIPT_VALIDATED → VOICING → AUDIO_VALIDATED
 → VISUALIZING → ASSETS_VALIDATED → COMPOSING → VIDEO_VALIDATED → REVIEWING
 → COMPLETED
 
@@ -320,16 +304,15 @@ Required before enabling those commands:
 | Agent | Role | Cost Tier | Caching |
 |-------|------|-----------|---------|
 | **Safety Agent** | Pre-checks topic. Ultra-cheap model (GLM-4-9B). Hard-blocks illegal/banned/high-risk defamation; soft-warns unverified claims. | Ultra Budget | Not cached |
-| **Researcher** | Gathers context + source URLs + music candidates + content direction. MVP: ScrapeCreators (`trim=true` + field extraction) + Firecrawl + LLM synthesis. Content direction: recommends format (three_story_roundup / single_story_deep / rapid_bulletin), ranks candidate stories, suggests content angle and risk notes. Orchestrator validates direction deterministically. See `docs/adr/0020-use-canonical-timeline-contract.md`. | Budget East | TTL-based + job workspace file cache |
-| **Scriptwriter** | Writes script + caption in niche tone obeying content direction budget. Emits scene roles (opening_hook, story_1..N, cta), word_count, estimated_duration_sec per scene. Rotates angle from creative history. Always fresh. | Budget East | Never |
-| **Voice Producer** | Generates voiceover via provider fallback: ElevenLabs → Google AI Studio Gemini TTS → Fish Audio → fail clearly. Measures actual audio duration via ffprobe and returns `audio_metadata` per scene. Voice files and metadata saved under `ASSETS_CACHE/job_{id}/agents/voice_producer/`. Always fresh. | API cost | Never |
-| **Orchestrator (Format Validator + Timeline Reconciler)** | Deterministic services: validates Researcher content_direction against niche config, derives word/time budgets, runs Script Duration Gate, and reconciles canonical timeline from Researcher direction + Scriptwriter output + Voice Producer actual durations. Fails pipeline early when budget or timeline limits are exceeded. No LLM cost. | N/A (deterministic) | Per-job timeline artifact |
-| **Visual Director** | LLM-driven timeline-aware visual planning: consumes reconciled timeline, creates opening card for `opening_hook` and CTA card for `cta` roles, matches visual duration to `target_duration_sec`, selects treatments/transitions per scene. See `docs/adr/0014-visual-director-llm-planning.md`. | Budget East | Never |
-| **Composer** | FFmpeg assembly: scenes, transitions, captions, audio, thumbnail. Treatment-aware: applies treatment-specific FFmpeg filter chains (zoompan for Ken Burns, speed for slow-motion, fade for transitions) from `templates/treatments.yaml`. Scene normalizer unifies framerates to 30fps, normalizes SAR to 1:1, validates clip bounds before composition. Audio sequencer pairs per-scene voice files with video clips via concat (Mode A: paired audio+video, Mode B: audio-only when xfade handles video). Subtitle engine converts script text to timed drawtext overlays with absolute timestamps. xfade/concat mixed transition chain with offset calculation, duration clamping, and safety margins. Production flags: `-pix_fmt yuv420p`, `-movflags +faststart`. Dead `amix` and `_build_filter` code removed. | N/A | Never |
-| **Reviewer** | Quality + safety + duplicate check. Multimodal (video + text). Max 2 human-triggered retries. | Moderate | Never |
+| **Segment Producer** | Formerly Researcher. Gathers context + source URLs via ScrapeCreators + Firecrawl. Outputs edit blueprint with story_beats (visual_must_show/must_not_show, asset_candidates, overlay_text, caption_keywords), format_decision, verified_facts, unverified_claims, and do_not_use list. 5 sub-roles: Fact Checker, Viral Analyst, Clip Scout, Story Producer, Edit Planner. See `docs/adr/0021-audio-first-continuous-voiceover.md`. | Budget East | TTL-based + job workspace file cache |
+| **Scriptwriter** | Writes continuous voiceover narration (75-110 words, no emojis, spoken-word style) from Segment Producer's story_beats. Outputs voiceover_text + narrative_structure (beat_id, word_range, overlay_text, caption_keywords). Removes per-scene word limit formula. Rotates angle from creative history. | Budget East | Never |
+| **Voice Producer** | Generates continuous voiceover via single TTS call (87.5% cost reduction vs per-scene). Primary: ElevenLabs `/with-timestamps` (character-level alignment grouped into words). Fallback: Gemini TTS (silence detection) → Fish Audio → fail clearly. Returns voiceover.mp3 + word-level timestamps + duration. Voice files and metadata saved under `ASSETS_CACHE/job_{id}/agents/voice_producer/`. | API cost | Never |
+| **Visual Director** | Beat-driven, audio-aware visual planning: consumes story_beats + word timestamps + visual rules (must_show/must_not_show) + do_not_use list. Each beat has exact audio duration from timestamps. Visual hierarchy: source clip → screenshot → portrait with Ken Burns → text card → stock (abstract only). Sequential execution: Voice Producer must complete first. | Budget East | Never |
+| **Composer** | Single audio timeline: voiceover.mp3 is immutable anchor (never trimmed). Smart scene trimming at ffprobe keyframe boundaries (±15% tolerance). Speed adjustment ±20% (imperceptible). Keyword captions (max 6 words, beat-aligned, bottom-positioned) replace full-sentence subtitles. Treatment-aware rendering from `templates/treatments.yaml`. Scene normalizer unifies framerates to 30fps. Production flags: `-pix_fmt yuv420p`, `-movflags +faststart`. | N/A | Never |
+| **Reviewer** | 4 programmatic quality checks: (1) AV sync (drift < 0.5s), (2) caption quality (short keywords, max 6 words), (3) fact safety (safe wording for unverified claims), (4) narrative structure (beat completeness). Plus multimodal quality + safety + duplicate check. Max 2 human-triggered retries. | Moderate | Never |
 | **Creative Director** | Stage 2. Proposes new angles/templates when variation exhausted. | Agentic East | Triggered |
 
-### Visual Director LLM Planning (Phase 16–18)
+### Visual Director Beat-Driven Planning (Phase 16–18 + v2.0.0)
 
 The Visual Director uses LLM-driven planning with video production expertise to intelligently select visual assets and treatments per scene, replacing the original blind sequential URL assignment.
 
@@ -365,64 +348,73 @@ Query construction is config-driven: the niche profile defines search terms, lan
 | Agent | Input | Output | On Failure |
 |-------|-------|--------|------------|
 | **Safety** | Topic string, niche safety_rules; persisted as `agents/safety/input.json` | Pass/soft-warning/hard-fail + reason; persisted as `agents/safety/output.json` + `summary.md` | Hard-fail stops pipeline |
-| **Researcher** | Topic, niche config, cached research (if fresh); persisted as `agents/researcher/input.json` | Markdown brief (`research_brief.md`), `content_direction.json`, raw provider payloads, normalized files, `research_contract.json`, and `output.json` | Empty result → G5 handles |
-| **Scriptwriter** | Researcher output + validated content direction + word/time budget; persisted as `agents/scriptwriter/input.json` | `script.json` (with `role`, `word_count`, `estimated_duration_sec` per scene), `caption.txt`, `hashtags.json`, selected angle, and `output.json` | N/A (always produces output) |
-| **Voice Producer** | Validated script text + voice_id; persisted as `agents/voice_producer/input.json` | Voice files under `agents/voice_producer/voices/`, `audio_metadata.json` (per-scene duration via ffprobe), `provider_attempts.json`, and `output.json` | All providers fail → stop, retry by Admin/Creative Lead |
-| **Timeline Reconciler** | Researcher content_direction + Scriptwriter output + Voice audio_metadata + niche config; persisted as `timeline/reconciled_timeline.json` | Canonical timeline with per-scene start_sec/end_sec, roles, target durations, visual instructions | Exceeds hard limit → fail before Visual Director |
-| **Visual Director** | Reconciled timeline + research contract + Pexels query; persisted as `agents/visual_director/input.json` | `visual_plan.json` (LLM decisions), `scene_plan.json`, `provenance.json`, scene/card files, and `output.json` | Download failures → G9 handles |
-| **Composer** | Validated timeline + audio files + visual assets + template config; persisted as `agents/composer/input.json` | Final `OUTPUT_DIR/job_{id}/video.mp4`, plus `ffmpeg_command.txt`, diagnostics, and `output.json` | FFmpeg failure → stop, retry by Admin/Creative Lead |
-| **Reviewer** | Rendered video file, script text, caption, creative history; persisted as `agents/reviewer/input.json` | Pass/reject + specific issues + recommended retry step; persisted as `agents/reviewer/output.json` + `review.md` | Reject → Admin/Creative Lead decides |
+| **Segment Producer** | Topic, niche config, cached research (if fresh); persisted as `agents/segment_producer/input.json` | Edit blueprint: story_beats, format_decision, verified_facts, unverified_claims, do_not_use list, `output.json` | Empty result → G5 handles |
+| **Scriptwriter** | Segment Producer story_beats + verified_facts; persisted as `agents/scriptwriter/input.json` | `voiceover_text` (75-110 words), `narrative_structure` (beat_id, word_range, overlay_text), `caption`, `hashtags`, and `output.json` | N/A (always produces output) |
+| **Voice Producer** | voiceover_text + voice_id; persisted as `agents/voice_producer/input.json` | `voiceover.mp3` (single file), `voiceover_duration_sec`, `timestamps` (word-level), `provider`, `output.json` | All providers fail → stop, retry by Admin/Creative Lead |
+| **Visual Director** | story_beats + timestamps + do_not_use + asset_candidates; persisted as `agents/visual_director/input.json` | `visual_plan.json` (LLM decisions), `scene_plan.json`, `provenance.json`, scene/card files, and `output.json` | Download failures → G9 handles |
+| **Composer** | voiceover_path + timestamps + visual assets + narrative_structure; persisted as `agents/composer/input.json` | Final `OUTPUT_DIR/job_{id}/video.mp4`, plus `ffmpeg_command.txt`, diagnostics, and `output.json` | FFmpeg failure → stop, retry by Admin/Creative Lead |
+| **Reviewer** | Rendered video file, script text, caption, voiceover_duration, visual_duration, narrative_structure, unverified_claims; persisted as `agents/reviewer/input.json` | Pass/reject + specific issues (AV sync, caption quality, fact safety, narrative structure) + recommended retry step; persisted as `agents/reviewer/output.json` | Reject → Admin/Creative Lead decides |
 
-#### Researcher Output Schema
+### Segment Producer Output Schema
 
 ```yaml
-researcher_output:
-  topic_brief: "2-3 sentence summary"
+segment_producer_output:
+  topic_brief: "Short verified summary"
+
+  angle:
+    main_angle: "Why this story matters now"
+    viewer_hook: "What makes people stop scrolling"
+    emotional_driver: "shock | curiosity | sympathy | conflict | surprise | scandal | comeback"
+    risk_level: "low | medium | high"
+
+  format_decision:
+    format: "single_story_deep_dive | three_story_roundup | two_story_highlight"
+    story_count: 1
+    rationale: "Why this format was chosen"
+    video_asset_ratio: 0.33
+
+  verified_facts:
+    - fact: "..."
+      source_url: "https://..."
+      confidence: "verified | likely | unconfirmed"
+      safe_wording: "Safe version for narration"
+
+  unverified_claims:
+    - claim: "..."
+      label: "rumor"
+      safe_wording: "Safe wording with hedging"
+
+  story_beats:
+    - beat_id: 1
+      role: "hook | main_claim | evidence | reaction | closing_cta"
+      narration_goal: "What this beat should achieve"
+      spoken_point: "Key point to convey"
+      safe_wording: "Safe version"
+      visual_must_show: "Required visual content"
+      visual_must_not_show: "Forbidden visual content"
+      overlay_text: "RAMAI DIBAHAS"
+      caption_keywords: ["KEYWORD1", "KEYWORD2"]
+      asset_candidates:
+        - type: "tiktok_clip | pexels_video | pexels_image | text_card"
+          url: "https://..."
+          reason: "Why this asset"
+      fallback:
+        type: "text_card"
+        headline: "HEADLINE"
+      evidence_source: "https://..."
+      risk_note: "Safety guidance"
+
+  do_not_use:
+    - "generic Pexels city footage for named-person stories"
 
   video_sources:
     - url: "https://..."
-      platform: "youtube"
-      media_type: "video"
-      duration_seconds: 180
-      thumbnail_url: "https://..."
-      title: "Video title"
-      author: "Channel name"
-      published_at: "ISO-8601"
-      credibility_score: 0.8
-      candidate_moments:
-        - timestamp: "00:45-00:52"
-          description: "Key moment"
-          relevance: "high"
-      song:
-        title: "Song title"
-        artist: "Artist"
-        tiktok_song_id: "id"
-        usage_count: "1.2M videos"
-
-  background_music:
-    - title: "Song"
-      artist: "Artist"
-      tiktok_song_id: "id"
-      source: "tiktok"
-      mood: "upbeat"
-      fallback: "no background music or safe stock music"
+      desc: "Description"
+      type: "tiktok_clip"
 
   context_sources:
-    - url: "https://..."
-      type: "news_article"
-      summary: "Article summary"
-      key_facts: ["fact1", "fact2"]
-
-  tags: ["artist_name:X", "event_type:Y", "sentiment:neutral"]
-  entities:
-    artists: ["Artist Name"]
-    locations: ["Location"]
-    events: ["Event description"]
-  context_notes: "Notes about verification status"
-  risk_flags: ["flag_type"]
-
-  cache_key: "niche:platform:language:topic_cluster:entities:date"
-  cache_freshness: "fresh|stale|expired"
+    - title: "Article title"
+      description: "Summary"
 ```
 
 #### Persisted Research Artifacts
@@ -430,18 +422,16 @@ researcher_output:
 The Researcher writes a human-readable brief and a machine-readable contract:
 
 ```text
-ASSETS_CACHE/job_{id}/agents/researcher/research_brief.md
-ASSETS_CACHE/job_{id}/agents/researcher/research_contract.json
-ASSETS_CACHE/job_{id}/agents/researcher/raw/scrapecreators_response.json
-ASSETS_CACHE/job_{id}/agents/researcher/raw/firecrawl_response.json
-ASSETS_CACHE/job_{id}/agents/researcher/normalized/video_sources.json
-ASSETS_CACHE/job_{id}/agents/researcher/normalized/context_sources.json
-ASSETS_CACHE/job_{id}/agents/researcher/normalized/music_candidates.json
-ASSETS_CACHE/job_{id}/agents/researcher/normalized/entities.json
-ASSETS_CACHE/job_{id}/agents/researcher/normalized/risk_flags.json
+ASSETS_CACHE/job_{id}/agents/segment_producer/research_brief.md
+ASSETS_CACHE/job_{id}/agents/segment_producer/research_contract.json
+ASSETS_CACHE/job_{id}/agents/segment_producer/raw/scrapecreators_response.json
+ASSETS_CACHE/job_{id}/agents/segment_producer/raw/firecrawl_response.json
+ASSETS_CACHE/job_{id}/agents/segment_producer/normalized/video_sources.json
+ASSETS_CACHE/job_{id}/agents/segment_producer/normalized/context_sources.json
+ASSETS_CACHE/job_{id}/agents/segment_producer/normalized/entities.json
 ```
 
-`research_contract.json` is the downstream machine contract consumed by gates, Scriptwriter, and Visual Director. Raw provider responses remain as close to provider payloads as possible; normalized files are derived summaries for deterministic gates and retry/reuse validation.
+`research_contract.json` is the downstream machine contract consumed by gates, Scriptwriter, and Visual Director.
 
 ---
 
@@ -654,103 +644,58 @@ The Composer uses dedicated rendering modules for per-scene audio pairing and su
 - Composer chains drawtext filters: `[outv] → [vsub_in] → drawtext=...:enable='between(t,start,end)' → [outv]`.
 - Special characters escaped via `escape_drawtext()` from `primitives.py`.
 
-### Content Planning & Timeline Reconciliation (Tier 4 — Proposed)
+### Audio-First Continuous Voiceover Architecture (v2.0.0)
 
-The following additions are designed but not yet implemented. See `docs/plans/2026-06-06-timeline-aware-agent-orchestration.md` for the full design and `docs/plans/2026-06-06-tier4-implementation-plan.md` for the implementation plan.
+The following replaces the proposed Tier 4 Content Planning & Timeline Reconciliation with the implemented audio-first architecture. See `docs/adr/0021-audio-first-continuous-voiceover.md` for full rationale.
 
-#### Content Direction (Researcher)
+#### Key Principles
 
-Researcher extends its existing LLM synthesis to emit a structured `content_direction`:
+- **Audio-first**: voiceover generated first (single TTS call), visuals fitted to audio timeline
+- **Beat-driven**: story_beats flow through pipeline as primary data contract
+- **Sequential voice→visual**: Voice Producer must complete before Visual Director starts
+- **Continuous voiceover**: single `voiceover.mp3` (never trimmed), word-level timestamps from ElevenLabs `/with-timestamps`
+- **Smart trimming**: ffprobe keyframe boundary detection (±15% tolerance), speed ±20%
+- **Keyword captions**: max 6 words, beat-aligned, bottom-positioned
 
-```json
-{
-  "content_direction": {
-    "recommended_format": "three_story_roundup",
-    "reason": "Three safe, recent, unrelated stories...",
-    "selected_story_count": 3,
-    "selected_stories": ["story_1", "story_2", "story_3"],
-    "content_angle": "fast gossip roundup",
-    "risk_notes": ["Use cautious wording for unverified claims."]
-  }
-}
+#### Shared Schema Contract
+
+`config/schema.py` contains 11 Pydantic models defining cross-agent data contracts: `StoryBeat`, `FormatDecision`, `VerifiedFact`, `UnverifiedClaim`, `VisualInstruction`, `AssetCandidate`, `KeywordCaption`, `VoiceSettings`, `VoiceProviderResult`, `ContentBrief`, `NarrativeSection`.
+
+#### Data Flow
+
+```python
+# Segment Producer → edit blueprint
+segment_output = run_segment_producer(topic, ...)
+# Contains: story_beats, format_decision, asset_candidates, do_not_use
+
+# Scriptwriter → continuous voiceover
+script_output = run_scriptwriter(story_beats, verified_facts, ...)
+# Contains: voiceover_text, narrative_structure, caption_keywords
+
+# Voice Producer → single audio + timestamps
+voice_output = run_voice_producer(voiceover_text)
+# Contains: voiceover.mp3, timestamps, duration
+
+# Visual Director → beat-driven visuals
+visual_output = run_visual_director(story_beats, timestamps, do_not_use, ...)
+# Contains: visual assets mapped to audio timeline
+
+# Composer → single audio timeline with smart trimming
+composer_output = run_composer(voiceover_path, timestamps, assets, narrative_structure, ...)
+# Contains: video.mp4
+
+# Reviewer → quality validation
+review_output = run_reviewer(story_beats, video_path, voiceover_duration, ...)
+# Contains: pass/fail with 4 quality checks
 ```
-
-#### Orchestrator Format Validator
-
-Deterministic validation of Researcher direction against niche config (`ContentPlanningConfig`):
-
-- Validates recommended format is allowed.
-- Clamps story count to `max_stories_per_video`.
-- Derives word/time budgets from config.
-- Falls back to defaults when direction is missing.
-
-#### Script Duration Gate
-
-Before TTS spend, estimates duration locally:
-
-```text
-estimated_seconds = word_count / estimated_words_per_second + pause_buffer
-```
-
-Rejects scripts that exceed the hard limit before Voice Producer or downstream agents run.
-
-#### Voice Producer Audio Metadata
-
-Voice Producer measures each generated file with `ffprobe`:
-
-```json
-{
-  "scene": 1,
-  "audio_path": ".../scene_1.mp3",
-  "audio_duration_sec": 8.7,
-  "provider": "elevenlabs"
-}
-```
-
-#### Orchestrator Timeline Reconciler
-
-Deterministic service that combines Researcher direction, Scriptwriter scene roles/durations, Voice Producer actual audio durations, and niche config into one canonical timeline.
-
-Output:
-
-```json
-{
-  "timeline": [
-    {
-      "scene": 1,
-      "role": "opening_hook",
-      "text": "...",
-      "audio_path": "...",
-      "audio_duration_sec": 8.7,
-      "start_sec": 0.0,
-      "end_sec": 8.7,
-      "target_duration_sec": 8.7,
-      "visual_instruction": "opening card"
-    }
-  ],
-  "total_duration_sec": 54.2,
-  "within_limit": true
-}
-```
-
-Fails pipeline before Visual Director if total exceeds hard limit.
-
-#### Visual Director Timeline-Aware
-
-Visual Director consumes reconciled timeline for scene durations and visual instructions. Must produce opening card for `opening_hook` and CTA card for `cta` roles.
-
-#### Composer Timeline-Obedient
-
-Composer uses timeline durations, pairs timeline audio paths with visuals, generates subtitles from timeline text, and respects hook/CTA roles. Fails if timeline, audio files, or visual assets are inconsistent.
 
 #### Artifact Additions
 
 ```text
-agents/researcher/content_direction.json
-agents/voice_producer/audio_metadata.json
-timeline/reconciled_timeline.json
-gates/script_duration.json
-gates/timeline_validation.json
+config/schema.py (11 Pydantic models)
+agents/segment_producer/ (renamed from researcher)
+prompts/segment_producer.md (renamed, rewritten)
+prompts/scriptwriter.md (rewritten for voiceover)
 ```
 
 ---
@@ -824,10 +769,10 @@ Below the agent-default level, the system loads base configuration from `.env` v
 
 - **`AppSettings`** (`pydantic-settings` `BaseSettings`) — typed config class at `clipper_agency/config/schema.py` mapping env vars 1:1 (uppercased) to fields.
 - **`load_dotenv()`** — called once at `clipper_agency/__main__.py` import time, before any service reads `os.getenv()`.
-- **Fields:** `db_path`, `assets_cache`, `output_dir`, `dashboard_secret_key`, `dashboard_username`, `dashboard_password`, `llm_api_key`, `elevenlabs_api_key`, `gemini_api_key`, `gemini_tts_voice_name`, `fish_audio_api_key` (alias `FISHAUDIO_API_KEY`), `fish_audio_voice_id`, `elevenlabs_voice_id`, `pexels_api_key`, `scrapecreators_api_key`, `firecrawl_api_key`, `log_level`, `safety_model` (default `mimo-v2-flash`), `researcher_model` (default `mimo-v2-flash`), `scriptwriter_model` (default `mimo-v2-flash`), `reviewer_model` (default `mimo-v2-flash`), `visual_director_model` (default `mimo-v2-flash`).
+- **Fields:** `db_path`, `assets_cache`, `output_dir`, `dashboard_secret_key`, `dashboard_username`, `dashboard_password`, `llm_api_key`, `elevenlabs_api_key`, `gemini_api_key`, `gemini_tts_voice_name`, `fish_audio_api_key` (alias `FISHAUDIO_API_KEY`), `fish_audio_voice_id`, `elevenlabs_voice_id`, `pexels_api_key`, `scrapecreators_api_key`, `firecrawl_api_key`, `log_level`, `safety_model` (default `mimo-v2-flash`), `segment_producer_model` (default `mimo-v2-flash`), `scriptwriter_model` (default `mimo-v2-flash`), `reviewer_model` (default `mimo-v2-flash`), `visual_director_model` (default `mimo-v2-flash`).
 - **Usage:** CLI (`__main__.py`) and dashboard (`app.py`) call `load_settings()` to resolve paths and secrets. Services read keys directly via `os.getenv()`. Agents read their model from `load_settings().<agent>_model` instead of hardcoding.
 - **Test isolation:** Tests must use both `AppSettings(_env_file=None)` and `patch.dict(os.environ, {}, clear=True)` to prevent the user's `.env` (loaded by `load_dotenv()` at import) from leaking into test expectations.
-- **Cache path helpers:** `clipper_agency/core/paths.py` provides `job_cache_dir()`, `agent_dir()`, `agent_input_file()`, `agent_output_file()`, `gate_result_file()`, `researcher_brief_file()`, `researcher_contract_file()`, `voice_scene_file()`, `visual_scene_file()`, and `job_final_output_dir()` for consistent per-job cache/final paths.
+- **Cache path helpers:** `clipper_agency/core/paths.py` provides `job_cache_dir()`, `agent_dir()`, `agent_input_file()`, `agent_output_file()`, `gate_result_file()`, `segment_producer_brief_file()`, `segment_producer_contract_file()`, `voice_scene_file()`, `visual_scene_file()`, and `job_final_output_dir()` for consistent per-job cache/final paths.
 
 #### Voice Provider Fallback
 
@@ -930,7 +875,7 @@ SQLite for MVP (same schema migrates to PostgreSQL). Multi-tenant from day one.
 
 ## 13. MVP Deliverables
 
-1. **7 MVP Agents** — Safety, Researcher, Scriptwriter, Voice Producer, Visual Director (LLM-driven with treatment selection + video production expertise), Composer (treatment-aware rendering + scene normalization + audio sequencing + subtitle overlays + xfade transitions), Reviewer
+1. **7 MVP Agents** — Safety, Segment Producer (edit blueprint + story beats), Scriptwriter (continuous voiceover), Voice Producer (single audio + word timestamps), Visual Director (beat-driven, audio-aware), Composer (smart trimming + keyword captions + single audio timeline), Reviewer (4 quality gates: AV sync, caption quality, fact safety, narrative structure)
 2. **Orchestrator** — Gated state machine with human-triggered retry
 3. **Creative Memory** — Pre-generation check, variation rotation
 4. **Web Dashboard** — Agent observability, config editing, basic auth + 2 groups

@@ -181,11 +181,37 @@ class GateAudioValidation(BaseGate):
 class GateAssetValidation(BaseGate):
     """G9: Asset validation."""
 
+    @staticmethod
+    def _filter_text_card_paths(
+        asset_paths: list[str], assets: list[dict],
+    ) -> list[str] | None:
+        """Remove text_card/none assets with empty paths.
+
+        Returns None when all paths are filtered (all text cards).
+        """
+        skip_indices = {
+            i for i, a in enumerate(assets)
+            if not a.get("path", "") and a.get("source", "") in ("text_card", "none")
+        }
+        if not skip_indices:
+            return asset_paths
+        filtered = [p for i, p in enumerate(asset_paths) if i not in skip_indices]
+        return filtered if filtered else None
+
     def evaluate(self, asset_paths: list[str] | None = None,
+                 assets: list[dict] | None = None,
                  **kwargs) -> GateResult:
         paths = asset_paths or []
         if not paths:
             return GateResult(False, "hard_fail", "No assets")
+        # Filter out text_card/none assets with empty paths —
+        # Composer generates card fallbacks for these.
+        if assets:
+            filtered = self._filter_text_card_paths(paths, assets)
+            if filtered is None:
+                return GateResult(True, "pass",
+                                  "All assets are text cards (no downloads needed)")
+            paths = filtered
         valid = [p for p in paths
                  if Path(p).exists() and Path(p).stat().st_size > 0]
         if not valid:

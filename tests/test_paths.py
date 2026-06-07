@@ -7,8 +7,8 @@ from clipper_agency.core.paths import (
     gate_result_file,
     job_cache_dir,
     job_final_output_dir,
-    researcher_brief_file,
-    researcher_contract_file,
+    segment_producer_brief_file,
+    segment_producer_contract_file,
     visual_scene_file,
     voice_scene_file,
 )
@@ -30,12 +30,12 @@ def test_agent_paths_are_under_job_cache():
     )
 
 
-def test_researcher_specific_paths():
-    assert researcher_brief_file("data/assets/cache", 125) == (
-        "data/assets/cache/job_125/agents/researcher/research_brief.md"
+def test_segment_producer_specific_paths():
+    assert segment_producer_brief_file("data/assets/cache", 125) == (
+        "data/assets/cache/job_125/agents/segment_producer/research_brief.md"
     )
-    assert researcher_contract_file("data/assets/cache", 125) == (
-        "data/assets/cache/job_125/agents/researcher/research_contract.json"
+    assert segment_producer_contract_file("data/assets/cache", 125) == (
+        "data/assets/cache/job_125/agents/segment_producer/research_contract.json"
     )
 
 

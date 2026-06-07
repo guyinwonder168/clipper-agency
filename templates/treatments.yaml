@@ -69,7 +69,7 @@ treatments:
 transitions:
   crossfade:
     description: "Smooth blend between clips. Standard transition for most scenes."
-    default_duration: 0.3
+    default_duration: 0.5
     ffmpeg_filter: "xfade=transition=fade:duration={duration}:offset={offset}"
 
   hard_cut:

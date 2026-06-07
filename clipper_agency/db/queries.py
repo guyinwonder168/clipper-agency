@@ -6,7 +6,7 @@ from typing import Any
 
 # Pipeline agent order — used for retry/resume reset logic.
 PIPELINE_ORDER = [
-    "safety", "researcher", "scriptwriter",
+    "safety", "segment_producer", "scriptwriter",
     "voice_producer", "visual_director", "composer", "reviewer",
 ]
 

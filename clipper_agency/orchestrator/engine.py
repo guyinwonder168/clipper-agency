@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from clipper_agency.agents.composer import ComposerAgent
-from clipper_agency.agents.researcher import ResearcherAgent
+from clipper_agency.agents.segment_producer import SegmentProducerAgent
 from clipper_agency.agents.reviewer import ReviewerAgent
 from clipper_agency.agents.safety import SafetyAgent
 from clipper_agency.agents.scriptwriter import ScriptwriterAgent
@@ -19,6 +19,7 @@ from clipper_agency.config.loader import (
     get_language_name, get_tone_name, get_angle_name,
 )
 from clipper_agency.core.artifacts import write_json
+from clipper_agency.core.logging import add_job_file_handler, remove_job_file_handler
 from clipper_agency.core.manifest import (
     create_manifest,
     update_manifest_agent,
@@ -59,7 +60,6 @@ from clipper_agency.orchestrator.gates import (
     GateAssetValidation,
     GateVideoValidation,
 )
-from clipper_agency.orchestrator.timeline import reconcile_timeline
 from clipper_agency.orchestrator.validator import validate_content_direction
 from clipper_agency.output.packager import OutputPackager
 
@@ -162,11 +162,12 @@ class Orchestrator:
         job_id = create_job(conn, topic=topic, niche=niche,
                             config_snapshot=snapshot)
         logger.info("Job #%d created", job_id)
+        add_job_file_handler(job_id)
         create_manifest(assets_cache, job_id, topic,
                         output_dir if output_dir else "outputs",
                         config_snapshot=snapshot)
         agent_names = [
-            "safety", "researcher", "scriptwriter",
+            "safety", "segment_producer", "scriptwriter",
             "voice_producer", "visual_director", "composer", "reviewer",
         ]
         for name in agent_names:
@@ -200,24 +201,24 @@ class Orchestrator:
         language: str, tone: str, content_angle: str,
         assets_cache: str, output_dir: str,
     ) -> dict[str, Any]:
-        """Run G3→Researcher→G4→G5.
+        """Run G3→SegmentProducer→G4→G5.
 
         Returns research_output dict on success or a failure dict.
         """
         g3 = GateResearchCache()
         self._record_gate(assets_cache, job_id, "G3_research_cache", g3.evaluate())
 
-        logger.info("G3: running Researcher agent")
-        mark_agent_running(conn, job_id, "researcher")
+        logger.info("G3: running Segment Producer agent")
+        mark_agent_running(conn, job_id, "segment_producer")
         research_output = self._run_researcher(
             job_id=job_id, topic=topic, safety_rules=safety_rules,
             channel_description=channel_description,
             language=language, tone=tone, content_angle=content_angle,
             output_dir=output_dir, assets_cache=assets_cache,
         )
-        self._complete_agent(conn, assets_cache, job_id, "researcher")
+        self._complete_agent(conn, assets_cache, job_id, "segment_producer")
 
-        # Format Validator: validate content_direction from Researcher
+        # Format Validator: validate content_direction from Segment Producer
         cp_config = load_settings().content_planning
         if cp_config:
             validated = validate_content_direction(
@@ -257,10 +258,10 @@ class Orchestrator:
         language: str, tone: str, content_angle: str,
         research_output: dict[str, Any],
         assets_cache: str, output_dir: str,
-    ) -> tuple[dict[str, Any], dict[str, Any], list] | dict[str, Any]:
-        """Run G6→Scriptwriter→G7→Voice→G8→Timeline Reconciler.
+    ) -> tuple[dict[str, Any], dict[str, Any]] | dict[str, Any]:
+        """Run G6→Scriptwriter→G7→Voice→G8.
 
-        Returns (script_output, voice_output, timeline) on success
+        Returns (script_output, voice_output) on success
         or a failure dict.
         """
         script_output = self._run_content_scriptwriter(
@@ -276,7 +277,9 @@ class Orchestrator:
         logger.info("G7: running Voice Producer agent")
         mark_agent_running(conn, job_id, "voice_producer")
         voice_output = self._run_voice_producer(
-            job_id=job_id, script=script_output.get("script", []),
+            job_id=job_id,
+            script=script_output.get("script", []),
+            voiceover_text=script_output.get("voiceover_text", ""),
             output_dir=output_dir, assets_cache=assets_cache,
         )
         if voice_output.get("status") == "failed":
@@ -285,49 +288,20 @@ class Orchestrator:
         self._complete_agent(conn, assets_cache, job_id, "voice_producer")
 
         g8 = GateAudioValidation()
-        audio_list = voice_output.get("audio_files") or []
-        first_audio = audio_list[0] if audio_list else None
-        g8_result = g8.evaluate(audio_path=first_audio)
+        g8_result = g8.evaluate(
+            audio_path=voice_output.get("voiceover_path"))
         self._record_gate(assets_cache, job_id, "G8_audio_validation", g8_result)
         if abort := self._enforce_gate(conn, job_id, "G8", g8_result,
                                         failed_at="audio_validation"):
             return abort
 
-        # Timeline Reconciler: build canonical timeline
-        cp_config = load_settings().content_planning
-        timeline = []
-        if cp_config:
-            tl_result = reconcile_timeline(
-                scenes=script_output.get("script", []),
-                audio_meta=voice_output.get("audio_metadata", []),
-                target=cp_config.target_duration_sec,
-                hard=cp_config.hard_limit_sec,
-            )
-            timeline = tl_result.timeline
-            logger.info("Timeline reconciler: total=%.1fs within=%s scenes=%d",
-                        tl_result.total_duration_sec,
-                        tl_result.within_limit, len(timeline))
-            if not tl_result.within_limit:
-                reason = (
-                    f"Timeline {tl_result.total_duration_sec:.1f}s exceeds "
-                    f"hard limit {tl_result.hard_limit_sec}s"
-                )
-                update_job_status(conn, job_id, "FAILED", reason)
-                return {
-                    "status": "failed",
-                    "failed_at": "timeline_reconciler",
-                    "reason": reason,
-                    "job_id": job_id,
-                }
-
-        return script_output, voice_output, timeline
+        return script_output, voice_output
 
     def _stage_composition(
         self, conn: Any, job_id: int, topic: str,
         research_output: dict[str, Any],
         script_output: dict[str, Any], voice_output: dict[str, Any],
         assets_cache: str, output_dir: str,
-        timeline: list | None = None,
     ) -> dict[str, Any]:
         """Run Visual→G9→Composer→G10.
 
@@ -337,7 +311,7 @@ class Orchestrator:
         visual_output = self._run_visual_director_phase(
             conn, job_id, topic, research_output, script_output,
             output_dir, assets_cache,
-            timeline=timeline,
+            voice_output=voice_output,
         )
 
         if visual_output.get("status") == "failed":
@@ -345,8 +319,9 @@ class Orchestrator:
                                     visual_output, _ASSET_SOURCING_FAILED)
 
         g9 = GateAssetValidation()
-        asset_paths = [a.get("path", "") for a in visual_output.get("assets", [])]
-        g9_result = g9.evaluate(asset_paths=asset_paths)
+        visual_assets = visual_output.get("assets", [])
+        asset_paths = [a.get("path", "") for a in visual_assets]
+        g9_result = g9.evaluate(asset_paths=asset_paths, assets=visual_assets)
         self._record_gate(assets_cache, job_id, "G9_asset_validation", g9_result)
         if abort := self._enforce_gate(conn, job_id, "G9", g9_result,
                                         failed_at="asset_validation"):
@@ -359,7 +334,9 @@ class Orchestrator:
             audio_files=voice_output.get("audio_files", []),
             script_scenes=script_output.get("script", []),
             output_dir=output_dir, assets_cache=assets_cache,
-            timeline=timeline,
+            voiceover_path=voice_output.get("voiceover_path", ""),
+            timestamps=voice_output.get("timestamps", []),
+            narrative_structure=script_output.get("narrative_structure", []),
         )
 
         if compose_output.get("status") == "failed":
@@ -442,7 +419,7 @@ class Orchestrator:
             if isinstance(research_output, dict) and research_output.get("status") == "failed":
                 return research_output
 
-            # Stage 3: Content creation (G6→G8→Timeline)
+            # Stage 3: Content creation (G6→G8)
             stage3 = self._stage_content(
                 conn, job_id, topic, safety_rules, channel_description,
                 language_name, tone_name, angle_name,
@@ -450,14 +427,13 @@ class Orchestrator:
             )
             if isinstance(stage3, dict) and stage3.get("status") == "failed":
                 return stage3
-            script_output, voice_output, timeline = stage3
+            script_output, voice_output = stage3
 
             # Stage 4: Composition (Visual→G10)
             compose_output = self._stage_composition(
                 conn, job_id, topic, research_output,
                 script_output, voice_output,
                 assets_cache, output_dir,
-                timeline=timeline,
             )
             if isinstance(compose_output, dict) and compose_output.get("status") == "failed":
                 return compose_output
@@ -467,12 +443,14 @@ class Orchestrator:
             abort, review_output, pkg_output = self._retry_review_and_package(
                 conn, job_id, topic, script_output, compose_output,
                 safety_rules, niche, output_dir, assets_cache,
+                voice_output=voice_output,
             )
             if abort:
                 return abort
 
             update_job_status(conn, job_id, "COMPLETED")
             logger.info("Pipeline COMPLETED: job #%d", job_id)
+            remove_job_file_handler()
             return {
                 "status": "completed",
                 "job_id": job_id,
@@ -489,6 +467,7 @@ class Orchestrator:
         except Exception as e:
             logger.exception("Pipeline FAILED: job #%d — %s", job_id, e)
             update_job_status(conn, job_id, "FAILED", str(e))
+            remove_job_file_handler()
             return {"status": "failed", "error": str(e), "job_id": job_id}
 
     def _load_agent_output(self, assets_cache: str, job_id: int,
@@ -531,19 +510,20 @@ class Orchestrator:
 
     def _run_visual_director_phase(
         self, conn: Any, job_id: int, topic: str,
-        _research_output: dict[str, Any], script_output: dict[str, Any],
+        research_output: dict[str, Any], script_output: dict[str, Any],
         output_dir: str, assets_cache: str,
-        timeline: list | None = None,
+        voice_output: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run Visual Director agent: sources → visual output → complete."""
         mark_agent_running(conn, job_id, "visual_director")
+        vo = voice_output or {}
 
         # Pass research paths — let Visual Director decide what's useful
         research_contract_path = ""
         research_brief_path = ""
         if assets_cache:
             from clipper_agency.core.paths import agent_dir as get_agent_dir
-            rd = get_agent_dir(assets_cache, job_id, "researcher")
+            rd = get_agent_dir(assets_cache, job_id, "segment_producer")
             cp = Path(rd) / "research_contract.json"
             bp = Path(rd) / "research_brief.md"
             if cp.exists():
@@ -557,7 +537,11 @@ class Orchestrator:
             output_dir=output_dir, assets_cache=assets_cache,
             research_contract_path=research_contract_path,
             research_brief_path=research_brief_path,
-            timeline=timeline,
+            story_beats=research_output.get("story_beats", []),
+            timestamps=vo.get("timestamps", []),
+            do_not_use=research_output.get("do_not_use", []),
+            asset_candidates=research_output.get("asset_candidates", []),
+            voiceover_duration_sec=vo.get("voiceover_duration_sec", 0.0),
         )
         if visual_output.get("status") != "failed":
             self._complete_agent(conn, assets_cache, job_id, "visual_director")
@@ -576,25 +560,15 @@ class Orchestrator:
         # Load script scenes from completed scriptwriter for subtitles
         script_output = self._load_agent_output(assets_cache, job_id, "scriptwriter")
 
-        # Rebuild timeline for retry path
-        cp_config = load_settings().content_planning
-        timeline = None
-        if cp_config:
-            tl = reconcile_timeline(
-                scenes=script_output.get("script", []),
-                audio_meta=voice_output.get("audio_metadata", []),
-                target=cp_config.target_duration_sec,
-                hard=cp_config.hard_limit_sec,
-            )
-            timeline = tl.timeline
-
         compose_output = self._run_composer(
             job_id=job_id,
             assets=visual_output.get("assets", []),
             audio_files=voice_output.get("audio_files", []),
             output_dir=output_dir, assets_cache=assets_cache,
             script_scenes=script_output.get("script", []),
-            timeline=timeline,
+            voiceover_path=voice_output.get("voiceover_path", ""),
+            timestamps=voice_output.get("timestamps", []),
+            narrative_structure=script_output.get("narrative_structure", []),
         )
 
         if compose_output.get("status") == "failed":
@@ -622,14 +596,20 @@ class Orchestrator:
         script_output: dict[str, Any], compose_output: dict[str, Any],
         safety_rules: list[str], niche: str,
         output_dir: str, assets_cache: str,
+        voice_output: dict[str, Any] | None = None,
     ) -> tuple[dict | None, dict | None, dict | None]:
         """Run review and packaging stages. Returns (abort, review_output, pkg_output)."""
+        vo = voice_output or {}
         mark_agent_running(conn, job_id, "reviewer")
         review_output = self._run_reviewer(
             job_id=job_id, topic=topic,
             script=script_output.get("script", []),
             caption=script_output.get("caption", ""),
             safety_rules=safety_rules,
+            audio_duration_sec=vo.get("voiceover_duration_sec", 0.0),
+            visual_duration_sec=compose_output.get("duration_sec", 0.0),
+            narrative_structure=script_output.get("narrative_structure", []),
+            unverified_claims=script_output.get("unverified_claims", []),
         )
         self._complete_agent(conn, assets_cache, job_id, "reviewer")
 
@@ -664,8 +644,8 @@ class Orchestrator:
                dict[str, Any], dict[str, Any]]:
         """Load completed upstream agent outputs."""
         loader = self._load_agent_output
-        research = loader(assets_cache, job_id, "researcher") \
-            if from_idx > PIPELINE_ORDER.index("researcher") else {}
+        research = loader(assets_cache, job_id, "segment_producer") \
+            if from_idx > PIPELINE_ORDER.index("segment_producer") else {}
         script = loader(assets_cache, job_id, "scriptwriter") \
             if from_idx > PIPELINE_ORDER.index("scriptwriter") else {}
         voice = loader(assets_cache, job_id, "voice_producer") \
@@ -703,7 +683,7 @@ class Orchestrator:
         assets_cache: str, output_dir: str, from_idx: int,
     ) -> tuple[dict[str, Any] | None, dict | None]:
         """Run research if needed. Returns (research_output, abort)."""
-        if from_idx > PIPELINE_ORDER.index("researcher"):
+        if from_idx > PIPELINE_ORDER.index("segment_producer"):
             return None, None
         research_result = self._stage_research(
             conn, job_id, topic, safety_rules, channel_description,
@@ -715,22 +695,6 @@ class Orchestrator:
         ) == "failed":
             return {}, research_result
         return research_result, None
-
-    @staticmethod
-    def _build_retry_timeline(
-        script_output: dict[str, Any], voice_output: dict[str, Any],
-    ) -> list | None:
-        """Build reconciled timeline from script + voice for retry path."""
-        cp_config = load_settings().content_planning
-        if not cp_config or not voice_output:
-            return None
-        tl = reconcile_timeline(
-            scenes=script_output.get("script", []),
-            audio_meta=voice_output.get("audio_metadata", []),
-            target=cp_config.target_duration_sec,
-            hard=cp_config.hard_limit_sec,
-        )
-        return tl.timeline
 
     def _retry_downstream_stages(
         self, conn: Any, job_id: int, topic: str,
@@ -768,14 +732,11 @@ class Orchestrator:
                 ),
             )
 
-        # Build timeline from script + voice for timeline-aware agents
-        timeline = self._build_retry_timeline(script_output, voice_output)
-
         if from_idx <= PIPELINE_ORDER.index("visual_director"):
             visual_output = self._run_visual_director_phase(
                 conn, job_id, topic, research_output, script_output,
                 output_dir, assets_cache,
-                timeline=timeline,
+                voice_output=voice_output,
             )
             if visual_output.get("status") == "failed":
                 return self._fail_agent(conn, job_id, "visual_director",
@@ -796,6 +757,7 @@ class Orchestrator:
             abort, _, _ = self._retry_review_and_package(
                 conn, job_id, topic, script_output, compose_output,
                 safety_rules, niche, output_dir, assets_cache,
+                voice_output=voice_output,
             )
             if abort:
                 return abort
@@ -826,6 +788,7 @@ class Orchestrator:
         )
 
         update_job_status(conn, job_id, "RUNNING")
+        add_job_file_handler(job_id)
         append_audit_log(conn, action="pipeline_retry", actor="engine",
                          resource_type="job", resource_id=job_id,
                          details=json.dumps({"from_agent": from_agent,
@@ -883,7 +846,7 @@ class Orchestrator:
             if abort:
                 return abort
 
-            # Stage: Research (researcher + gates G3-G5)
+            # Stage: Research (segment_producer + gates G3-G5)
             fresh, abort = self._retry_research_stage(
                 conn, job_id, topic, safety_rules, channel_description,
                 language_name, tone_name, angle_name,
@@ -904,11 +867,13 @@ class Orchestrator:
 
             update_job_status(conn, job_id, "COMPLETED")
             logger.info("Pipeline retry COMPLETED: job #%d", job_id)
+            remove_job_file_handler()
             return {"status": "completed", "job_id": job_id}
 
         except Exception as e:
             logger.exception("Pipeline retry FAILED: job #%d — %s", job_id, e)
             update_job_status(conn, job_id, "FAILED", str(e))
+            remove_job_file_handler()
             return {"status": "failed", "error": str(e), "job_id": job_id}
 
     def _run_content_scriptwriter(
@@ -925,27 +890,29 @@ class Orchestrator:
 
         mark_agent_running(conn, job_id, "scriptwriter")
 
-        # Wire validated_direction and budget params to Scriptwriter
+        # Build blueprint from research output for audio-first pipeline
         direction = research_output.get("validated_direction")
-        story_direction: dict[str, Any] = {}
         resolved_angle = content_angle
+        if direction and direction.content_angle:
+            resolved_angle = direction.content_angle
+
+        blueprint = {
+            "story_beats": research_output.get("story_beats", []),
+            "verified_facts": research_output.get("verified_facts", []),
+            "unverified_claims": research_output.get("unverified_claims", []),
+            "format_decision": research_output.get("format_decision"),
+        }
+        # Enrich blueprint with validated direction when available
         if direction:
-            story_direction = {
-                "story_format": direction.format,
-                "story_count": direction.story_count,
-                "stories_list": direction.stories,
-            }
-            if direction.content_angle:
-                resolved_angle = direction.content_angle
+            blueprint["story_format"] = direction.format
+            blueprint["story_count"] = direction.story_count
+            blueprint["stories_list"] = direction.stories
+
         cp_config = load_settings().content_planning
         if cp_config:
-            story_direction.update({
-                "target_duration_sec": cp_config.target_duration_sec,
-                "hard_limit_sec": cp_config.hard_limit_sec,
-                "estimated_words_per_second": cp_config.estimated_words_per_second,
-            })
-            sc = direction.story_count if direction else cp_config.max_stories_per_video
-            story_direction["max_scenes"] = sc * 2 + 2
+            blueprint["target_duration_sec"] = cp_config.target_duration_sec
+            blueprint["hard_limit_sec"] = cp_config.hard_limit_sec
+            blueprint["estimated_words_per_second"] = cp_config.estimated_words_per_second
 
         script_output = self._run_scriptwriter(
             job_id=job_id, topic=topic,
@@ -954,7 +921,7 @@ class Orchestrator:
             channel_description=channel_description,
             language=language, tone=tone, content_angle=resolved_angle,
             assets_cache=assets_cache,
-            story_direction=story_direction if story_direction else None,
+            blueprint=blueprint if blueprint else None,
         )
         self._complete_agent(conn, assets_cache, job_id, "scriptwriter")
 
@@ -1005,15 +972,16 @@ class Orchestrator:
         """Run voice producer stage of content creation."""
         mark_agent_running(conn, job_id, "voice_producer")
         voice_output = self._run_voice_producer(
-            job_id=job_id, script=script_output.get("script", []),
+            job_id=job_id,
+            script=script_output.get("script", []),
+            voiceover_text=script_output.get("voiceover_text", ""),
             output_dir=output_dir, assets_cache=assets_cache,
         )
         self._complete_agent(conn, assets_cache, job_id, "voice_producer")
 
         g8 = GateAudioValidation()
-        audio_list = voice_output.get("audio_files") or []
-        first_audio = audio_list[0] if audio_list else None
-        g8_result = g8.evaluate(audio_path=first_audio)
+        g8_result = g8.evaluate(
+            audio_path=voice_output.get("voiceover_path"))
         self._record_gate(assets_cache, job_id, "G8_audio_validation",
                           g8_result)
         return voice_output
@@ -1029,7 +997,7 @@ class Orchestrator:
                         safety_rules: list[str] | None = None,
                         output_dir: str = "outputs",
                         **kwargs: Any) -> dict[str, Any]:
-        agent = ResearcherAgent()
+        agent = SegmentProducerAgent()
         return agent.execute(job_id=job_id, topic=topic,
                              safety_rules=safety_rules or [],
                              output_dir=output_dir, **kwargs)
