@@ -71,6 +71,7 @@ def build_keyword_captions(
     timestamps: list[dict],
     width: int = 1080,
     height: int = 1920,
+    hook_duration: float = 0.0,
 ) -> list[CaptionOverlay]:
     """Build keyword captions from narrative structure aligned to audio timestamps.
 
@@ -83,13 +84,42 @@ def build_keyword_captions(
         timestamps: List of WordTimestamp-like dicts with ``word``, ``start``, ``end``.
         width: Video width for positioning (reserved for future use).
         height: Video height for positioning (reserved for future use).
+        hook_duration: Skip captions starting before this time (seconds).
+            Used to avoid duplicating text already rendered on the hook card.
 
     Returns:
         Flat list of ``CaptionOverlay`` with ``position="bottom"`` and
         ``style="keyword"``.  Returns empty list on missing/empty inputs.
     """
-    if not narrative_structure or not timestamps:
+    if not narrative_structure:
         return []
+
+    # Fallback: estimate timing from word ranges when timestamps unavailable
+    if not timestamps:
+        words_per_sec = 2.0
+        overlays: list[CaptionOverlay] = []
+        for beat in narrative_structure:
+            keywords = beat.get("caption_keywords", [])
+            word_range = beat.get("word_range", [])
+            if not keywords or len(word_range) < 2:
+                continue
+            caption_text = " ".join(keywords[:_MAX_KEYWORD_WORDS])
+            if not caption_text:
+                continue
+            start_time = word_range[0] / words_per_sec
+            end_time = word_range[1] / words_per_sec
+            if end_time <= start_time:
+                continue
+            if start_time < hook_duration:
+                continue
+            overlays.append(CaptionOverlay(
+                text=caption_text,
+                start_seconds=start_time,
+                end_seconds=end_time,
+                position="bottom",
+                style="keyword",
+            ))
+        return overlays
 
     overlays: list[CaptionOverlay] = []
 
@@ -122,6 +152,8 @@ def build_keyword_captions(
         )
 
         if end_time <= start_time:
+            continue
+        if start_time < hook_duration:
             continue
 
         overlays.append(

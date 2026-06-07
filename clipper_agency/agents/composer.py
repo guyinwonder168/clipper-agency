@@ -1270,6 +1270,7 @@ class ComposerAgent(BaseAgent):
         """Build FFmpeg command, render, generate thumbnail, and return result."""
         keyword_captions = build_keyword_captions(
             narrative_structure, timestamps,
+            hook_duration=beat_durations[0] if beat_durations else 0.0,
         )
 
         enriched = self._enrich_audio_first_assets(

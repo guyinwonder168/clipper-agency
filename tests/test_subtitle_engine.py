@@ -350,11 +350,19 @@ class TestBuildKeywordCaptions:
         assert build_keyword_captions([], timestamps) == []
 
     def test_empty_timestamps_returns_empty(self):
-        """Empty timestamps returns empty list."""
+        """Empty timestamps with no narrative returns empty list."""
+        assert build_keyword_captions([], []) == []
+
+    def test_empty_timestamps_with_narrative_uses_fallback(self):
+        """Empty timestamps with narrative uses word_range fallback."""
         narrative = [
-            {"beat_id": 1, "word_range": [0, 3], "caption_keywords": ["test"]},
+            {"beat_id": 1, "word_range": [0, 6], "caption_keywords": ["test", "caption"]},
         ]
-        assert build_keyword_captions(narrative, []) == []
+        result = build_keyword_captions(narrative, [])
+        assert len(result) == 1
+        assert result[0].text == "test caption"
+        assert result[0].start_seconds == pytest.approx(0.0)
+        assert result[0].end_seconds == pytest.approx(3.0)  # 6 / 2.0 wps
 
     def test_none_inputs_returns_empty(self):
         """None inputs return empty list."""
@@ -394,3 +402,57 @@ class TestBuildKeywordCaptions:
         assert len(result) == 1
         # end_time should be from last timestamp, not crash
         assert result[0].end_seconds > 0
+
+    def test_hook_duration_skips_first_beat_caption(self):
+        """Captions during hook window are skipped — hook card already shows text."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 4], "caption_keywords": ["gosip", "artis", "terhot"]},
+            {"beat_id": 2, "word_range": [4, 8], "caption_keywords": ["foo", "bar"]},
+        ]
+        timestamps = _make_timestamps(8)
+
+        result = build_keyword_captions(narrative, timestamps, hook_duration=2.0)
+
+        assert len(result) == 1
+        assert result[0].text == "foo bar"
+        assert result[0].start_seconds == pytest.approx(2.0)
+
+    def test_hook_duration_zero_no_skip(self):
+        """hook_duration=0 (default) does not skip any captions."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 4], "caption_keywords": ["hello"]},
+            {"beat_id": 2, "word_range": [4, 8], "caption_keywords": ["world"]},
+        ]
+        timestamps = _make_timestamps(8)
+
+        result = build_keyword_captions(narrative, timestamps, hook_duration=0.0)
+
+        assert len(result) == 2
+
+    def test_hook_duration_skips_multiple_beats(self):
+        """If hook spans multiple beats, all are skipped."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 4], "caption_keywords": ["first"]},
+            {"beat_id": 2, "word_range": [4, 8], "caption_keywords": ["second"]},
+            {"beat_id": 3, "word_range": [8, 12], "caption_keywords": ["third"]},
+        ]
+        timestamps = _make_timestamps(12)
+
+        result = build_keyword_captions(narrative, timestamps, hook_duration=4.0)
+
+        assert len(result) == 1
+        assert result[0].text == "third"
+
+    def test_hook_duration_fallback_path_skips(self):
+        """hook_duration also skips in the fallback (no timestamps) path."""
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 6], "caption_keywords": ["hook", "text"]},
+            {"beat_id": 2, "word_range": [6, 12], "caption_keywords": ["body"]},
+        ]
+
+        result = build_keyword_captions(narrative, [], hook_duration=2.0)
+
+        # Fallback: 6 words / 2.0 wps = 3.0s for first beat — 3.0 >= 2.0, so NOT skipped
+        # Actually first beat ends at 3.0 which is >= hook_duration 2.0, so it starts at 0.0 < 2.0 → skipped
+        assert len(result) == 1
+        assert result[0].text == "body"
