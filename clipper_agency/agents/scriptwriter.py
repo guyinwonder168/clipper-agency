@@ -19,7 +19,8 @@ _FALLBACK_PROMPT = """You are a voiceover scriptwriter for {{channel_description
 
 Write in {{language}} with a {{tone}} style. Content focus: {{content_angle}}.
 
-Write a SINGLE CONTINUOUS voiceover narration (75-110 words, no emojis, spoken-word style).
+Write a SINGLE CONTINUOUS voiceover narration ({{min_words}}-{{max_words}} words, no emojis, spoken-word style).
+Target duration: {{target_duration_sec}} seconds. Target words: ~{{target_words}}.
 Map each section to a story beat using narrative_structure with word_range.
 
 Output JSON:
@@ -29,9 +30,10 @@ Safety rules:
 {{safety_rules_text}}
 """
 
-# Voiceover text word count bounds
-_MIN_WORDS = 75
-_MAX_WORDS = 110
+# Default word count bounds (overridden by ContentPlanningConfig when available)
+_DEFAULT_TARGET_SEC = 55
+_DEFAULT_HARD_LIMIT_SEC = 60
+_DEFAULT_WORDS_PER_SEC = 2.0
 
 # Unicode emoji detection pattern
 _EMOJI_RE = re.compile(
@@ -71,6 +73,9 @@ def _extract_blueprint(blueprint: dict[str, Any] | None, kwargs: dict[str, Any])
         "verified_facts": bp.get("verified_facts") or kwargs.get("verified_facts"),
         "unverified_claims": bp.get("unverified_claims") or kwargs.get("unverified_claims"),
         "format_decision": bp.get("format_decision") or kwargs.get("format_decision"),
+        "target_duration_sec": bp.get("target_duration_sec"),
+        "hard_limit_sec": bp.get("hard_limit_sec"),
+        "estimated_words_per_second": bp.get("estimated_words_per_second"),
     }
 
 
@@ -94,6 +99,14 @@ def _format_system_prompt(
     claims_json = json.dumps(bp_data.get("unverified_claims") or [], ensure_ascii=False, indent=2)
     decision_json = json.dumps(bp_data.get("format_decision") or {}, ensure_ascii=False, indent=2)
 
+    # Duration-driven word budget (fallback to ContentPlanningConfig defaults)
+    target_sec = bp_data.get("target_duration_sec") or 55
+    hard_limit = bp_data.get("hard_limit_sec") or 60
+    words_per_sec = bp_data.get("estimated_words_per_second") or 2.0
+    target_words = int(target_sec * words_per_sec)
+    min_words = int(target_words * 0.85)
+    max_words = int(hard_limit * words_per_sec)
+
     prompt_template = load_prompt("scriptwriter", _FALLBACK_PROMPT, PROMPTS_DIR)
     return prompt_template.format(
         channel_description=channel_description or "a content creator",
@@ -106,6 +119,11 @@ def _format_system_prompt(
         unverified_claims_json=claims_json,
         format_decision_json=decision_json,
         topic=topic,
+        target_duration_sec=target_sec,
+        hard_limit_sec=hard_limit,
+        min_words=min_words,
+        max_words=max_words,
+        target_words=target_words,
     )
 
 
@@ -171,7 +189,13 @@ class ScriptwriterAgent(BaseAgent):
         )
 
         parsed = self._parse_script_response(response["content"])
-        validation_errors = _validate_output(parsed)
+        # Dynamic word bounds from ContentPlanningConfig
+        target_sec = bp_data.get("target_duration_sec") or _DEFAULT_TARGET_SEC
+        hard_limit = bp_data.get("hard_limit_sec") or _DEFAULT_HARD_LIMIT_SEC
+        words_per_sec = bp_data.get("estimated_words_per_second") or _DEFAULT_WORDS_PER_SEC
+        min_words = int(target_sec * words_per_sec * 0.85)
+        max_words = int(hard_limit * words_per_sec)
+        validation_errors = _validate_output(parsed, min_words=min_words, max_words=max_words)
         if validation_errors:
             logger.warning("Scriptwriter validation issues: %s", validation_errors)
 
@@ -228,16 +252,20 @@ class ScriptwriterAgent(BaseAgent):
         }
 
 
-def _validate_output(parsed: dict[str, Any]) -> list[str]:
+def _validate_output(
+    parsed: dict[str, Any],
+    min_words: int = 0,
+    max_words: int = 9999,
+) -> list[str]:
     """Validate parsed output and return list of error strings (empty = valid)."""
     errors: list[str] = []
     voiceover_text = parsed.get("voiceover_text", "")
 
     wc = _word_count(voiceover_text)
-    if wc < _MIN_WORDS:
-        errors.append(f"voiceover_text too short: {wc} words (min {_MIN_WORDS})")
-    if wc > _MAX_WORDS:
-        errors.append(f"voiceover_text too long: {wc} words (max {_MAX_WORDS})")
+    if wc < min_words:
+        errors.append(f"voiceover_text too short: {wc} words (min {min_words})")
+    if wc > max_words:
+        errors.append(f"voiceover_text too long: {wc} words (max {max_words})")
     if _contains_emoji(voiceover_text):
         errors.append("voiceover_text contains emojis")
 

@@ -141,19 +141,19 @@ class TestVoiceoverTextValidation:
     def test_voiceover_too_short_fails_validation(self):
         """Short voiceover text should trigger validation error."""
         short_text = "Halo guys ini terlalu pendek."
-        errors = _validate_output({"voiceover_text": short_text})
+        errors = _validate_output({"voiceover_text": short_text}, min_words=75, max_words=120)
         assert any("too short" in e for e in errors)
 
     def test_voiceover_too_long_fails_validation(self):
         """Long voiceover text should trigger validation error."""
         long_text = " ".join(["kata"] * 120)
-        errors = _validate_output({"voiceover_text": long_text})
+        errors = _validate_output({"voiceover_text": long_text}, min_words=75, max_words=110)
         assert any("too long" in e for e in errors)
 
     def test_valid_word_count_passes_validation(self):
         """Voiceover text in range should have no word count errors."""
         text = _sample_voiceover_response()["voiceover_text"]
-        errors = _validate_output({"voiceover_text": text})
+        errors = _validate_output({"voiceover_text": text}, min_words=75, max_words=120)
         word_errors = [e for e in errors if "too short" in e or "too long" in e]
         assert word_errors == []
 
@@ -299,7 +299,7 @@ class TestFullParseValidateFlow:
         agent = ScriptwriterAgent()
         raw = json.dumps(_sample_voiceover_response())
         parsed = agent._parse_script_response(raw)
-        errors = _validate_output(parsed)
+        errors = _validate_output(parsed, min_words=75, max_words=120)
         # Sample response should be valid
         assert errors == []
 
@@ -311,5 +311,5 @@ class TestFullParseValidateFlow:
         )
         raw = json.dumps(data)
         parsed = agent._parse_script_response(raw)
-        errors = _validate_output(parsed)
+        errors = _validate_output(parsed, min_words=75, max_words=120)
         assert len(errors) >= 2  # too short + emoji

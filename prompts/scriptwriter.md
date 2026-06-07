@@ -31,7 +31,7 @@ You receive an edit blueprint from the Segment Producer containing:
 
 ```json
 {{
-  "voiceover_text": "Single continuous narration text here. No emojis. Spoken-word style. 75-110 words.",
+  "voiceover_text": "Single continuous narration text here. No emojis. Spoken-word style. {min_words}-{max_words} words.",
   "narrative_structure": [
     {{
       "beat_id": 1,
@@ -58,7 +58,8 @@ You receive an edit blueprint from the Segment Producer containing:
 - Full sentences, spoken-word style
 - Sound like telling a friend, not reading headlines
 - Use contractions (dia, nggak, bukan) for natural flow
-- Target 75-110 words (approximately 30-45 seconds of speech)
+- Target duration: **{target_duration_sec} seconds** (hard limit: {hard_limit_sec}s)
+- Target word count: **~{target_words} words** (range: {min_words}-{max_words} words)
 - Single continuous text — no scene breaks, no labels, no headers
 - Use safe wording from verified_facts and unverified_claims
 - Topic: {topic}
