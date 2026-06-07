@@ -176,6 +176,11 @@ class SegmentProducerAgent(BaseAgent):
         firecrawl_data = self._get_firecrawl(topic, max_results, output_dir, job_id)
         aggregated = self._aggregate_data(firecrawl_data, scrapecreators_data)
 
+        # ── 1b. Extract visual asset candidates from raw sources ────────
+        discovered_candidates = self._build_asset_candidates_from_sources(
+            firecrawl_data, scrapecreators_data,
+        )
+
         # ── 2. Synthesize research brief (cached or live LLM) ───────────
         synthesis = self._get_research_brief(
             aggregated, topic, rules, output_dir, job_id,
@@ -189,7 +194,10 @@ class SegmentProducerAgent(BaseAgent):
             "risk_flags": [],
             "story_beats": synthesis.get("story_beats", []),
             "format_decision": synthesis.get("format_decision"),
-            "asset_candidates": synthesis.get("asset_candidates", []),
+            "asset_candidates": self._merge_asset_candidates(
+                synthesis.get("asset_candidates", []),
+                discovered_candidates,
+            ),
             "do_not_use": synthesis.get("do_not_use", []),
             "verified_facts": synthesis.get("verified_facts", []),
             "unverified_claims": synthesis.get("unverified_claims", []),
@@ -302,6 +310,60 @@ class SegmentProducerAgent(BaseAgent):
             "sources": sources,
         }
 
+    @staticmethod
+    def _build_asset_candidates_from_sources(
+        firecrawl_data: list[dict],
+        scrapecreators_data: list[dict],
+    ) -> list[dict]:
+        """Build visual asset candidates from raw research sources."""
+        candidates: list[dict] = []
+        for item in scrapecreators_data:
+            url = item.get("url", "")
+            if not url:
+                continue
+            candidates.append({
+                "type": "tiktok_clip",
+                "url": url,
+                "reason": item.get("title") or item.get("desc") or "ScrapeCreators video candidate",
+                "source": "scrapecreators",
+                "page_url": url,
+                "title": item.get("title", ""),
+                "relevance_score": 0.9,
+                "provenance": "primary_clip",
+                "license_status": "unknown",
+            })
+        for item in firecrawl_data:
+            url = item.get("url", "")
+            if not url:
+                continue
+            candidates.append({
+                "type": "screenshot",
+                "url": url,
+                "reason": item.get("description") or item.get("title") or "Firecrawl supporting context",
+                "source": "firecrawl",
+                "page_url": url,
+                "title": item.get("title", ""),
+                "relevance_score": 0.7,
+                "provenance": "supporting_context",
+                "license_status": "unknown",
+            })
+        return candidates
+
+    @staticmethod
+    def _merge_asset_candidates(*candidate_groups: list[dict]) -> list[dict]:
+        """Merge asset candidate groups, deduplicating by URL."""
+        seen_urls: set[str] = set()
+        merged: list[dict] = []
+        for group in candidate_groups:
+            for candidate in group:
+                url = candidate.get("url", "")
+                key = url or json.dumps(candidate, sort_keys=True)
+                if key in seen_urls:
+                    continue
+                seen_urls.add(key)
+                merged.append(candidate)
+        return merged
+
     def _persist_contract_artifacts(
         self,
         assets_cache: str,
@@ -332,6 +394,9 @@ class SegmentProducerAgent(BaseAgent):
         write_json(entities_path, {})
         write_json(risk_flags_path, [])
 
+        asset_candidates_path = base / "normalized" / "asset_candidates.json"
+        write_json(asset_candidates_path, output.get("asset_candidates", []))
+
         contract = {
             "topic": topic,
             "topic_brief_path": brief_path,
@@ -342,6 +407,8 @@ class SegmentProducerAgent(BaseAgent):
             "music_candidates": [],
             "entities": {},
             "risk_flags": [],
+            "asset_candidates": output.get("asset_candidates", []),
+            "asset_candidates_path": str(asset_candidates_path),
             "cache_key": f"job_{job_id}:{topic}",
             "cache_freshness": "fresh",
         }

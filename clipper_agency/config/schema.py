@@ -151,6 +151,14 @@ class AssetCandidate(BaseModel):
     type: str  # "tiktok_clip", "screenshot", "photo", "text_card", "text_overlay"
     url: str = ""  # Empty for text_overlay / text_card types
     reason: str
+    source: str = ""  # "scrapecreators", "firecrawl", "pexels", "llm"
+    page_url: str = ""
+    title: str = ""
+    relevance_score: float = 0.0
+    provenance: str = ""  # "primary_clip", "supporting_context"
+    related_beat_id: int | None = None
+    story_id: str = ""
+    license_status: str = "unknown"
 
 
 class BeatFallback(BaseModel):

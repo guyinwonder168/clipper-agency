@@ -537,3 +537,51 @@ class TestSegmentProducerNewContract:
         # New fields also present
         assert "story_beats" in result
         assert "format_decision" in result
+
+
+class TestSegmentProducerAssetCandidates:
+    """Asset candidate extraction from raw research sources."""
+
+    def test_builds_candidates_from_both_sources(self):
+        agent = SegmentProducerAgent()
+
+        candidates = agent._build_asset_candidates_from_sources(
+            firecrawl_data=[
+                {
+                    "title": "Sarwendah update",
+                    "url": "https://news.example/a",
+                    "content": "context",
+                },
+            ],
+            scrapecreators_data=[
+                {
+                    "title": "TikTok clip",
+                    "url": "https://tiktok.com/@u/video/1",
+                },
+            ],
+        )
+
+        assert any(c["source"] == "scrapecreators" for c in candidates)
+        assert any(c["source"] == "firecrawl" for c in candidates)
+        assert all("url" in c for c in candidates)
+
+    def test_handles_empty_sources(self):
+        agent = SegmentProducerAgent()
+        candidates = agent._build_asset_candidates_from_sources([], [])
+        assert candidates == []
+
+    def test_handles_items_without_url(self):
+        agent = SegmentProducerAgent()
+        candidates = agent._build_asset_candidates_from_sources(
+            firecrawl_data=[{"title": "No URL", "content": "text"}],
+            scrapecreators_data=[],
+        )
+        assert candidates == []
+
+    def test_merge_deduplicates_by_url(self):
+        agent = SegmentProducerAgent()
+        group_a = [{"url": "https://a.com", "type": "tiktok_clip", "reason": "A"}]
+        group_b = [{"url": "https://a.com", "type": "screenshot", "reason": "B duplicate"}]
+        merged = agent._merge_asset_candidates(group_a, group_b)
+        assert len(merged) == 1
+        assert merged[0]["reason"] == "A"

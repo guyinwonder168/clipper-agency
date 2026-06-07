@@ -7,6 +7,7 @@ from clipper_agency.rendering.subtitle_engine import (
     build_hook_overlay,
     build_keyword_captions,
     build_subtitle_overlays,
+    build_word_subtitle_captions,
     validate_tiktok_output,
 )
 
@@ -456,3 +457,25 @@ class TestBuildKeywordCaptions:
         # Actually first beat ends at 3.0 which is >= hook_duration 2.0, so it starts at 0.0 < 2.0 → skipped
         assert len(result) == 1
         assert result[0].text == "body"
+
+
+# ---------------------------------------------------------------------------
+# build_word_subtitle_captions
+# ---------------------------------------------------------------------------
+
+
+def test_build_word_subtitle_captions_uses_narration_words_not_keywords():
+    timestamps = [
+        {"word": "Yuk", "start": 0.0, "end": 0.3},
+        {"word": "intip", "start": 0.3, "end": 0.7},
+        {"word": "berita", "start": 0.7, "end": 1.1},
+        {"word": "viral", "start": 1.1, "end": 1.5},
+    ]
+
+    result = build_word_subtitle_captions(timestamps, max_words=2)
+
+    assert [c.text for c in result] == ["Yuk intip", "berita viral"]
+    assert result[0].style == "subtitle"
+    assert result[0].position == "bottom"
+    assert result[0].start_seconds == 0.0
+    assert result[-1].end_seconds == 1.5

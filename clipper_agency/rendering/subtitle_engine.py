@@ -173,6 +173,53 @@ def build_keyword_captions(
     return overlays
 
 
+def build_word_subtitle_captions(
+    timestamps: list[dict],
+    max_words: int = 6,
+    hook_duration: float = 0.0,
+) -> list[CaptionOverlay]:
+    """Build full narration subtitle captions from word-level timestamps.
+
+    Groups words into chunks of *max_words* and creates one CaptionOverlay
+    per chunk with timing from the first/last word's start/end.
+
+    Args:
+        timestamps: Word-level timestamps with ``word``, ``start``, ``end``.
+        max_words: Maximum words per subtitle chunk (default 6).
+        hook_duration: Skip subtitles starting before this time (seconds).
+
+    Returns:
+        Flat list of ``CaptionOverlay`` with ``position="bottom"`` and
+        ``style="subtitle"``.
+    """
+    if not timestamps:
+        return []
+
+    overlays: list[CaptionOverlay] = []
+    for start in range(0, len(timestamps), max_words):
+        chunk = timestamps[start:start + max_words]
+        if not chunk:
+            continue
+        start_seconds = _ts_value(chunk[0], "start", 0.0)
+        end_seconds = _ts_value(chunk[-1], "end", start_seconds)
+        if start_seconds < hook_duration:
+            continue
+        text = " ".join(
+            str(w.get("word", "") if isinstance(w, dict) else getattr(w, "word", ""))
+            for w in chunk
+        ).strip()
+        if not text or end_seconds <= start_seconds:
+            continue
+        overlays.append(CaptionOverlay(
+            text=text,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
+            position="bottom",
+            style="subtitle",
+        ))
+    return overlays
+
+
 def build_hook_overlay(
     scenes: list[dict],
     hook_window_seconds: float = 3.0,

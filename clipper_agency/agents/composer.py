@@ -28,7 +28,11 @@ from clipper_agency.rendering.primitives import escape_drawtext
 from clipper_agency.rendering.renderers.b_roll_narration import build_b_roll_narration_plan
 from clipper_agency.rendering.renderers.news_card import build_news_card_plan
 from clipper_agency.rendering.renderers.rapid_update import build_rapid_update_plan
-from clipper_agency.rendering.subtitle_engine import build_keyword_captions, build_subtitle_overlays
+from clipper_agency.rendering.subtitle_engine import (
+    build_keyword_captions,
+    build_subtitle_overlays,
+    build_word_subtitle_captions,
+)
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
@@ -1022,6 +1026,25 @@ class ComposerAgent(BaseAgent):
         return enriched
 
     @staticmethod
+    def _align_assets_to_narrative_beats(
+        narrative_structure: list[dict],
+        assets: list[dict],
+    ) -> list[dict]:
+        """Align visual assets to narrative beats by beat_id, ignoring phantom assets."""
+        assets_by_beat_id = {
+            asset.get("beat_id"): asset
+            for asset in assets
+            if asset.get("beat_id") is not None
+        }
+        aligned: list[dict] = []
+        for beat in narrative_structure:
+            beat_id = beat.get("beat_id")
+            asset = dict(assets_by_beat_id.get(beat_id, {}))
+            asset["beat_id"] = beat_id
+            aligned.append(asset)
+        return aligned
+
+    @staticmethod
     def _build_audio_first_cmd(
         voiceover_path: str,
         trimmed_clips: list[str],
@@ -1150,8 +1173,11 @@ class ComposerAgent(BaseAgent):
         card_fallback_scenes: list[int] = []
 
         try:
+            aligned_assets = self._align_assets_to_narrative_beats(
+                narrative_structure, assets,
+            )
             self._collect_beat_clips(
-                beat_durations, assets, temp_dir,
+                beat_durations, aligned_assets, temp_dir,
                 trimmed_clips, card_fallback_scenes,
             )
 
@@ -1171,7 +1197,7 @@ class ComposerAgent(BaseAgent):
 
             return self._run_audio_first_render(
                 job_id, voiceover_path, timestamps, narrative_structure,
-                assets, beat_durations, trimmed_clips, card_fallback_scenes,
+                aligned_assets, beat_durations, trimmed_clips, card_fallback_scenes,
                 video_path, thumbnail_path, assets_cache, agent_dir,
             )
         finally:
@@ -1268,8 +1294,8 @@ class ComposerAgent(BaseAgent):
         agent_dir: str,
     ) -> dict[str, Any]:
         """Build FFmpeg command, render, generate thumbnail, and return result."""
-        keyword_captions = build_keyword_captions(
-            narrative_structure, timestamps,
+        keyword_captions = build_word_subtitle_captions(
+            timestamps,
             hook_duration=beat_durations[0] if beat_durations else 0.0,
         )
 

@@ -52,3 +52,22 @@ class TestComposerTimelineObedient:
         agent = ComposerAgent()
         audio_map = agent._build_timeline_audio_map(None)
         assert audio_map == {}
+
+    def test_audio_first_aligns_assets_by_beat_id_and_ignores_phantom_beat(self):
+        agent = ComposerAgent()
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 2]},
+            {"beat_id": 2, "word_range": [2, 4]},
+            {"beat_id": 9, "word_range": [4, 6]},
+        ]
+        assets = [
+            {"beat_id": 1, "path": "/tmp/beat1.mp4"},
+            {"beat_id": 2, "path": "/tmp/beat2.mp4"},
+            {"beat_id": 8, "path": "/tmp/phantom.mp4"},
+            {"beat_id": 9, "path": "/tmp/cta.mp4"},
+        ]
+
+        aligned = agent._align_assets_to_narrative_beats(narrative, assets)
+
+        assert [item["beat_id"] for item in aligned] == [1, 2, 9]
+        assert aligned[2]["path"] == "/tmp/cta.mp4"
