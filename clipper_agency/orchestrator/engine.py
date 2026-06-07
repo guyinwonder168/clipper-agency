@@ -788,6 +788,7 @@ class Orchestrator:
         )
 
         update_job_status(conn, job_id, "RUNNING")
+        add_job_file_handler(job_id)
         append_audit_log(conn, action="pipeline_retry", actor="engine",
                          resource_type="job", resource_id=job_id,
                          details=json.dumps({"from_agent": from_agent,
@@ -866,11 +867,13 @@ class Orchestrator:
 
             update_job_status(conn, job_id, "COMPLETED")
             logger.info("Pipeline retry COMPLETED: job #%d", job_id)
+            remove_job_file_handler()
             return {"status": "completed", "job_id": job_id}
 
         except Exception as e:
             logger.exception("Pipeline retry FAILED: job #%d — %s", job_id, e)
             update_job_status(conn, job_id, "FAILED", str(e))
+            remove_job_file_handler()
             return {"status": "failed", "error": str(e), "job_id": job_id}
 
     def _run_content_scriptwriter(
