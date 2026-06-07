@@ -1235,7 +1235,7 @@ class ComposerAgent(BaseAgent):
                 return output
 
             return self._run_audio_first_render(
-                job_id, voiceover_path, timestamps, narrative_structure,
+                job_id, voiceover_path, timestamps,
                 aligned_assets, beat_durations, trimmed_clips, card_fallback_scenes,
                 video_path, thumbnail_path, assets_cache, agent_dir,
             )
@@ -1322,7 +1322,6 @@ class ComposerAgent(BaseAgent):
         job_id: int,
         voiceover_path: str,
         timestamps: list[dict],
-        narrative_structure: list[dict],
         assets: list[dict],
         beat_durations: list[float],
         trimmed_clips: list[str],
