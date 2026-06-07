@@ -350,17 +350,19 @@ class VoiceProducerAgent(BaseAgent):
         import tempfile
         from pathlib import Path
 
-        list_file = Path(tempfile.mktemp(suffix=".txt"))
-        with open(list_file, "w") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False,
+        ) as list_file:
             for path in chunk_paths:
-                f.write(f"file '{path}'\n")
+                list_file.write(f"file '{path}'\n")
+            list_path = Path(list_file.name)
 
         cmd = [
             "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-            "-i", str(list_file), "-c", "copy", output_path,
+            "-i", str(list_path), "-c", "copy", output_path,
         ]
         subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=True)
-        list_file.unlink(missing_ok=True)
+        list_path.unlink(missing_ok=True)
         return output_path
 
     def _generate_chunked_voiceover(

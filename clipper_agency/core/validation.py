@@ -3,7 +3,7 @@
 import glob as _glob
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from clipper_agency.core.artifacts import read_json
 from clipper_agency.core.paths import (
@@ -111,6 +111,88 @@ def validate_video_file(path: str) -> ValidationResult:
     return ValidationResult(True)
 
 
+def _validate_output_json(assets_cache: str, job_id: int, agent_name: str,
+                          ) -> ValidationResult | None:
+    """Check output.json exists and is valid JSON. Returns None on success."""
+    out_path = agent_output_file(assets_cache, job_id, agent_name)
+    out_p = Path(out_path)
+    if not out_p.exists():
+        return ValidationResult(False, [f"output.json missing for {agent_name}"])
+    try:
+        read_json(out_p)
+    except (ValueError, OSError) as exc:
+        return ValidationResult(False, [f"output.json corrupt for {agent_name}: {exc}"])
+    return None
+
+
+def _validate_segment_producer_artifacts(assets_cache: str, job_id: int,
+                                         ) -> list[str]:
+    """Validate segment_producer specific artifacts."""
+    r1 = validate_research_contract(
+        segment_producer_contract_file(assets_cache, job_id))
+    r2 = validate_research_brief(
+        segment_producer_brief_file(assets_cache, job_id))
+    return r1.issues + r2.issues
+
+
+def _validate_scriptwriter_artifacts(assets_cache: str, job_id: int,
+                                     ) -> list[str]:
+    """Validate scriptwriter specific artifacts."""
+    script_path = str(
+        Path(agent_dir(assets_cache, job_id, "scriptwriter")) / "script.json"
+    )
+    return validate_script(script_path).issues
+
+
+def _validate_voice_producer_artifacts(assets_cache: str, job_id: int,
+                                       ) -> list[str]:
+    """Validate voice_producer specific artifacts."""
+    vp_dir = Path(agent_dir(assets_cache, job_id, "voice_producer"))
+    voices_dir = vp_dir / "voices"
+    voice_files = (
+        sorted(str(p) for p in voices_dir.glob("scene_*.mp3"))
+        if voices_dir.exists() else []
+    )
+    # Also accept single voiceover.mp3 from audio-first path
+    single_voiceover = vp_dir / "voiceover.mp3"
+    if single_voiceover.exists() and single_voiceover.stat().st_size > 0:
+        voice_files.append(str(single_voiceover))
+    return validate_voice_files(voice_files).issues
+
+
+def _validate_visual_director_artifacts(assets_cache: str, job_id: int,
+                                        ) -> list[str]:
+    """Validate visual_director specific artifacts."""
+    scenes_dir = Path(
+        agent_dir(assets_cache, job_id, "visual_director")
+    ) / "scenes"
+    scene_files = (
+        sorted(str(p) for p in scenes_dir.glob("scene_*.mp4"))
+        if scenes_dir.exists() else []
+    )
+    return validate_scene_files(scene_files).issues
+
+
+def _validate_composer_artifacts(assets_cache: str, job_id: int,
+                                 out_p: Path) -> list[str]:
+    """Validate composer specific artifacts."""
+    out_data = read_json(out_p)
+    video_path = out_data.get("video_path", "")
+    if not video_path:
+        return []
+    return validate_video_file(video_path).issues
+
+
+_AGENT_ARTIFACT_VALIDATORS: dict[
+    str, Callable[[str, int], list[str]]
+] = {
+    "segment_producer": _validate_segment_producer_artifacts,
+    "scriptwriter": _validate_scriptwriter_artifacts,
+    "voice_producer": _validate_voice_producer_artifacts,
+    "visual_director": _validate_visual_director_artifacts,
+}
+
+
 def validate_agent_cache(
     assets_cache: str, job_id: int, agent_name: str,
 ) -> ValidationResult:
@@ -120,56 +202,21 @@ def validate_agent_cache(
     checks.  If any check fails the overall result is ``passed=False`` so
     the engine can fall through to re-running the agent.
     """
-    all_issues: list[str] = []
-
     # 1. output.json must exist and be valid JSON for every agent.
-    out_path = agent_output_file(assets_cache, job_id, agent_name)
-    out_p = Path(out_path)
-    if not out_p.exists():
-        return ValidationResult(False, [f"output.json missing for {agent_name}"])
-    try:
-        read_json(out_p)
-    except (ValueError, OSError) as exc:
-        return ValidationResult(False, [f"output.json corrupt for {agent_name}: {exc}"])
+    err = _validate_output_json(assets_cache, job_id, agent_name)
+    if err:
+        return err
 
     # 2. Agent-specific artifact checks.
-    if agent_name == "segment_producer":
-        r1 = validate_research_contract(
-            segment_producer_contract_file(assets_cache, job_id))
-        r2 = validate_research_brief(
-            segment_producer_brief_file(assets_cache, job_id))
-        all_issues.extend(r1.issues)
-        all_issues.extend(r2.issues)
-
-    elif agent_name == "scriptwriter":
-        script_path = str(Path(agent_dir(assets_cache, job_id, "scriptwriter")) / "script.json")
-        r = validate_script(script_path)
-        all_issues.extend(r.issues)
-
-    elif agent_name == "voice_producer":
-        voices_dir = Path(agent_dir(assets_cache, job_id, "voice_producer")) / "voices"
-        voice_files = sorted(str(p) for p in voices_dir.glob("scene_*.mp3")) if voices_dir.exists() else []
-        # Also accept single voiceover.mp3 from audio-first path
-        single_voiceover = Path(agent_dir(assets_cache, job_id, "voice_producer")) / "voiceover.mp3"
-        if single_voiceover.exists() and single_voiceover.stat().st_size > 0:
-            voice_files.append(str(single_voiceover))
-        r = validate_voice_files(voice_files)
-        all_issues.extend(r.issues)
-
-    elif agent_name == "visual_director":
-        scenes_dir = Path(agent_dir(assets_cache, job_id, "visual_director")) / "scenes"
-        scene_files = sorted(str(p) for p in scenes_dir.glob("scene_*.mp4")) if scenes_dir.exists() else []
-        r = validate_scene_files(scene_files)
-        all_issues.extend(r.issues)
-
+    all_issues: list[str] = []
+    validator = _AGENT_ARTIFACT_VALIDATORS.get(agent_name)
+    if validator:
+        all_issues.extend(validator(assets_cache, job_id))
     elif agent_name == "composer":
-        # composer output.json contains video_path — also validate the actual file
-        out_data = read_json(out_p)
-        video_path = out_data.get("video_path", "")
-        if video_path:
-            r = validate_video_file(video_path)
-            all_issues.extend(r.issues)
-
+        out_p = Path(agent_output_file(assets_cache, job_id, agent_name))
+        all_issues.extend(
+            _validate_composer_artifacts(assets_cache, job_id, out_p)
+        )
     # safety, reviewer — only output.json check (already done above).
 
     return ValidationResult(len(all_issues) == 0, all_issues)

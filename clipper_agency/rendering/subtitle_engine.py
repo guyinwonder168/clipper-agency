@@ -66,6 +66,58 @@ def build_subtitle_overlays(
     return overlays
 
 
+def _extract_caption_text(beat: dict) -> str | None:
+    """Extract caption keywords from a beat, truncated to max words.
+
+    Returns None if the beat has no valid keywords.
+    """
+    keywords = beat.get("caption_keywords", [])
+    word_range = beat.get("word_range", [])
+    if not keywords or len(word_range) < 2:
+        return None
+    caption_text = " ".join(keywords[:_MAX_KEYWORD_WORDS])
+    return caption_text or None
+
+
+def _ts_value(ts: object, key: str, default: float) -> float:
+    """Extract a float value from a dict or object timestamp."""
+    if isinstance(ts, dict):
+        return ts.get(key, default)  # type: ignore[call-arg]
+    return getattr(ts, key, default)
+
+
+def _beat_timing_fallback(
+    beat: dict, words_per_sec: float,
+) -> tuple[float, float] | None:
+    """Estimate beat timing from word ranges when timestamps unavailable."""
+    word_range = beat.get("word_range", [])
+    if len(word_range) < 2:
+        return None
+    start_time = word_range[0] / words_per_sec
+    end_time = word_range[1] / words_per_sec
+    if end_time <= start_time:
+        return None
+    return start_time, end_time
+
+
+def _beat_timing_from_ts(
+    beat: dict, timestamps: list[dict],
+) -> tuple[float, float] | None:
+    """Resolve beat timing from word-level timestamps."""
+    word_range = beat.get("word_range", [])
+    if len(word_range) < 2:
+        return None
+    start_idx = max(0, min(word_range[0], len(timestamps) - 1))
+    end_idx = max(start_idx + 1, min(word_range[1], len(timestamps)))
+    ts_start = timestamps[start_idx]
+    ts_end = timestamps[end_idx - 1]
+    start_time = _ts_value(ts_start, "start", 0.0)
+    end_time = _ts_value(ts_end, "end", start_time + 1.0)
+    if end_time <= start_time:
+        return None
+    return start_time, end_time
+
+
 def build_keyword_captions(
     narrative_structure: list[dict],
     timestamps: list[dict],
@@ -94,77 +146,29 @@ def build_keyword_captions(
     if not narrative_structure:
         return []
 
-    # Fallback: estimate timing from word ranges when timestamps unavailable
-    if not timestamps:
-        words_per_sec = 2.0
-        overlays: list[CaptionOverlay] = []
-        for beat in narrative_structure:
-            keywords = beat.get("caption_keywords", [])
-            word_range = beat.get("word_range", [])
-            if not keywords or len(word_range) < 2:
-                continue
-            caption_text = " ".join(keywords[:_MAX_KEYWORD_WORDS])
-            if not caption_text:
-                continue
-            start_time = word_range[0] / words_per_sec
-            end_time = word_range[1] / words_per_sec
-            if end_time <= start_time:
-                continue
-            if start_time < hook_duration:
-                continue
-            overlays.append(CaptionOverlay(
-                text=caption_text,
-                start_seconds=start_time,
-                end_seconds=end_time,
-                position="bottom",
-                style="keyword",
-            ))
-        return overlays
+    timing_fn = (
+        _beat_timing_from_ts if timestamps
+        else lambda b, _: _beat_timing_fallback(b, 2.0)
+    )
 
     overlays: list[CaptionOverlay] = []
-
     for beat in narrative_structure:
-        keywords = beat.get("caption_keywords", [])
-        word_range = beat.get("word_range", [])
-
-        if not keywords or len(word_range) < 2:
-            continue
-
-        # Truncate to max words per caption
-        caption_text = " ".join(keywords[:_MAX_KEYWORD_WORDS])
+        caption_text = _extract_caption_text(beat)
         if not caption_text:
             continue
-
-        # Resolve timing from word-level timestamps
-        start_idx = max(0, min(word_range[0], len(timestamps) - 1))
-        end_idx = max(start_idx + 1, min(word_range[1], len(timestamps)))
-
-        ts_start = timestamps[start_idx]
-        ts_end = timestamps[end_idx - 1]
-
-        start_time = (
-            ts_start.get("start", 0.0) if isinstance(ts_start, dict)
-            else getattr(ts_start, "start", 0.0)
-        )
-        end_time = (
-            ts_end.get("end", start_time + 1.0) if isinstance(ts_end, dict)
-            else getattr(ts_end, "end", start_time + 1.0)
-        )
-
-        if end_time <= start_time:
+        timing = timing_fn(beat, timestamps)
+        if timing is None:
             continue
+        start_time, end_time = timing
         if start_time < hook_duration:
             continue
-
-        overlays.append(
-            CaptionOverlay(
-                text=caption_text,
-                start_seconds=start_time,
-                end_seconds=end_time,
-                position="bottom",
-                style="keyword",
-            )
-        )
+        overlays.append(CaptionOverlay(
+            text=caption_text,
+            start_seconds=start_time,
+            end_seconds=end_time,
+            position="bottom",
+            style="keyword",
+        ))
 
     return overlays
 
