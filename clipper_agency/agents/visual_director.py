@@ -212,6 +212,7 @@ class VisualDirectorAgent(BaseAgent):
 
         allowed_beat_ids = [beat.beat_id for beat in parsed_beats]
         plan = self._normalize_beat_plan(plan, allowed_beat_ids)
+        plan = self._deduplicate_llm_plan_urls(plan, do_not_use)
 
         assets = self._execute_beat_plan(plan, scenes_dir)
 
@@ -380,10 +381,14 @@ class VisualDirectorAgent(BaseAgent):
         do_not_use: list[str],
     ) -> list[dict]:
         """Deterministic fallback when LLM fails: select visual per beat hierarchy."""
+        used_urls: set[str] = set(do_not_use)
         plan: list[dict] = []
         for beat in beats:
             duration = beat_durations.get(beat.beat_id, 5.0)
-            action = self._select_visual_for_beat(beat, do_not_use)
+            action = self._select_visual_for_beat(beat, list(used_urls))
+            source_url = action.get("source_url", "")
+            if source_url:
+                used_urls.add(source_url)
             plan.append({
                 "scene_number": beat.beat_id,
                 "beat_id": beat.beat_id,
@@ -534,6 +539,23 @@ class VisualDirectorAgent(BaseAgent):
             item["beat_id"] = beat_id
             normalized.append(item)
         return normalized
+
+    @staticmethod
+    def _deduplicate_llm_plan_urls(plan: list[dict], do_not_use: list[str]) -> list[dict]:
+        """Remove duplicate source_urls from LLM-generated plan actions."""
+        used_urls: set[str] = set(do_not_use)
+        deduped: list[dict] = []
+        for item in plan:
+            action = dict(item.get("action", {}))
+            source_url = action.get("source_url", "")
+            if source_url and source_url in used_urls:
+                action.pop("source_url", None)
+            if source_url:
+                used_urls.add(source_url)
+            item = dict(item)
+            item["action"] = action
+            deduped.append(item)
+        return deduped
 
     # ------------------------------------------------------------------
     # Legacy planning paths (kept for backward compatibility)

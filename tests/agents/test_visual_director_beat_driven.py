@@ -698,3 +698,92 @@ class TestBeatContractNormalization:
         normalized = agent._normalize_beat_plan([], [1, 3, 5])
 
         assert [item["beat_id"] for item in normalized] == [1, 3, 5]
+
+
+# ---------------------------------------------------------------------------
+# Candidate selection and duplicate prevention
+# ---------------------------------------------------------------------------
+
+
+class TestCandidateSelectionAndDedup:
+    """Visual Director candidate selection and duplicate prevention."""
+
+    def test_prefers_firecrawl_screenshot_candidate(self):
+        """Tier 2 screenshot candidate is used before Pexels."""
+        agent = VisualDirectorAgent()
+        beat = StoryBeat(**_make_beat(
+            asset_candidates=[
+                {
+                    "type": "screenshot",
+                    "url": "https://news.example/story",
+                    "reason": "Relevant article image",
+                    "source": "firecrawl",
+                },
+            ],
+        ))
+
+        action = agent._select_visual_for_beat(beat, [])
+
+        assert action["type"] == "pexels_image"
+        assert action["source_url"] == "https://news.example/story"
+
+    def test_skips_duplicate_candidate_urls(self):
+        """Previously used URL is excluded from selection."""
+        agent = VisualDirectorAgent()
+        duplicate_url = "https://tiktok.com/@u/video/1"
+        beat = StoryBeat(**_make_beat(
+            asset_candidates=[
+                {"type": "tiktok_clip", "url": duplicate_url, "reason": "duplicate"},
+                {"type": "screenshot", "url": "https://news.example/a", "reason": "alternate"},
+            ],
+        ))
+
+        action = agent._select_visual_for_beat(beat, [duplicate_url])
+
+        # Should skip the tiktok_clip (in do_not_use) and use screenshot
+        assert action.get("source_url") != duplicate_url
+
+    def test_fallback_accumulates_used_urls(self):
+        """_plan_beats_fallback accumulates URLs across beats."""
+        agent = VisualDirectorAgent()
+        shared_url = "https://tiktok.com/@u/video/shared"
+        beats = [
+            StoryBeat(**_make_beat(
+                beat_id=1,
+                asset_candidates=[
+                    {"type": "tiktok_clip", "url": shared_url, "reason": "shared clip"},
+                ],
+            )),
+            StoryBeat(**_make_beat(
+                beat_id=2,
+                asset_candidates=[
+                    {"type": "tiktok_clip", "url": shared_url, "reason": "same clip"},
+                    {"type": "screenshot", "url": "https://news.example/b", "reason": "alternate"},
+                ],
+            )),
+        ]
+
+        plan = agent._plan_beats_fallback(beats, {1: 5.0, 2: 5.0}, [])
+
+        # Beat 1 gets the shared URL
+        assert plan[0]["action"]["source_url"] == shared_url
+        # Beat 2 should NOT reuse it
+        assert plan[1]["action"].get("source_url") != shared_url
+
+    def test_deduplicate_llm_plan_urls(self):
+        """_deduplicate_llm_plan_urls removes duplicate source_urls."""
+        agent = VisualDirectorAgent()
+        plan = [
+            {"beat_id": 1, "action": {"type": "tiktok_clip", "source_url": "https://a.com/1"}},
+            {"beat_id": 2, "action": {"type": "tiktok_clip", "source_url": "https://a.com/1"}},
+            {"beat_id": 3, "action": {"type": "screenshot", "source_url": "https://b.com/2"}},
+        ]
+
+        result = agent._deduplicate_llm_plan_urls(plan, [])
+
+        # Beat 1 keeps its URL
+        assert result[0]["action"]["source_url"] == "https://a.com/1"
+        # Beat 2's duplicate source_url is removed from action
+        assert "source_url" not in result[1]["action"] or result[1]["action"].get("source_url") != "https://a.com/1"
+        # Beat 3 keeps its distinct URL
+        assert result[2]["action"]["source_url"] == "https://b.com/2"

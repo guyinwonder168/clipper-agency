@@ -105,3 +105,65 @@ class TestComposerTimelineObedient:
 
     def test_inflate_durations_empty_list(self):
         assert ComposerAgent._inflate_durations_for_transitions([], 0.5) == []
+
+
+class TestJob3RegressionFixture:
+    """Regression tests encoding the exact Job #3 failure pattern.
+
+    Job #3 had 5 root causes:
+    1. Phantom beat 8 from Visual Director not in narrative
+    2. Composer matched by index, dropping CTA (beat 9)
+    3. Duration gap: 28.7s video vs 43.45s voiceover
+    4. Keyword captions instead of full subtitles
+    5. Duplicate clips across beats
+    """
+
+    def test_job_3_shape_ignores_phantom_beat_and_keeps_cta(self):
+        """Composer must ignore phantom beat 8 and keep CTA beat 9."""
+        agent = ComposerAgent()
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 10]},
+            {"beat_id": 2, "word_range": [11, 23]},
+            {"beat_id": 3, "word_range": [24, 30]},
+            {"beat_id": 4, "word_range": [31, 40]},
+            {"beat_id": 5, "word_range": [41, 45]},
+            {"beat_id": 6, "word_range": [46, 53]},
+            {"beat_id": 7, "word_range": [54, 58]},
+            {"beat_id": 9, "word_range": [59, 71]},
+        ]
+        assets = [
+            {"beat_id": beat_id, "path": f"/tmp/beat_{beat_id}.mp4"}
+            for beat_id in [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        ]
+
+        aligned = agent._align_assets_to_narrative_beats(narrative, assets)
+
+        assert [item["beat_id"] for item in aligned] == [1, 2, 3, 4, 5, 6, 7, 9]
+        assert aligned[-1]["path"] == "/tmp/beat_9.mp4"
+        assert all(item["beat_id"] != 8 for item in aligned)
+
+    def test_job_3_durations_cover_full_voiceover(self):
+        """Beat durations must sum to full voiceover length (43.45s)."""
+        # Simulate 72 words spanning 43.45s
+        timestamps = []
+        word_duration = 43.45 / 72
+        for i in range(72):
+            start = round(i * word_duration, 3)
+            end = round((i + 1) * word_duration, 3)
+            timestamps.append({"word": f"w{i}", "start": start, "end": end})
+
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 10]},
+            {"beat_id": 2, "word_range": [11, 23]},
+            {"beat_id": 3, "word_range": [24, 30]},
+            {"beat_id": 4, "word_range": [31, 40]},
+            {"beat_id": 5, "word_range": [41, 45]},
+            {"beat_id": 6, "word_range": [46, 53]},
+            {"beat_id": 7, "word_range": [54, 58]},
+            {"beat_id": 9, "word_range": [59, 71]},
+        ]
+
+        durations = ComposerAgent._compute_beat_durations(narrative, timestamps)
+
+        assert sum(durations) == pytest.approx(43.45, abs=0.1)
+        assert len(durations) == 8  # 8 beats, no phantom beat 8
