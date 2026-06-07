@@ -976,30 +976,69 @@ class ComposerAgent(BaseAgent):
         narrative_structure: list[dict],
         timestamps: list[dict],
     ) -> list[float]:
-        """Compute duration for each beat from word-level timestamps."""
-        durations: list[float] = []
+        """Compute duration for each beat covering full voiceover.
+
+        Each beat duration spans: current beat first word start → next beat
+        first word start.  This covers gap words between beats.  The final
+        beat extends to the last timestamp end, covering trailing audio.
+        """
+        if not narrative_structure or not timestamps:
+            return [5.0] * len(narrative_structure)
+
+        # Build ordered list of beat start indices from word_range[0]
+        beat_starts: list[tuple[int, int]] = []
         for beat in narrative_structure:
             word_range = beat.get("word_range", [])
-            if len(word_range) < 2 or not timestamps:
-                durations.append(5.0)
-                continue
+            first_idx = word_range[0] if word_range else 0
+            beat_starts.append((first_idx, len(beat_starts)))
 
-            start_idx = max(0, min(word_range[0], len(timestamps) - 1))
-            end_idx = max(start_idx + 1, min(word_range[1], len(timestamps)))
+        # Sort by word index to get chronological order
+        beat_starts.sort(key=lambda x: x[0])
 
-            ts_start = timestamps[start_idx]
-            ts_end = timestamps[end_idx - 1]
+        # Final timestamp end for trailing audio
+        final_ts = timestamps[-1]
+        final_end = (
+            final_ts.get("end", 0.0) if isinstance(final_ts, dict)
+            else getattr(final_ts, "end", 0.0)
+        )
 
+        # Compute durations in narrative order
+        durations: list[float] = []
+        for pos, (first_idx, _orig_pos) in enumerate(beat_starts):
+            safe_start = max(0, min(first_idx, len(timestamps) - 1))
+            ts_start = timestamps[safe_start]
             start_time = (
                 ts_start.get("start", 0.0) if isinstance(ts_start, dict)
                 else getattr(ts_start, "start", 0.0)
             )
-            end_time = (
-                ts_end.get("end", start_time + 5.0) if isinstance(ts_end, dict)
-                else getattr(ts_end, "end", start_time + 5.0)
-            )
+
+            if pos + 1 < len(beat_starts):
+                next_first = beat_starts[pos + 1][0]
+                safe_next = max(0, min(next_first, len(timestamps) - 1))
+                ts_next = timestamps[safe_next]
+                end_time = (
+                    ts_next.get("start", final_end) if isinstance(ts_next, dict)
+                    else getattr(ts_next, "start", final_end)
+                )
+            else:
+                end_time = final_end
+
             durations.append(max(0.5, end_time - start_time))
+
         return durations
+
+    @staticmethod
+    def _inflate_durations_for_transitions(
+        durations: list[float],
+        transition_duration: float = 0.5,
+    ) -> list[float]:
+        """Add transition overlap padding to all beats except the last."""
+        if not durations:
+            return []
+        inflated = list(durations)
+        for i in range(len(inflated) - 1):
+            inflated[i] += transition_duration
+        return inflated
 
     @staticmethod
     def _enrich_audio_first_assets(

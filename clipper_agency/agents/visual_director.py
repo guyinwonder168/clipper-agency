@@ -210,6 +210,9 @@ class VisualDirectorAgent(BaseAgent):
                 parsed_beats, beat_durations, do_not_use,
             )
 
+        allowed_beat_ids = [beat.beat_id for beat in parsed_beats]
+        plan = self._normalize_beat_plan(plan, allowed_beat_ids)
+
         assets = self._execute_beat_plan(plan, scenes_dir)
 
         if agent_dir:
@@ -516,6 +519,21 @@ class VisualDirectorAgent(BaseAgent):
             "closing_cta": "fade_to_black",
         }
         return role_treatments.get(role, "broll_standard")
+
+    @staticmethod
+    def _normalize_beat_plan(plan: list[dict], allowed_beat_ids: list[int]) -> list[dict]:
+        """Keep only allowed beat IDs and preserve narrative beat order."""
+        by_beat_id = {
+            item.get("beat_id", item.get("scene_number")): item
+            for item in plan
+        }
+        normalized: list[dict] = []
+        for beat_id in allowed_beat_ids:
+            item = dict(by_beat_id.get(beat_id, {}))
+            item.setdefault("scene_number", beat_id)
+            item["beat_id"] = beat_id
+            normalized.append(item)
+        return normalized
 
     # ------------------------------------------------------------------
     # Legacy planning paths (kept for backward compatibility)

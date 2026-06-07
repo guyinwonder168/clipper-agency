@@ -1,3 +1,5 @@
+import pytest
+
 from clipper_agency.agents.composer import ComposerAgent
 
 
@@ -71,3 +73,35 @@ class TestComposerTimelineObedient:
 
         assert [item["beat_id"] for item in aligned] == [1, 2, 9]
         assert aligned[2]["path"] == "/tmp/cta.mp4"
+
+    def test_beat_durations_cover_full_voiceover_with_gaps_and_trailing_audio(self):
+        narrative = [
+            {"beat_id": 1, "word_range": [0, 2]},
+            {"beat_id": 2, "word_range": [3, 5]},
+            {"beat_id": 9, "word_range": [6, 7]},
+        ]
+        timestamps = [
+            {"word": "a", "start": 0.0, "end": 0.5},
+            {"word": "b", "start": 0.5, "end": 1.0},
+            {"word": "gap", "start": 1.0, "end": 1.5},
+            {"word": "c", "start": 1.5, "end": 2.0},
+            {"word": "d", "start": 2.0, "end": 2.5},
+            {"word": "gap2", "start": 2.5, "end": 3.0},
+            {"word": "cta", "start": 3.0, "end": 3.5},
+            {"word": "tail", "start": 3.5, "end": 5.0},
+        ]
+
+        durations = ComposerAgent._compute_beat_durations(narrative, timestamps)
+
+        assert sum(durations) == pytest.approx(5.0)
+
+    def test_inflate_durations_for_transitions_adds_padding(self):
+        base = [3.0, 4.0, 5.0]
+        inflated = ComposerAgent._inflate_durations_for_transitions(base, 0.5)
+
+        assert inflated[0] == 3.5
+        assert inflated[1] == 4.5
+        assert inflated[2] == 5.0  # last beat unchanged
+
+    def test_inflate_durations_empty_list(self):
+        assert ComposerAgent._inflate_durations_for_transitions([], 0.5) == []

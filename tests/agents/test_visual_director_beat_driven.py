@@ -662,3 +662,39 @@ class TestBeatDrivenLLMPlanning:
         )
 
         assert plan is None
+
+
+class TestBeatContractNormalization:
+    """Visual Director must normalize LLM plan to allowed beat IDs."""
+
+    def test_llm_plan_is_normalized_to_allowed_beat_ids(self):
+        agent = VisualDirectorAgent()
+        allowed = [1, 2, 9]
+        plan = [
+            {"scene_number": 1, "beat_id": 1},
+            {"scene_number": 2, "beat_id": 2},
+            {"scene_number": 8, "beat_id": 8},
+            {"scene_number": 9, "beat_id": 9},
+        ]
+
+        normalized = agent._normalize_beat_plan(plan, allowed)
+
+        assert [item["beat_id"] for item in normalized] == [1, 2, 9]
+
+    def test_missing_beat_gets_stub_entry(self):
+        agent = VisualDirectorAgent()
+        plan = [
+            {"scene_number": 1, "beat_id": 1},
+        ]
+        normalized = agent._normalize_beat_plan(plan, [1, 2])
+
+        assert len(normalized) == 2
+        assert normalized[0]["beat_id"] == 1
+        assert normalized[1]["beat_id"] == 2
+        assert normalized[1].get("scene_number") == 2
+
+    def test_empty_plan_returns_stubs_for_all_beats(self):
+        agent = VisualDirectorAgent()
+        normalized = agent._normalize_beat_plan([], [1, 3, 5])
+
+        assert [item["beat_id"] for item in normalized] == [1, 3, 5]

@@ -1457,14 +1457,14 @@ class TestComposerComputeBeatDurations:
         assert result[0] == pytest.approx(1.5)   # 0.0 → 1.5
         assert result[1] == pytest.approx(2.0)    # 1.5 → 3.5
 
-    def test_missing_word_range_defaults_to_5(self):
-        """Beat without word_range defaults to 5.0s."""
+    def test_missing_word_range_covers_full_timestamps(self):
+        """Beat without word_range covers full timestamp range."""
         narrative = [{"beat_id": 1}]
         timestamps = [{"word": "w", "start": 0, "end": 1}]
 
         result = ComposerAgent._compute_beat_durations(narrative, timestamps)
 
-        assert result == [5.0]
+        assert result == [pytest.approx(1.0)]
 
     def test_empty_inputs_returns_empty(self):
         """Empty inputs return empty list."""
