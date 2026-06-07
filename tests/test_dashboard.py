@@ -247,7 +247,7 @@ def test_api_create_job_passes_settings_to_orchestrator(mock_run, mock_settings,
     from clipper_agency.config.schema import AppSettings
 
     mock_settings.return_value = AppSettings(
-        _env_file=None, db_path="test/db.db", output_dir="test/out",
+        _env_file=None, db_path=":memory:", output_dir="test/out",
     )
     mock_run.return_value = {"status": "completed", "job_id": 1, "output": {}}
 

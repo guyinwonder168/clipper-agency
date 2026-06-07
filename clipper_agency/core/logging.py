@@ -13,7 +13,8 @@ class ThirdPartyLogFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         if any(record.name.startswith(p) for p in self.THIRD_PARTY_PREFIXES):
-            record.msg = f"[LIB] {record.msg}"
+            if not record.msg.startswith("[LIB]"):
+                record.msg = f"[LIB] {record.msg}"
         return True
 
 

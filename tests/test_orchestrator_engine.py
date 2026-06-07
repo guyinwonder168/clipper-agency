@@ -33,6 +33,9 @@ def mock_load_niche_autouse(mocker):
         "clipper_agency.orchestrator.engine.load_niche",
         return_value=test_config,
     )
+    # Prevent tests from writing real log files to logs/
+    mocker.patch("clipper_agency.orchestrator.engine.add_job_file_handler")
+    mocker.patch("clipper_agency.orchestrator.engine.remove_job_file_handler")
 
 
 @pytest.fixture
