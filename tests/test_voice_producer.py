@@ -355,3 +355,48 @@ class TestVoiceProducerScriptCompat:
         result = agent.execute(job_id=21, script=[])
         assert result["status"] == "completed"
         assert result["timestamps"] == []
+
+
+# ---------------------------------------------------------------------------
+# Chunking safety-net tests
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_text_splits_at_sentence_boundaries():
+    """Text is split at sentence boundaries respecting word budget."""
+    from clipper_agency.agents.voice_producer import _chunk_text
+
+    text = "First sentence here. Second sentence goes on. Third one is short."
+    chunks = _chunk_text(text, chunk_size_words=4)
+
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert len(chunk.split()) <= 8  # Allow slack for sentence integrity
+
+
+def test_chunk_text_short_text_returns_single():
+    """Text shorter than chunk_size returns a single chunk."""
+    from clipper_agency.agents.voice_producer import _chunk_text
+
+    text = "Short text here."
+    chunks = _chunk_text(text, chunk_size_words=250)
+
+    assert len(chunks) == 1
+    assert chunks[0] == text
+
+
+def test_stitch_timestamps_adds_cumulative_offset():
+    """Timestamps from later chunks get cumulative audio offset."""
+    agent = VoiceProducerAgent()
+    chunk_ts = [
+        [{"word": "hello", "start": 0.0, "end": 0.5}],
+        [{"word": "world", "start": 0.0, "end": 0.5}],
+    ]
+    chunk_durations = [10.0, 10.0]
+
+    result = agent._stitch_timestamps(chunk_ts, chunk_durations)
+
+    assert len(result) == 2
+    assert result[0]["start"] == 0.0
+    assert result[1]["start"] == pytest.approx(10.0)
+    assert result[1]["end"] == pytest.approx(10.5)

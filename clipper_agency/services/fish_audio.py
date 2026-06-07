@@ -8,6 +8,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+CHAR_LIMIT = 5_000
+
 
 class FishAudioService:
     """Text-to-speech generation via Fish Audio API.

@@ -10,6 +10,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+CHAR_LIMIT = 10_000
+
 # Default voice settings for the audio-first architecture
 DEFAULT_VOICE_SETTINGS: dict[str, Any] = {
     "stability": 0.4,

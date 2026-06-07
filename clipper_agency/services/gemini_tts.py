@@ -12,6 +12,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+CHAR_LIMIT = 5_000
+
 
 class GeminiTTSService:
     """Text-to-speech generation via the Gemini API."""

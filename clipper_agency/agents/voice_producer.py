@@ -43,6 +43,37 @@ _PROVIDER_KEYS = {
     "fish_audio": ("FISHAUDIO_API_KEY",),
 }
 
+# Per-provider character limits for TTS chunking safety net
+_PROVIDER_CHAR_LIMITS: dict[str, int] = {
+    "elevenlabs": 10_000,
+    "gemini_tts": 5_000,
+    "fish_audio": 5_000,
+}
+
+
+def _chunk_text(text: str, chunk_size_words: int = 250) -> list[str]:
+    """Split text at sentence boundaries into chunks of ~chunk_size_words."""
+    import re
+
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    chunks: list[str] = []
+    current_chunk: list[str] = []
+    current_words = 0
+
+    for sentence in sentences:
+        words = sentence.split()
+        if current_words + len(words) > chunk_size_words and current_chunk:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = []
+            current_words = 0
+        current_chunk.append(sentence)
+        current_words += len(words)
+
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+
+    return chunks if chunks else [text]
+
 
 class VoiceProducerAgent(BaseAgent):
     """Converts voiceover text to a single audio file with word-level timestamps.
@@ -122,6 +153,19 @@ class VoiceProducerAgent(BaseAgent):
             logger.info("Voice: trying %s (single audio)", provider)
 
             try:
+                char_limit = _PROVIDER_CHAR_LIMITS.get(provider, 5000)
+                if len(text) > char_limit:
+                    logger.warning(
+                        "Voice: text (%d chars) exceeds %s limit (%d), chunking",
+                        len(text), provider, char_limit,
+                    )
+                    return self._build_success_output(
+                        self._generate_chunked_voiceover(
+                            text, resolved_voice, job_id, assets_cache, provider,
+                        ),
+                        provider,
+                    )
+
                 if provider == "elevenlabs":
                     result = self._try_elevenlabs_with_timestamps(
                         text, resolved_voice, job_id, assets_cache,
@@ -277,6 +321,99 @@ class VoiceProducerAgent(BaseAgent):
             "error": "All TTS providers failed",
             "audio_files": [],
             "attempts": [],
+        }
+
+    # ── Chunked voiceover (safety net for long text) ──
+
+    def _stitch_timestamps(
+        self,
+        chunk_timestamps: list[list[dict]],
+        chunk_durations: list[float],
+    ) -> list[dict]:
+        """Merge per-chunk timestamps with cumulative audio offsets."""
+        stitched: list[dict] = []
+        offset = 0.0
+
+        for chunk_ts, duration in zip(chunk_timestamps, chunk_durations):
+            for ts in chunk_ts:
+                stitched.append({
+                    "word": ts["word"],
+                    "start": ts["start"] + offset,
+                    "end": ts["end"] + offset,
+                })
+            offset += duration
+
+        return stitched
+
+    def _concat_audio_chunks(self, chunk_paths: list[str], output_path: str) -> str:
+        """Concatenate audio chunks using FFmpeg demuxer."""
+        import tempfile
+        from pathlib import Path
+
+        list_file = Path(tempfile.mktemp(suffix=".txt"))
+        with open(list_file, "w") as f:
+            for path in chunk_paths:
+                f.write(f"file '{path}'\n")
+
+        cmd = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", str(list_file), "-c", "copy", output_path,
+        ]
+        subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=True)
+        list_file.unlink(missing_ok=True)
+        return output_path
+
+    def _generate_chunked_voiceover(
+        self,
+        text: str,
+        voice_id: str | None,
+        job_id: int,
+        assets_cache: str,
+        provider: str,
+    ) -> dict[str, Any]:
+        """Generate voiceover by chunking text, generating per-chunk, then concatenating."""
+        chunks = _chunk_text(text)
+        logger.warning("Voice: chunking %d chars into %d chunks", len(text), len(chunks))
+
+        chunk_paths: list[str] = []
+        chunk_timestamps: list[list[dict]] = []
+        chunk_durations: list[float] = []
+
+        output_dir = os.path.dirname(self._voiceover_output_path(job_id, assets_cache))
+
+        for i, chunk in enumerate(chunks):
+            chunk_path = os.path.join(output_dir, f"chunk_{i:03d}.mp3")
+
+            if provider == "elevenlabs":
+                service = self._create_service("elevenlabs")
+                audio_bytes, char_ts = service.generate_voice_with_timestamps(
+                    chunk, voice_id or "",
+                )
+                os.makedirs(os.path.dirname(chunk_path), exist_ok=True)
+                with open(chunk_path, "wb") as f:
+                    f.write(audio_bytes)
+                word_ts = self._extract_word_timestamps(char_ts, chunk)
+            else:
+                service = self._create_service(provider)
+                service.generate_voice(chunk, voice_id or "", chunk_path)
+                word_ts = self._approximate_timestamps(chunk_path, chunk)
+
+            chunk_paths.append(chunk_path)
+            chunk_timestamps.append(word_ts)
+            chunk_durations.append(self._probe_audio_duration(chunk_path))
+
+        # Concatenate audio
+        final_path = self._voiceover_output_path(job_id, assets_cache)
+        self._concat_audio_chunks(chunk_paths, final_path)
+
+        # Stitch timestamps
+        stitched = self._stitch_timestamps(chunk_timestamps, chunk_durations)
+
+        return {
+            "status": "success",
+            "voiceover_path": final_path,
+            "timestamps": stitched,
+            "provider": provider,
         }
 
     # ── Helpers ──
