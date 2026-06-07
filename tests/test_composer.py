@@ -412,8 +412,8 @@ class TestComposerTreatmentFilters:
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
-        # No treatment filter — just trim+setpts, mapped to [outv] for single scene
-        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS[outv]" in filter_complex
+        # No treatment filter — just trim+setpts+fps, mapped to [outv] for single scene
+        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS,fps=30[outv]" in filter_complex
         assert "crop=" not in filter_complex
         assert "scale=" not in filter_complex
         assert "-pix_fmt" in cmd
@@ -472,7 +472,7 @@ class TestComposerTreatmentFilters:
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
         # Single scene: trim output maps directly to [outv].
-        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS[outv]" in filter_complex
+        assert "[0:v]trim=duration=5,setpts=PTS-STARTPTS,fps=30[outv]" in filter_complex
         assert "-pix_fmt" in cmd
         assert "yuv420p" in cmd
         assert "-movflags" in cmd
@@ -998,9 +998,10 @@ class TestComposerUnifiedPipeline:
         assert "anullsrc" in fc
         # Assert — no subtitle drawtext
         assert "drawtext" not in fc
-        # Assert — basic trim+setpts present
+        # Assert — basic trim+setpts+fps present
         assert "trim=duration=" in fc
         assert "setpts=PTS-STARTPTS" in fc
+        assert "fps=30" in fc
         # Assert — video output label
         assert "[outv]" in fc
         assert "[outa]" in fc
@@ -1043,7 +1044,7 @@ class TestComposerEdgeCases:
         fc = _filter_complex(cmd)
 
         # Assert
-        assert "[0:v]trim=duration=4.0,setpts=PTS-STARTPTS[outv]" in fc
+        assert "[0:v]trim=duration=4.0,setpts=PTS-STARTPTS,fps=30[outv]" in fc
         assert "xfade=" not in fc
         assert "concat=" not in fc
 
@@ -1103,6 +1104,51 @@ class TestComposerEdgeCases:
         assert "crop=ih*9/16:ih,scale=1080:1920,setsar=1/1" in fc
         # Assert — hook_big_caption substitutes {text} with headline
         assert "drawtext=text='Big News!'" in fc
+
+    # ── Test: fps=30 normalises timebase for xfade compatibility ──
+
+    def test_fps30_normalises_timebase_for_xfade(self):
+        """Every scene gets fps=30 so xfade never sees mismatched timebases."""
+        valid = ["/tmp/img.png", "/tmp/vid.mp4"]
+        assets = [
+            _make_asset(
+                valid[0], duration=5.0, treatment="ken_burns_zoom_in",
+                type="image", transition_out="crossfade",
+            ),
+            _make_asset(
+                valid[1], duration=5.0, treatment="cinematic_crop",
+                type="video",
+            ),
+        ]
+
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid, assets, [], "/tmp/output.mp4",
+        )
+        fc = _filter_complex(cmd)
+
+        # Both scenes must have fps=30 after setpts for uniform timebase
+        assert "setpts=PTS-STARTPTS,fps=30" in fc
+        assert fc.count("fps=30") >= 2
+
+    # ── Test: audio-first also normalises fps for xfade compatibility ──
+
+    def test_audio_first_fps30_normalises_timebase(self):
+        """Audio-first path also adds fps=30 for uniform timebases."""
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voice.mp3",
+            trimmed_clips=["/tmp/v1.mp4", "/tmp/v2.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/v1.mp4", "target_duration": 5,
+                 "treatment": "cinematic_crop", "type": "video"},
+                {"scene": 2, "path": "/tmp/v2.mp4", "target_duration": 5},
+            ],
+            keyword_captions=[],
+            output_path="/tmp/out.mp4",
+        )
+
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        assert "setpts=PTS-STARTPTS,fps=30" in fc
+        assert fc.count("fps=30") >= 2
 
     # ── Test 4: transition_duration=0 still uses xfade path ──
 

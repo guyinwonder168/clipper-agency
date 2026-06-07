@@ -747,12 +747,12 @@ class ComposerAgent(BaseAgent):
                 trim_parts.append(
                     f"[{i}:v]{treatment_filter},"
                     f"trim=duration={duration},"
-                    f"setpts=PTS-STARTPTS[{label}]"
+                    f"setpts=PTS-STARTPTS,fps=30[{label}]"
                 )
             else:
                 trim_parts.append(
                     f"[{i}:v]trim=duration={duration},"
-                    f"setpts=PTS-STARTPTS[{label}]"
+                    f"setpts=PTS-STARTPTS,fps=30[{label}]"
                 )
 
         video_filter = _build_transition_chain(
@@ -1060,12 +1060,12 @@ class ComposerAgent(BaseAgent):
                 trim_parts.append(
                     f"[{i + 1}:v]{treatment_filter},"
                     f"trim=duration={duration},"
-                    f"setpts=PTS-STARTPTS[{label}]"
+                    f"setpts=PTS-STARTPTS,fps=30[{label}]"
                 )
             else:
                 trim_parts.append(
                     f"[{i + 1}:v]trim=duration={duration},"
-                    f"setpts=PTS-STARTPTS[{label}]"
+                    f"setpts=PTS-STARTPTS,fps=30[{label}]"
                 )
 
         video_filter = _build_transition_chain(
