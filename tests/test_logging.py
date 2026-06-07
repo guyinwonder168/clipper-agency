@@ -72,15 +72,15 @@ def test_third_party_filter_no_tag_for_pipeline_logs():
 
 
 def test_add_job_file_handler_creates_file(tmp_path):
-    """add_job_file_handler creates a log file handler."""
+    """add_job_file_handler creates logs/run-job_{id}.log."""
     from clipper_agency.core.logging import add_job_file_handler, remove_job_file_handler
     import logging
 
     _reset_root_logger()
     setup_logging("DEBUG")
     try:
-        add_job_file_handler(42, output_dir=str(tmp_path))
-        log_file = tmp_path / "job_42" / "debug.log"
+        add_job_file_handler(42, logs_dir=str(tmp_path / "logs"))
+        log_file = tmp_path / "logs" / "run-job_42.log"
         assert log_file.parent.exists()
         remove_job_file_handler()
     finally:

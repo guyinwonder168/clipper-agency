@@ -52,11 +52,11 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-def add_job_file_handler(job_id: int, output_dir: str = "data/outputs") -> None:
-    """Add a FileHandler writing per-job debug logs."""
-    log_dir = Path(output_dir) / f"job_{job_id}"
+def add_job_file_handler(job_id: int, logs_dir: str = "logs") -> None:
+    """Add a FileHandler writing per-job logs to {logs_dir}/run-job_{job_id}.log."""
+    log_dir = Path(logs_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "debug.log"
+    log_file = log_dir / f"run-job_{job_id}.log"
 
     handler = logging.FileHandler(str(log_file))
     handler.setLevel(logging.DEBUG)

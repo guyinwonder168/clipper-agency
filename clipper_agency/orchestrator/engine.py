@@ -162,7 +162,7 @@ class Orchestrator:
         job_id = create_job(conn, topic=topic, niche=niche,
                             config_snapshot=snapshot)
         logger.info("Job #%d created", job_id)
-        add_job_file_handler(job_id, str(output_dir))
+        add_job_file_handler(job_id)
         create_manifest(assets_cache, job_id, topic,
                         output_dir if output_dir else "outputs",
                         config_snapshot=snapshot)

@@ -572,15 +572,15 @@ def test_third_party_filter_no_tag_for_pipeline_logs():
 
 
 def test_add_job_file_handler_creates_file(tmp_path):
-    """add_job_file_handler creates a log file handler."""
+    """add_job_file_handler creates logs/run-job_{id}.log."""
     from clipper_agency.core.logging import add_job_file_handler, remove_job_file_handler
     import logging
 
     _reset_root_logger()
     setup_logging("DEBUG")
     try:
-        add_job_file_handler(42, output_dir=str(tmp_path))
-        log_file = tmp_path / "job_42" / "debug.log"
+        add_job_file_handler(42, logs_dir=str(tmp_path / "logs"))
+        log_file = tmp_path / "logs" / "run-job_42.log"
         assert log_file.parent.exists()
         remove_job_file_handler()
     finally:
@@ -613,13 +613,13 @@ class ThirdPartyLogFilter(logging.Filter):
         return True
 
 
-def add_job_file_handler(job_id: int, output_dir: str = "data/outputs") -> None:
-    """Add a FileHandler writing per-job debug logs."""
+def add_job_file_handler(job_id: int, logs_dir: str = "logs") -> None:
+    """Add a FileHandler writing per-job logs to {logs_dir}/run-job_{job_id}.log."""
     from pathlib import Path
 
-    log_dir = Path(output_dir) / f"job_{job_id}"
+    log_dir = Path(logs_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "debug.log"
+    log_file = log_dir / f"run-job_{job_id}.log"
 
     handler = logging.FileHandler(str(log_file))
     handler.setLevel(logging.DEBUG)
@@ -665,7 +665,7 @@ Expected: ALL PASS
 After `logger.info("Job #%d created", job_id)` at line 163, add:
 ```python
 from clipper_agency.core.logging import add_job_file_handler, remove_job_file_handler
-add_job_file_handler(job_id, output_dir)
+add_job_file_handler(job_id)
 ```
 
 Before `return {"status": "completed", ...}` at line 450, add:
@@ -1060,7 +1060,7 @@ Wait for SonarCloud to pass on PR #41.
 ## Post-Implementation Checklist
 
 1. Re-run pipeline: `rm -rf data/assets/cache data/clipper.db data/outputs && .venv/bin/python3 -m clipper_agency run -t "Gosip artis Indonesia terbaru" -n indonesian_artists`
-2. Verify: story_beats populated, captions visible, no hook duplication, per-job debug.log created, no voice truncation
+2. Verify: story_beats populated, captions visible, no hook duplication, per-job log at `logs/run-job_{id}.log` created, no voice truncation
 3. Update `docs/fixes-pending.md` — mark all fixes as DONE
 4. Update `AGENTS.md` Repository State section
 5. Merge PR #41 → master (no squash)

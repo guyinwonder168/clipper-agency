@@ -148,8 +148,8 @@ class UnverifiedClaim(BaseModel):
 class AssetCandidate(BaseModel):
     """A candidate visual asset found during research."""
 
-    type: str  # "tiktok_clip", "screenshot", "photo", "text_card"
-    url: str
+    type: str  # "tiktok_clip", "screenshot", "photo", "text_card", "text_overlay"
+    url: str = ""  # Empty for text_overlay / text_card types
     reason: str
 
 
