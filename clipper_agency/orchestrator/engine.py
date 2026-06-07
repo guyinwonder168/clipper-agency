@@ -319,8 +319,9 @@ class Orchestrator:
                                     visual_output, _ASSET_SOURCING_FAILED)
 
         g9 = GateAssetValidation()
-        asset_paths = [a.get("path", "") for a in visual_output.get("assets", [])]
-        g9_result = g9.evaluate(asset_paths=asset_paths)
+        visual_assets = visual_output.get("assets", [])
+        asset_paths = [a.get("path", "") for a in visual_assets]
+        g9_result = g9.evaluate(asset_paths=asset_paths, assets=visual_assets)
         self._record_gate(assets_cache, job_id, "G9_asset_validation", g9_result)
         if abort := self._enforce_gate(conn, job_id, "G9", g9_result,
                                         failed_at="asset_validation"):

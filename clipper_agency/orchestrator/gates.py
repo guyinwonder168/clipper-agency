@@ -182,10 +182,25 @@ class GateAssetValidation(BaseGate):
     """G9: Asset validation."""
 
     def evaluate(self, asset_paths: list[str] | None = None,
+                 assets: list[dict] | None = None,
                  **kwargs) -> GateResult:
         paths = asset_paths or []
         if not paths:
             return GateResult(False, "hard_fail", "No assets")
+        # Filter out text_card/none assets with empty paths —
+        # Composer generates card fallbacks for these.
+        if assets:
+            skip_indices = set()
+            for i, a in enumerate(assets):
+                source = a.get("source", "")
+                path = a.get("path", "")
+                if not path and source in ("text_card", "none"):
+                    skip_indices.add(i)
+            if skip_indices:
+                paths = [p for i, p in enumerate(paths) if i not in skip_indices]
+                if not paths:
+                    return GateResult(True, "pass",
+                                      "All assets are text cards (no downloads needed)")
         valid = [p for p in paths
                  if Path(p).exists() and Path(p).stat().st_size > 0]
         if not valid:

@@ -149,6 +149,10 @@ def validate_agent_cache(
     elif agent_name == "voice_producer":
         voices_dir = Path(agent_dir(assets_cache, job_id, "voice_producer")) / "voices"
         voice_files = sorted(str(p) for p in voices_dir.glob("scene_*.mp3")) if voices_dir.exists() else []
+        # Also accept single voiceover.mp3 from audio-first path
+        single_voiceover = Path(agent_dir(assets_cache, job_id, "voice_producer")) / "voiceover.mp3"
+        if single_voiceover.exists() and single_voiceover.stat().st_size > 0:
+            voice_files.append(str(single_voiceover))
         r = validate_voice_files(voice_files)
         all_issues.extend(r.issues)
 

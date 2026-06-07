@@ -117,6 +117,7 @@ def _write_output_artifacts(
         return
     base_dir = agent_dir(assets_cache, job_id, agent_name)
     write_json(f"{base_dir}/narrative_structure.json", result["narrative_structure"])
+    write_json(f"{base_dir}/script.json", {"scenes": result["narrative_structure"]})
     write_text(f"{base_dir}/voiceover.txt", result["voiceover_text"])
     write_text(f"{base_dir}/caption.txt", result["caption"])
     write_json(f"{base_dir}/hashtags.json", result["hashtags"])
