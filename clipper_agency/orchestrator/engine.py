@@ -19,6 +19,7 @@ from clipper_agency.config.loader import (
     get_language_name, get_tone_name, get_angle_name,
 )
 from clipper_agency.core.artifacts import write_json
+from clipper_agency.core.logging import add_job_file_handler, remove_job_file_handler
 from clipper_agency.core.manifest import (
     create_manifest,
     update_manifest_agent,
@@ -161,6 +162,7 @@ class Orchestrator:
         job_id = create_job(conn, topic=topic, niche=niche,
                             config_snapshot=snapshot)
         logger.info("Job #%d created", job_id)
+        add_job_file_handler(job_id, str(output_dir))
         create_manifest(assets_cache, job_id, topic,
                         output_dir if output_dir else "outputs",
                         config_snapshot=snapshot)
@@ -447,6 +449,7 @@ class Orchestrator:
 
             update_job_status(conn, job_id, "COMPLETED")
             logger.info("Pipeline COMPLETED: job #%d", job_id)
+            remove_job_file_handler()
             return {
                 "status": "completed",
                 "job_id": job_id,
@@ -463,6 +466,7 @@ class Orchestrator:
         except Exception as e:
             logger.exception("Pipeline FAILED: job #%d — %s", job_id, e)
             update_job_status(conn, job_id, "FAILED", str(e))
+            remove_job_file_handler()
             return {"status": "failed", "error": str(e), "job_id": job_id}
 
     def _load_agent_output(self, assets_cache: str, job_id: int,
