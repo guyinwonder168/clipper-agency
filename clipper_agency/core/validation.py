@@ -173,8 +173,7 @@ def _validate_visual_director_artifacts(assets_cache: str, job_id: int,
     return validate_scene_files(scene_files).issues
 
 
-def _validate_composer_artifacts(assets_cache: str, job_id: int,
-                                 out_p: Path) -> list[str]:
+def _validate_composer_artifacts(out_p: Path) -> list[str]:
     """Validate composer specific artifacts."""
     out_data = read_json(out_p)
     video_path = out_data.get("video_path", "")
@@ -215,7 +214,7 @@ def validate_agent_cache(
     elif agent_name == "composer":
         out_p = Path(agent_output_file(assets_cache, job_id, agent_name))
         all_issues.extend(
-            _validate_composer_artifacts(assets_cache, job_id, out_p)
+            _validate_composer_artifacts(out_p)
         )
     # safety, reviewer — only output.json check (already done above).
 
