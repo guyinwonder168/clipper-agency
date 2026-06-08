@@ -1664,3 +1664,90 @@ class TestComposerEnrichAudioFirstAssets:
             [], ["/tmp/clip.mp4"], [],
         )
         assert result[0]["target_duration"] == 5.0
+
+
+# ---------------------------------------------------------------------------
+# Composer duration-safety tests (Batch 1A — must fail)
+# ---------------------------------------------------------------------------
+
+
+class TestComposerDurationSafety:
+    """Tests for Composer duration-safe rendering.
+
+    These tests MUST FAIL until duration guard is implemented in Batch 2A.
+    """
+
+    def test_audio_first_render_never_returns_video_shorter_than_voiceover(self, tmp_path, mocker):
+        """Composer output must never be shorter than the voiceover audio."""
+        _mock_preflight_ok(mocker)
+        mocker.patch("clipper_agency.core.scene_validator.SceneValidator.validate",
+                     return_value=mocker.MagicMock(valid=True, issues=[]))
+        mocker.patch("clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+                     return_value=mocker.MagicMock(success=True, error=""))
+
+        # Mock probe to report scenes shorter than audio
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                     side_effect=lambda *a, **kw: mocker.MagicMock(
+                         width=1080, height=1920, codec="h264",
+                         duration=21.21, has_audio=False,
+                         pix_fmt="yuv420p", file_size=10000))
+
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming", return_value=0)
+
+        agent = ComposerAgent()
+        result = agent.execute(
+            job_id=99,
+            assets=[
+                {"scene": 1, "path": "/tmp/scene_1.mp4"},
+                {"scene": 2, "path": "/tmp/scene_2.mp4"},
+            ],
+            audio_files=["/tmp/voiceover.mp3"],
+            output_dir=str(tmp_path),
+            voiceover_duration_sec=23.25,
+        )
+        # The duration guard should either:
+        # 1. Extend the visual timeline to cover audio, OR
+        # 2. Return a failed status with clear reason
+        # It should NOT silently produce a short video
+        assert result.get("status") in ("completed", "failed")
+        if result.get("status") == "completed":
+            # If completed, output must not be shorter than voiceover
+            output_dur = result.get("output_duration_sec", 0)
+            assert output_dur >= 23.25, (
+                f"Output {output_dur}s is shorter than voiceover 23.25s"
+            )
+
+    def test_crossfade_overlap_is_compensated_when_matching_audio_duration(self, tmp_path, mocker):
+        """When scene sum equals audio but crossfade eats time, output must still cover audio."""
+        _mock_preflight_ok(mocker)
+        mocker.patch("clipper_agency.core.scene_validator.SceneValidator.validate",
+                     return_value=mocker.MagicMock(valid=True, issues=[]))
+        mocker.patch("clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+                     return_value=mocker.MagicMock(success=True, error=""))
+
+        # Each scene is 12s, total 24s for 23.25s audio
+        # But crossfade overlap reduces actual output
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                     side_effect=lambda *a, **kw: mocker.MagicMock(
+                         width=1080, height=1920, codec="h264",
+                         duration=12.0, has_audio=False,
+                         pix_fmt="yuv420p", file_size=10000))
+
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming", return_value=0)
+
+        agent = ComposerAgent()
+        result = agent.execute(
+            job_id=100,
+            assets=[
+                {"scene": 1, "path": "/tmp/scene_1.mp4"},
+                {"scene": 2, "path": "/tmp/scene_2.mp4"},
+            ],
+            audio_files=["/tmp/voiceover.mp3"],
+            output_dir=str(tmp_path),
+            voiceover_duration_sec=23.25,
+        )
+        if result.get("status") == "completed":
+            output_dur = result.get("output_duration_sec", 0)
+            assert output_dur >= 23.25, (
+                f"Output {output_dur}s shorter than audio 23.25s after crossfade"
+            )

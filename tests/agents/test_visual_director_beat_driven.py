@@ -787,3 +787,114 @@ class TestCandidateSelectionAndDedup:
         assert "source_url" not in result[1]["action"] or result[1]["action"].get("source_url") != "https://a.com/1"
         # Beat 3 keeps its distinct URL
         assert result[2]["action"]["source_url"] == "https://b.com/2"
+
+
+# ---------------------------------------------------------------------------
+# Visual Plan Resolver tests (Batch 1A — must fail)
+# ---------------------------------------------------------------------------
+
+
+class TestVisualPlanResolver:
+    """Tests for the future _resolve_beat_plan_assets resolver.
+
+    These tests MUST FAIL until the resolver is implemented in Batch 2A.
+    """
+
+    @pytest.fixture
+    def director(self):
+        return VisualDirectorAgent()
+
+    def test_resolver_replaces_duplicate_url_with_alternate_candidate(self, director):
+        """Beat 2 uses same URL as beat 1; resolver must pick alternate candidate."""
+        url_primary = "https://www.tiktok.com/@user/video/111"
+        url_alternate = "https://www.tiktok.com/@user/video/222"
+        plan = [
+            {
+                "beat_id": 1,
+                "scene_number": 1,
+                "action": {"type": "tiktok_clip", "source_url": url_primary},
+                "asset_candidates": [
+                    {"type": "tiktok_clip", "url": url_primary},
+                ],
+            },
+            {
+                "beat_id": 2,
+                "scene_number": 2,
+                "action": {"type": "tiktok_clip", "source_url": url_primary},
+                "asset_candidates": [
+                    {"type": "tiktok_clip", "url": url_primary},
+                    {"type": "tiktok_clip", "url": url_alternate},
+                ],
+            },
+        ]
+        resolved = director._resolve_beat_plan_assets(plan, do_not_use=[])
+        beat2_action = resolved[1]["action"]
+        assert beat2_action.get("source_url") == url_alternate
+        assert beat2_action.get("type") == "tiktok_clip"
+
+    def test_resolver_recovers_missing_source_url_from_candidates(self, director):
+        """Action has no source_url; beat has usable candidate URL."""
+        url = "https://www.tiktok.com/@user/video/333"
+        plan = [
+            {
+                "beat_id": 1,
+                "scene_number": 1,
+                "action": {"type": "tiktok_clip"},
+                "asset_candidates": [
+                    {"type": "tiktok_clip", "url": url},
+                ],
+            },
+        ]
+        resolved = director._resolve_beat_plan_assets(plan, do_not_use=[])
+        assert resolved[0]["action"].get("source_url") == url
+
+    def test_resolver_normalizes_video_candidate_type_to_tiktok_clip(self, director):
+        """Candidate type 'video' with TikTok URL resolves to tiktok_clip action."""
+        url = "https://www.tiktok.com/@user/video/444"
+        plan = [
+            {
+                "beat_id": 1,
+                "scene_number": 1,
+                "action": {"type": "tiktok_clip"},
+                "asset_candidates": [
+                    {"type": "video", "url": url},
+                ],
+            },
+        ]
+        resolved = director._resolve_beat_plan_assets(plan, do_not_use=[])
+        action = resolved[0]["action"]
+        assert action.get("type") == "tiktok_clip"
+        assert action.get("source_url") == url
+
+    def test_resolver_never_leaves_broken_tiktok_action(self, director):
+        """No usable candidate exists — action must become text_card fallback."""
+        plan = [
+            {
+                "beat_id": 1,
+                "scene_number": 1,
+                "action": {"type": "tiktok_clip"},
+                "asset_candidates": [],
+            },
+        ]
+        resolved = director._resolve_beat_plan_assets(plan, do_not_use=[])
+        action = resolved[0]["action"]
+        assert action.get("type") == "text_card"
+        assert "reason" in action
+
+    def test_resolver_respects_do_not_use_urls(self, director):
+        """URLs in do_not_use list must not be selected even if they are candidates."""
+        blocked_url = "https://www.tiktok.com/@user/video/555"
+        good_url = "https://www.tiktok.com/@user/video/666"
+        plan = [
+            {
+                "beat_id": 1,
+                "scene_number": 1,
+                "action": {"type": "tiktok_clip"},
+                "asset_candidates": [
+                    {"type": "tiktok_clip", "url": blocked_url},
+                    {"type": "tiktok_clip", "url": good_url},
+                ],
+            },
+        ]
+        resolved = director._resolve_beat_plan_assets(plan, do_not_use=[blocked_url])
+        assert resolved[0]["action"].get("source_url") == good_url
