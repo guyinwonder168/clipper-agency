@@ -349,6 +349,105 @@ class SegmentProducerAgent(BaseAgent):
             })
         return candidates
 
+    def _build_asset_portfolio(
+        self,
+        scrapecreators_results: list[dict],
+        firecrawl_results: list[dict],
+        beat_keywords: list[str],
+        is_important_beat: bool = False,
+    ) -> list[dict]:
+        """Build ranked asset portfolio with relevance scores and download metadata."""
+        candidates: list[dict] = []
+        keywords_lower = [kw.lower() for kw in beat_keywords]
+        total_keywords = len(keywords_lower) or 1  # avoid division by zero
+
+        # ── ScrapeCreators candidates ─────────────────────────────────────
+        for item in scrapecreators_results:
+            url = item.get("url", "")
+            if not url:
+                continue
+            title = item.get("title", "")
+            title_lower = title.lower()
+
+            matched = sum(1 for kw in keywords_lower if kw in title_lower)
+            relevance_score = (matched / total_keywords) * 0.7 + 0.3
+
+            # Download URL logic: prefer no-watermark → existing download → canonical
+            if item.get("download_no_watermark_addr"):
+                download_url = item["download_no_watermark_addr"]
+                download_url_type = "no_watermark"
+            elif item.get("download_url"):
+                download_url = item["download_url"]
+                download_url_type = "standard"
+            else:
+                download_url = url
+                download_url_type = "canonical"
+
+            candidates.append({
+                "url": url,
+                "type": "tiktok_clip",
+                "source": "scrapecreators",
+                "relevance_score": relevance_score,
+                "provenance": "scrapecreators_tiktok",
+                "download_url": download_url,
+                "download_url_type": download_url_type,
+                "play_count": item.get("play_count"),
+                "title": title,
+            })
+
+        # ── Firecrawl candidates ──────────────────────────────────────────
+        for item in firecrawl_results:
+            url = item.get("url", "")
+            if not url:
+                continue
+            title = item.get("title", "")
+            content = item.get("content", "")
+            search_text = f"{title} {content}".lower()
+
+            matched = sum(1 for kw in keywords_lower if kw in search_text)
+            relevance_score = (matched / total_keywords) * 0.6 + 0.2
+
+            candidates.append({
+                "url": url,
+                "type": "article",
+                "source": "firecrawl",
+                "relevance_score": relevance_score,
+                "provenance": "firecrawl_search",
+                "title": title,
+            })
+
+            # Extract image candidate if present
+            image_url = item.get("image")
+            if image_url:
+                candidates.append({
+                    "url": image_url,
+                    "type": "image",
+                    "source": "firecrawl",
+                    "relevance_score": relevance_score,
+                    "provenance": "firecrawl_search",
+                })
+
+        # ── Sort by relevance descending ──────────────────────────────────
+        candidates.sort(key=lambda c: c["relevance_score"], reverse=True)
+
+        # ── Important beat: ensure minimum coverage ───────────────────────
+        if is_important_beat:
+            video_types = {"tiktok_clip", "video"}
+            image_types = {"photo", "screenshot", "image"}
+            video_count = sum(1 for c in candidates if c.get("type") in video_types)
+            image_count = sum(1 for c in candidates if c.get("type") in image_types)
+
+            if video_count < 2 or image_count < 1:
+                candidates.append({
+                    "type": "text_card",
+                    "source": "fallback",
+                    "relevance_score": 0.0,
+                    "provenance": "generated_fallback",
+                    "url": "",
+                })
+
+        return candidates
+
     @staticmethod
     def _merge_asset_candidates(*candidate_groups: list[dict]) -> list[dict]:
         """Merge asset candidate groups, deduplicating by URL."""

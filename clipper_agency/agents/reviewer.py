@@ -142,6 +142,42 @@ class ReviewerAgent(BaseAgent):
     _check_fact_safety = staticmethod(_check_fact_safety)
     _check_narrative_structure = staticmethod(_check_narrative_structure)
 
+    def _check_hard_gates(
+        self,
+        checks: dict[str, Any],
+        audio_duration_sec: float,
+        visual_duration_sec: float,
+        visual_plan_actions: list[dict] | None,
+    ) -> dict[str, Any] | None:
+        """Return a fail dict if any hard gate triggers, else None."""
+        # Hard gate 1: AV drift where video is shorter than audio
+        if checks["av_sync"]["status"] == _CHECK_FAIL:
+            if visual_duration_sec < audio_duration_sec:
+                return {
+                    "status": "fail",
+                    "score": 0,
+                    "feedback": (
+                        f"Hard gate: video ({visual_duration_sec}s) "
+                        f"shorter than audio ({audio_duration_sec}s)"
+                    ),
+                    "issues": ["av_duration_mismatch"],
+                    "programmatic_checks": checks,
+                }
+
+        # Hard gate 2: Broken tiktok_clip actions (missing source_url)
+        if visual_plan_actions:
+            for action in visual_plan_actions:
+                if action.get("type") == "tiktok_clip" and not action.get("source_url"):
+                    return {
+                        "status": "fail",
+                        "score": 0,
+                        "feedback": "Hard gate: broken tiktok_clip action (missing source_url)",
+                        "issues": ["broken_tiktok_clip_action"],
+                        "programmatic_checks": checks,
+                    }
+
+        return None
+
     def execute(
         self,
         job_id: int,
@@ -153,6 +189,7 @@ class ReviewerAgent(BaseAgent):
         visual_duration_sec: float = 0.0,
         narrative_structure: list[dict] | None = None,
         unverified_claims: list[dict] | None = None,
+        visual_plan_actions: list[dict] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         scenes = script or []
@@ -167,12 +204,26 @@ class ReviewerAgent(BaseAgent):
         )
         programmatic_results = [av_sync, caption_q, fact_safety, narrative_q]
 
-        # 2. Build text for LLM review
+        checks = {
+            "av_sync": av_sync,
+            "caption_quality": caption_q,
+            "fact_safety": fact_safety,
+            "narrative_structure": narrative_q,
+        }
+
+        # 2. Hard gates: force FAIL before expensive LLM call
+        hard_gate_result = self._check_hard_gates(
+            checks, audio_duration_sec, visual_duration_sec, visual_plan_actions,
+        )
+        if hard_gate_result is not None:
+            return hard_gate_result
+
+        # 3. Build text for LLM review
         script_text = _format_script_text(scenes)
         safety_rules_text = _format_safety_rules(safety_rules or [])
         results_text = _format_programmatic_results(programmatic_results)
 
-        # 3. LLM review
+        # 4. LLM review
         agent_cfg = get_agent_config("reviewer")
         llm = OpenRouterClient()
         prompt = load_prompt("reviewer", REVIEWER_PROMPT, PROMPTS_DIR)
@@ -204,18 +255,13 @@ class ReviewerAgent(BaseAgent):
             review["verdict"], review["score"], len(review["issues"]),
         )
 
-        # 4. Return combined output
+        # 5. Return combined output
         return {
             "status": review["verdict"],
             "score": review["score"],
             "feedback": review["feedback"],
             "issues": review["issues"],
-            "programmatic_checks": {
-                "av_sync": av_sync,
-                "caption_quality": caption_q,
-                "fact_safety": fact_safety,
-                "narrative_structure": narrative_q,
-            },
+            "programmatic_checks": checks,
         }
 
     def _parse_review_response(self, content: str) -> dict[str, Any]:
