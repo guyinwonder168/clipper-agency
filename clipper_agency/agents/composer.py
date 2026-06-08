@@ -239,6 +239,7 @@ class ComposerAgent(BaseAgent):
         audio_files: list[str] | None = None,
         output_dir: str = "",
         voiceover_duration_sec: float | None = None,
+        intro_card_duration_sec: float | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         # ── Audio-first mode ──

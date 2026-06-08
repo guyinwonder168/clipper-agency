@@ -622,6 +622,33 @@ class VisualDirectorAgent(BaseAgent):
                 return url
         return None
 
+    def _plan_intro_card(
+        self,
+        story_beats: list[dict],
+        video_format: str,
+        topic: str,
+    ) -> dict | None:
+        """Plan an intro card (scene 0) for roundup video formats.
+
+        Returns ``None`` for non-roundup formats (single story, text-only).
+        """
+        _ROUNDUP_FORMATS = frozenset({"three_story_roundup", "two_story_highlight"})
+
+        if video_format not in _ROUNDUP_FORMATS:
+            return None
+
+        return {
+            "scene_number": 0,
+            "beat_id": 0,
+            "role": "intro_card",
+            "target_duration": 3.0,
+            "action": {
+                "type": "text_card",
+                "headline": topic,
+                "style": "breaking_news",
+            },
+        }
+
     # ------------------------------------------------------------------
     # Legacy planning paths (kept for backward compatibility)
     # ------------------------------------------------------------------
