@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -69,6 +69,18 @@ class ContentPlanningConfig(BaseModel):
     target_duration_sec: int = Field(55, ge=20, le=300)
     hard_limit_sec: int = Field(60, ge=20, le=300)
     estimated_words_per_second: float = Field(2.0, ge=0.5, le=5.0)
+
+    @computed_field
+    @property
+    def target_script_duration_sec(self) -> int:
+        """Alias: Scriptwriter guidance, not a downstream command."""
+        return self.target_duration_sec
+
+    @computed_field
+    @property
+    def max_final_duration_sec(self) -> int:
+        """Alias: Hard final safety cap enforced at G10."""
+        return self.hard_limit_sec
 
 
 class AppSettings(BaseSettings):
