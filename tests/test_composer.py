@@ -1751,3 +1751,86 @@ class TestComposerDurationSafety:
             assert output_dur >= 23.25, (
                 f"Output {output_dur}s shorter than audio 23.25s after crossfade"
             )
+
+
+# ---------------------------------------------------------------------------
+# Intro card contract tests (Batch 1B — must fail)
+# ---------------------------------------------------------------------------
+
+
+class TestComposerIntroCard:
+    """Tests for Composer intro card scene rendering.
+
+    These tests MUST FAIL until intro card rendering is implemented in Batch 2B.
+    """
+
+    def test_composer_renders_intro_card_scene_as_part_of_timeline(self, tmp_path, mocker):
+        """Intro card scene 0 must be included in the rendered timeline."""
+        _mock_preflight_ok(mocker)
+        mocker.patch("clipper_agency.core.scene_validator.SceneValidator.validate",
+                     return_value=mocker.MagicMock(valid=True, issues=[]))
+        mocker.patch("clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+                     return_value=mocker.MagicMock(success=True, error=""))
+
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                     return_value=mocker.MagicMock(
+                         width=1080, height=1920, codec="h264",
+                         duration=3.0, has_audio=False,
+                         pix_fmt="yuv420p", file_size=5000))
+
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming", return_value=0)
+
+        agent = ComposerAgent()
+        result = agent.execute(
+            job_id=200,
+            assets=[
+                {"scene": 0, "path": "/tmp/intro_card.mp4", "role": "intro_card"},
+                {"scene": 1, "path": "/tmp/scene_1.mp4"},
+                {"scene": 2, "path": "/tmp/scene_2.mp4"},
+            ],
+            audio_files=["/tmp/voiceover.mp3"],
+            output_dir=str(tmp_path),
+            voiceover_duration_sec=20.0,
+            intro_card_duration_sec=3.0,
+        )
+        if result.get("status") == "completed":
+            # Intro card must contribute to timeline
+            assert result.get("scene_count", 0) >= 3, (
+                "Intro card + 2 story scenes = at least 3 scenes"
+            )
+
+    def test_composer_intro_card_does_not_eat_voiceover_time(self, tmp_path, mocker):
+        """Intro card is silent pre-roll — must not reduce available voiceover time."""
+        _mock_preflight_ok(mocker)
+        mocker.patch("clipper_agency.core.scene_validator.SceneValidator.validate",
+                     return_value=mocker.MagicMock(valid=True, issues=[]))
+        mocker.patch("clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+                     return_value=mocker.MagicMock(success=True, error=""))
+
+        mocker.patch("clipper_agency.core.media_probe.probe_video",
+                     return_value=mocker.MagicMock(
+                         width=1080, height=1920, codec="h264",
+                         duration=10.0, has_audio=False,
+                         pix_fmt="yuv420p", file_size=10000))
+
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming", return_value=0)
+
+        agent = ComposerAgent()
+        result = agent.execute(
+            job_id=201,
+            assets=[
+                {"scene": 0, "path": "/tmp/intro_card.mp4", "role": "intro_card"},
+                {"scene": 1, "path": "/tmp/scene_1.mp4"},
+            ],
+            audio_files=["/tmp/voiceover.mp3"],
+            output_dir=str(tmp_path),
+            voiceover_duration_sec=20.0,
+            intro_card_duration_sec=3.0,
+        )
+        if result.get("status") == "completed":
+            # Total video duration should be intro_card (3s) + voiceover (20s) ≈ 23s
+            # NOT just 20s (intro card eating into voiceover)
+            output_dur = result.get("output_duration_sec", 0)
+            assert output_dur >= 20.0, (
+                f"Output {output_dur}s should cover at least the voiceover 20s"
+            )

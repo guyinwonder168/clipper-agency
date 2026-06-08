@@ -898,3 +898,63 @@ class TestVisualPlanResolver:
         ]
         resolved = director._resolve_beat_plan_assets(plan, do_not_use=[blocked_url])
         assert resolved[0]["action"].get("source_url") == good_url
+
+
+# ---------------------------------------------------------------------------
+# Intro card contract tests (Batch 1B — must fail)
+# ---------------------------------------------------------------------------
+
+
+class TestIntroCardContract:
+    """Tests for explicit intro card scene-zero contract.
+
+    These tests MUST FAIL until intro card logic is implemented in Batch 2B.
+    """
+
+    def test_visual_director_adds_intro_card_scene_zero_for_roundup(self):
+        """For three_story_roundup format, first scene should be intro_card."""
+        director = VisualDirectorAgent()
+        story_beats = [
+            _make_beat(beat_id=1, role="story_1", narration_goal="Story one"),
+            _make_beat(beat_id=2, role="story_2", narration_goal="Story two"),
+            _make_beat(beat_id=3, role="story_3", narration_goal="Story three"),
+        ]
+        plan = director._plan_intro_card(
+            story_beats=story_beats,
+            video_format="three_story_roundup",
+            topic="Ruben Onsu dan Sarwendah Drama",
+        )
+        assert plan is not None, "Intro card plan must not be None for roundup format"
+        assert isinstance(plan, dict)
+        assert plan.get("scene_number") == 0, "Intro card must be scene 0"
+        assert plan.get("role") == "intro_card"
+        assert plan.get("target_duration") is not None
+        assert plan["target_duration"] > 0
+        assert plan.get("action", {}).get("type") == "text_card"
+        assert "headline" in plan.get("action", {})
+
+    def test_visual_director_skips_intro_card_for_non_roundup(self):
+        """For non-roundup formats, intro card should not be added."""
+        director = VisualDirectorAgent()
+        story_beats = [_make_beat(beat_id=1, role="main_claim")]
+        plan = director._plan_intro_card(
+            story_beats=story_beats,
+            video_format="single_story_deep_dive",
+            topic="Some topic",
+        )
+        assert plan is None, "Intro card should not be added for non-roundup formats"
+
+    def test_intro_card_has_breaking_news_style(self):
+        """Intro card for roundup should use breaking_news style."""
+        director = VisualDirectorAgent()
+        story_beats = [
+            _make_beat(beat_id=1, role="story_1"),
+            _make_beat(beat_id=2, role="story_2"),
+        ]
+        plan = director._plan_intro_card(
+            story_beats=story_beats,
+            video_format="three_story_roundup",
+            topic="Hot Topic",
+        )
+        assert plan is not None
+        assert plan["action"].get("style") == "breaking_news"
