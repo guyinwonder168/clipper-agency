@@ -7,6 +7,7 @@ from typing import Any
 from clipper_agency.agents.base import BaseAgent
 from clipper_agency.agents.prompts import PROMPTS_DIR, load_prompt
 from clipper_agency.config.loader import get_agent_config
+from clipper_agency.core.package_consistency import evaluate_package_consistency
 from clipper_agency.llm.client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ _AV_DRIFT_TOLERANCE_SEC = 0.5
 _FAIL_REASON_VISUAL_COVERAGE = "VISUAL_COVERAGE_FAILED"
 _FAIL_REASON_TEXT_COLLISION = "TEXT_COLLISION_FAILED"
 _FAIL_REASON_SAFE_AREA = "SAFE_AREA_FAILED"
+_FAIL_REASON_PACKAGE_CONSISTENCY = "PACKAGE_CONSISTENCY_FAILED"
 
 REVIEWER_PROMPT = """You are a content quality reviewer for a TikTok creator channel
 producing short-form infotainment videos with voiceover narration.
@@ -239,6 +241,37 @@ class ReviewerAgent(BaseAgent):
             }
         return None
 
+    def _fail_if_package_consistency_failed(
+        self,
+        story_mode_decision: dict | None,
+        thumbnail_text: str,
+        main_entities: list[str],
+        caption: str,
+        topic: str,
+        script: list[dict] | None,
+    ) -> dict[str, Any] | None:
+        """Return fail dict if package consistency check fails, else None."""
+        if not story_mode_decision:
+            return None
+        result = evaluate_package_consistency(
+            topic=topic,
+            script=_format_script_text(script),
+            thumbnail_text=thumbnail_text or "",
+            caption=caption or "",
+            story_mode=story_mode_decision.get("story_mode", ""),
+            main_entities=main_entities or [],
+        )
+        if result.status == "fail":
+            return {
+                "status": "fail",
+                "reason": _FAIL_REASON_PACKAGE_CONSISTENCY,
+                "score": 0,
+                "feedback": f"Hard gate: package consistency — {result.issue}: {result.detail}",
+                "issues": ["package_consistency_failed"],
+                "programmatic_checks": {},
+            }
+        return None
+
     def execute(
         self,
         job_id: int,
@@ -251,6 +284,9 @@ class ReviewerAgent(BaseAgent):
         narrative_structure: list[dict] | None = None,
         unverified_claims: list[dict] | None = None,
         visual_plan_actions: list[dict] | None = None,
+        story_mode_decision: dict | None = None,
+        thumbnail_text: str = "",
+        main_entities: list[str] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         scenes = script or []
@@ -285,6 +321,9 @@ class ReviewerAgent(BaseAgent):
             self._fail_if_visual_coverage_failed(diagnostics)
             or self._fail_if_text_collision_failed(diagnostics)
             or self._fail_if_safe_area_failed(diagnostics)
+            or self._fail_if_package_consistency_failed(
+                story_mode_decision, thumbnail_text, main_entities, caption, topic, script,
+            )
         )
         if gate_result is not None:
             return gate_result

@@ -565,3 +565,97 @@ class TestReviewerSafeAreaGate:
         )
         assert result["status"] == "fail"
         mock_chat.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Reviewer package consistency gate (Batch 3)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewerPackageConsistencyGate:
+    """Package consistency hard gate blocks LLM when scope mismatches."""
+
+    def test_blocks_llm_on_package_consistency_failure(self, mocker):
+        """Package consistency failure should skip LLM review."""
+        from clipper_agency.core.package_consistency import evaluate_package_consistency
+        from clipper_agency.config.schema import PackageConsistencyResult
+
+        mocker.patch(
+            "clipper_agency.agents.reviewer.evaluate_package_consistency",
+            return_value=PackageConsistencyResult(
+                status="fail",
+                issue="PACKAGE_SCOPE_MISMATCH",
+                detail="Roundup video has single-entity thumbnail",
+            ),
+        )
+        llm_mock = mocker.patch("clipper_agency.llm.client.OpenRouterClient.chat")
+
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="berita artis terbaru",
+            caption="test caption #viral",
+            audio_duration_sec=30.0,
+            visual_duration_sec=30.0,
+            story_mode_decision={"story_mode": "roundup", "item_count": 3},
+            thumbnail_text="Ruben Akhirnya Jujur",
+            main_entities=["Ruben", "A", "B"],
+        )
+
+        assert result["status"] == "fail"
+        assert "PACKAGE" in result.get("reason", "") or "package" in result.get("feedback", "").lower()
+        llm_mock.assert_not_called()
+
+    def test_allows_llm_when_package_consistency_passes(self, mocker):
+        """When package consistency passes, Reviewer proceeds to LLM."""
+        from clipper_agency.config.schema import PackageConsistencyResult
+
+        mocker.patch(
+            "clipper_agency.agents.reviewer.evaluate_package_consistency",
+            return_value=PackageConsistencyResult(status="pass"),
+        )
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "Good", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="berita artis terbaru",
+            caption="test caption #viral",
+            audio_duration_sec=30.0,
+            visual_duration_sec=30.0,
+            story_mode_decision={"story_mode": "roundup", "item_count": 3},
+            thumbnail_text="3 Kabar Artis Viral!",
+            main_entities=["Ruben", "A", "B"],
+        )
+
+        assert result["status"] == "pass"
+        mock_chat.assert_called_once()
+
+    def test_skips_gate_when_no_story_mode_decision(self, mocker):
+        """No story_mode_decision should skip the check and proceed to LLM."""
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 90, "feedback": "Great", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="berita artis terbaru",
+            caption="test caption #viral",
+            audio_duration_sec=30.0,
+            visual_duration_sec=30.0,
+        )
+
+        assert result["status"] == "pass"
