@@ -1,6 +1,8 @@
-# Job #4 Quality Fixes Implementation Plan
+# Job #4 Quality Fixes Implementation Plan ✅ IMPLEMENTED
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status:** Implemented — all 10 fixes merged via PR #42 to master. 1064 offline tests passing. See `docs/plans/2026-06-08-job4-quality-fixes-design.md` for design details.
+>
+> **For Claude:** DO NOT implement this plan. It has already been completed.
 
 **Goal:** Prevent Job #4-style failures by repairing Visual Director asset selection, making Composer duration-safe, adding programmatic review gates, and improving diagnostics.
 

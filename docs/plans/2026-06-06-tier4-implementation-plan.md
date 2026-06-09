@@ -1,6 +1,10 @@
-# Tier 4: Timeline-Aware Agent Orchestration — Implementation Plan
+# Tier 4: Timeline-Aware Agent Orchestration — Implementation Plan ✅ SUPERSEDED
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status:** Superseded by the audio-first continuous voiceover architecture (v2.0.0). The TimelineReconciler approach was removed in favor of direct data flow: Voice Producer word timestamps become the timeline source of truth, and beat-driven data flows directly from Segment Producer → Scriptwriter → Voice Producer → Visual Director → Composer without a separate reconciler service. See `docs/plans/2026-06-07-audio-first-continuous-voiceover-design.md` and `docs/adr/0021-audio-first-continuous-voiceover.md` for the replacement approach.
+>
+> The `ContentPlanningConfig` and `FormatValidator` components from this plan were partially incorporated into the final architecture.
+>
+> **For Claude:** DO NOT implement this plan. Use the audio-first design and implementation plans instead.
 
 **Goal:** Build an Orchestrator-owned canonical timeline contract so every downstream agent obeys one shared timing source-of-truth instead of guessing durations independently.
 
