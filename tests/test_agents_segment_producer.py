@@ -539,6 +539,176 @@ class TestSegmentProducerNewContract:
         assert "format_decision" in result
 
 
+class TestSegmentProducerStoryModeAndBudget:
+    """Story mode classification and duration budget integration."""
+
+    @staticmethod
+    def _mock_chat_minimal() -> dict:
+        return {"content": "Brief", "model": "glm-4-9b", "usage": {}}
+
+    def _setup_base_mocks(self, mocker, tmp_path):
+        """Common mocks for services and LLM — no story_mode/budget mocking."""
+        mocker.patch(
+            "clipper_agency.services.firecrawl_service.FirecrawlService.search",
+            return_value=[],
+        )
+        mocker.patch(
+            "clipper_agency.services.scrapecreators.ScrapeCreatorsService.search_tiktok_videos",
+            return_value=[],
+        )
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value=self._mock_chat_minimal(),
+        )
+
+    def test_segment_producer_output_includes_story_mode_decision(self, mocker, tmp_path):
+        """Segment Producer should classify story mode and include it in output."""
+        from clipper_agency.config.schema import StoryModeDecision
+
+        self._setup_base_mocks(mocker, tmp_path)
+
+        mock_decision = StoryModeDecision(
+            story_mode="roundup",
+            confidence=0.85,
+            reason="Broad entertainment topic with multiple entities",
+            item_count=3,
+            target_duration_sec=55,
+            requires_intro_card=True,
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.classify_story_mode",
+            return_value=mock_decision,
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.allocate_duration_budget",
+            return_value=mocker.MagicMock(model_dump=lambda: {"target_duration_sec": 55, "sections": []}),
+        )
+
+        agent = SegmentProducerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="berita artis terbaru hari ini",
+            output_dir=str(tmp_path),
+        )
+
+        assert "story_mode_decision" in result
+        assert result["story_mode_decision"]["story_mode"] == "roundup"
+        assert result["story_mode_decision"]["requires_intro_card"] is True
+        assert result["story_mode_decision"]["item_count"] == 3
+
+    def test_segment_producer_output_includes_duration_budget(self, mocker, tmp_path):
+        """Segment Producer should allocate duration budget and include it in output."""
+        from clipper_agency.config.schema import DurationBudget, DurationBudgetSection
+
+        self._setup_base_mocks(mocker, tmp_path)
+
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.classify_story_mode",
+            return_value=mocker.MagicMock(
+                story_mode="single_story",
+                item_count=1,
+                model_dump=lambda: {},
+            ),
+        )
+
+        mock_budget = DurationBudget(
+            target_duration_sec=55,
+            sections=[
+                DurationBudgetSection(type="hook", duration_sec=3.0, label="Hook"),
+                DurationBudgetSection(type="story", duration_sec=40.0, label="Main Story"),
+                DurationBudgetSection(type="cta", duration_sec=5.0, label="CTA"),
+            ],
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.allocate_duration_budget",
+            return_value=mock_budget,
+        )
+
+        agent = SegmentProducerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="berita artis terbaru hari ini",
+            output_dir=str(tmp_path),
+        )
+
+        assert "duration_budget" in result
+        assert result["duration_budget"]["target_duration_sec"] == 55
+        assert len(result["duration_budget"]["sections"]) == 3
+        section_types = [s["type"] for s in result["duration_budget"]["sections"]]
+        assert "hook" in section_types
+        assert "story" in section_types
+
+    def test_story_mode_uses_target_duration_from_settings(self, mocker, tmp_path):
+        """Story mode classification should receive target_duration from settings."""
+        from clipper_agency.config.schema import StoryModeDecision
+
+        self._setup_base_mocks(mocker, tmp_path)
+
+        mock_classify = mocker.patch(
+            "clipper_agency.agents.segment_producer.classify_story_mode",
+            return_value=StoryModeDecision(
+                story_mode="single_story",
+                confidence=0.9,
+                reason="Single entity topic",
+                item_count=1,
+                target_duration_sec=55,
+            ),
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.allocate_duration_budget",
+            return_value=mocker.MagicMock(model_dump=lambda: {"target_duration_sec": 55, "sections": []}),
+        )
+
+        agent = SegmentProducerAgent()
+        agent.execute(
+            job_id=1,
+            topic="single artist gossip",
+            output_dir=str(tmp_path),
+        )
+
+        mock_classify.assert_called_once()
+        call_kwargs = mock_classify.call_args
+        # The topic should be passed as first positional arg
+        assert call_kwargs[0][0] == "single artist gossip"
+        # target_duration_sec should come from settings (default 55)
+        assert call_kwargs[1]["target_duration_sec"] == 55
+
+    def test_duration_budget_receives_story_mode_output(self, mocker, tmp_path):
+        """Duration budget allocation should receive story_mode and item_count from story mode decision."""
+        from clipper_agency.config.schema import StoryModeDecision
+
+        self._setup_base_mocks(mocker, tmp_path)
+
+        mock_decision = StoryModeDecision(
+            story_mode="controversy_explainer",
+            confidence=0.8,
+            reason="Hot topic with opposing views",
+            item_count=2,
+            target_duration_sec=55,
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.classify_story_mode",
+            return_value=mock_decision,
+        )
+        mock_budget = mocker.patch(
+            "clipper_agency.agents.segment_producer.allocate_duration_budget",
+            return_value=mocker.MagicMock(model_dump=lambda: {"target_duration_sec": 55, "sections": []}),
+        )
+
+        agent = SegmentProducerAgent()
+        agent.execute(
+            job_id=1,
+            topic="kontroversi artis",
+            output_dir=str(tmp_path),
+        )
+
+        mock_budget.assert_called_once()
+        call_kwargs = mock_budget.call_args
+        assert call_kwargs[1]["story_mode"] == "controversy_explainer"
+        assert call_kwargs[1]["item_count"] == 2
+        assert call_kwargs[1]["target_duration_sec"] == 55
+
+
 class TestSegmentProducerAssetCandidates:
     """Asset candidate extraction from raw research sources."""
 
