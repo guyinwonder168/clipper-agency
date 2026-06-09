@@ -659,3 +659,116 @@ class TestReviewerPackageConsistencyGate:
         )
 
         assert result["status"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Reviewer semantic review gate (Batch 4 — Worker O)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewerSemanticReviewGate:
+    """Semantic review repair plan output gate."""
+
+    def test_reviewer_returns_repair_plan_for_semantic_revise(self, mocker):
+        """Reviewer should return repair_plan when semantic review says revise."""
+        mock_chat = mocker.patch("clipper_agency.llm.client.OpenRouterClient.chat")
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="test topic",
+            audio_duration_sec=20.0,
+            visual_duration_sec=20.0,
+            diagnostics={
+                "semantic_review": {
+                    "decision": "revise",
+                    "patches": [
+                        {
+                            "beat_id": "B04",
+                            "action": "replace_visual",
+                            "reason": "wrong_event",
+                            "rerun_from": "visual_director",
+                            "timestamp_start_sec": 12.4,
+                            "timestamp_end_sec": 17.8,
+                            "required_visual": "same-event interview",
+                        }
+                    ],
+                }
+            },
+        )
+
+        assert result["status"] == "fail"
+        assert result["reason"] == "SEMANTIC_REVIEW_FAILED"
+        assert "repair_plan" in result
+        assert result["repair_plan"]["decision"] == "revise"
+        assert len(result["repair_plan"]["patches"]) == 1
+        assert result["repair_plan"]["patches"][0]["beat_id"] == "B04"
+        mock_chat.assert_not_called()
+
+    def test_reviewer_returns_repair_plan_for_semantic_reject(self, mocker):
+        """Reviewer should return repair_plan with reject decision."""
+        mock_chat = mocker.patch("clipper_agency.llm.client.OpenRouterClient.chat")
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="test topic",
+            audio_duration_sec=20.0,
+            visual_duration_sec=20.0,
+            diagnostics={
+                "semantic_review": {
+                    "decision": "reject",
+                    "patches": [],
+                }
+            },
+        )
+
+        assert result["status"] == "fail"
+        assert result["reason"] == "SEMANTIC_REVIEW_FAILED"
+        assert result["repair_plan"]["decision"] == "reject"
+        mock_chat.assert_not_called()
+
+    def test_reviewer_allows_llm_when_semantic_accept(self, mocker):
+        """Reviewer should proceed to LLM when semantic review accepts."""
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 90, "feedback": "OK", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="test topic",
+            audio_duration_sec=20.0,
+            visual_duration_sec=20.0,
+            diagnostics={
+                "semantic_review": {
+                    "decision": "accept",
+                    "patches": [],
+                }
+            },
+        )
+
+        assert result["status"] == "pass"
+        mock_chat.assert_called_once()
+
+    def test_reviewer_skips_semantic_gate_when_no_diagnostics(self, mocker):
+        """Reviewer should skip semantic gate when no diagnostics provided."""
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "OK", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="test topic",
+            audio_duration_sec=20.0,
+            visual_duration_sec=20.0,
+        )
+
+        assert result["status"] == "pass"

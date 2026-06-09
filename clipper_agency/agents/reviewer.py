@@ -19,6 +19,7 @@ _FAIL_REASON_VISUAL_COVERAGE = "VISUAL_COVERAGE_FAILED"
 _FAIL_REASON_TEXT_COLLISION = "TEXT_COLLISION_FAILED"
 _FAIL_REASON_SAFE_AREA = "SAFE_AREA_FAILED"
 _FAIL_REASON_PACKAGE_CONSISTENCY = "PACKAGE_CONSISTENCY_FAILED"
+_FAIL_REASON_SEMANTIC_REVIEW = "SEMANTIC_REVIEW_FAILED"
 
 REVIEWER_PROMPT = """You are a content quality reviewer for a TikTok creator channel
 producing short-form infotainment videos with voiceover narration.
@@ -272,6 +273,49 @@ class ReviewerAgent(BaseAgent):
             }
         return None
 
+    def _fail_if_semantic_review_failed(self, diagnostics: dict | None) -> dict[str, Any] | None:
+        """Return fail dict with repair_plan if semantic review reports revise/reject."""
+        if not diagnostics:
+            return None
+        sr = diagnostics.get("semantic_review")
+        if not sr:
+            return None
+        decision = sr.get("decision", "")
+        if decision not in ("revise", "reject"):
+            return None
+
+        from clipper_agency.config.schema import RepairPatch, RepairPlan
+
+        patches = sr.get("patches", [])
+        repair_patches = [
+            RepairPatch(
+                beat_id=str(p.get("beat_id", "")),
+                action=p.get("action", "replace_visual"),
+                reason=p.get("reason", "semantic_mismatch"),
+                rerun_from=p.get("rerun_from", "visual_director"),
+                timestamp_start_sec=p.get("timestamp_start_sec", 0.0),
+                timestamp_end_sec=p.get("timestamp_end_sec", 0.0),
+                required_visual=p.get("required_visual", ""),
+            )
+            for p in patches
+        ]
+
+        plan = RepairPlan(
+            decision=decision,
+            max_repair_cycles=2,
+            patches=repair_patches,
+        )
+
+        return {
+            "status": "fail",
+            "reason": _FAIL_REASON_SEMANTIC_REVIEW,
+            "score": 0,
+            "feedback": f"Semantic review: {decision} ({len(repair_patches)} patches)",
+            "issues": ["semantic_review_failed"],
+            "repair_plan": plan.model_dump(),
+            "programmatic_checks": {},
+        }
+
     def execute(
         self,
         job_id: int,
@@ -324,6 +368,7 @@ class ReviewerAgent(BaseAgent):
             or self._fail_if_package_consistency_failed(
                 story_mode_decision, thumbnail_text, main_entities, caption, topic, script,
             )
+            or self._fail_if_semantic_review_failed(diagnostics)
         )
         if gate_result is not None:
             return gate_result
