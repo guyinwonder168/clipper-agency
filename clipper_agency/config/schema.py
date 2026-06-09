@@ -439,3 +439,100 @@ class RepairPlan(BaseModel):
     decision: str  # "revise", "reject", "accept"
     max_repair_cycles: int = 2
     patches: list[RepairPatch] = Field(default_factory=list)
+
+
+# -- Runtime Inspection Contracts --
+
+
+class ExtractedFrame(BaseModel):
+    """A persisted frame sampled from a visual asset or rendered output."""
+
+    timestamp_sec: float
+    path: str
+    perceptual_hash: str
+    width: int
+    height: int
+
+
+class FrameExtractionManifest(BaseModel):
+    """Manifest linking an inspected asset to its extracted frames."""
+
+    asset_id: str
+    beat_id: str
+    source_path: str
+    frames: list[ExtractedFrame]
+
+
+class OCRInspectionResult(BaseModel):
+    """OCR inspection output for a frame or asset."""
+
+    provider: str
+    model: str = ""
+    timestamp_sec: float = 0.0
+    regions: list[DetectedTextRegion] = Field(default_factory=list)
+
+
+class FaceRegion(BaseModel):
+    """Detected face region in pixel coordinates."""
+
+    bbox: list[int]
+    confidence: float = Field(ge=0.0, le=1.0)
+    is_primary: bool = False
+
+
+class FaceInspectionResult(BaseModel):
+    """Face detection output for a frame or asset."""
+
+    provider: str
+    model: str = ""
+    timestamp_sec: float = 0.0
+    faces: list[FaceRegion] = Field(default_factory=list)
+
+
+class AssetSemanticInspection(BaseModel):
+    """Multimodal semantic inspection of one candidate asset for one beat."""
+
+    asset_id: str
+    beat_id: str
+    person_match: float = Field(ge=0.0, le=1.0)
+    event_match: float = Field(ge=0.0, le=1.0)
+    claim_support: float = Field(ge=0.0, le=1.0)
+    visual_quality: float = Field(ge=0.0, le=1.0)
+    temporal_match: float = Field(0.0, ge=0.0, le=1.0)
+    source_credibility: float = Field(0.0, ge=0.0, le=1.0)
+    cleanliness_score: float = Field(0.0, ge=0.0, le=1.0)
+    misleading_risk: float = Field(ge=0.0, le=1.0)
+    decision: str
+    reason: str
+    frame_paths: list[str]
+    model: str
+
+
+class SceneSemanticReview(BaseModel):
+    """Semantic review result for a rendered scene or timestamp range."""
+
+    beat_id: str
+    timestamp_start_sec: float
+    timestamp_end_sec: float
+    decision: str
+    reason: str
+    score: float = Field(ge=0.0, le=1.0)
+
+
+class QualityStatus(BaseModel):
+    """Separate runtime statuses for execution, quality, publication, and repair."""
+
+    execution_status: str
+    quality_status: str
+    publication_status: str
+    repair_status: str
+
+
+class RepairCycleRecord(BaseModel):
+    """Before/after score snapshot for a bounded repair cycle."""
+
+    cycle: int
+    source_agent: str
+    target_agent: str
+    before_scores: dict[str, float]
+    after_scores: dict[str, float]

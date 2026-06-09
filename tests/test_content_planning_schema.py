@@ -106,3 +106,91 @@ def test_repair_plan_limits_cycles_and_routes_patch():
     )
 
     assert plan.patches[0].rerun_from == "visual_director"
+
+
+# --- Batch 0 / Task 0.1: Runtime inspection schemas ---
+
+
+def test_frame_extraction_manifest_serializes_extracted_frames_to_json():
+    from clipper_agency.config.schema import ExtractedFrame, FrameExtractionManifest
+
+    manifest = FrameExtractionManifest(
+        asset_id="asset_1",
+        beat_id="beat_2",
+        source_path="cache/source.mp4",
+        frames=[
+            ExtractedFrame(
+                timestamp_sec=0.5,
+                path="cache/frame_000500ms.jpg",
+                perceptual_hash="abc123",
+                width=1080,
+                height=1920,
+            )
+        ],
+    )
+
+    json_payload = manifest.model_dump_json()
+
+    assert "cache/frame_000500ms.jpg" in json_payload
+    assert manifest.model_dump()["frames"][0]["timestamp_sec"] == 0.5
+
+
+def test_asset_semantic_inspection_persists_frame_paths_and_bounds_scores():
+    import pytest
+    from pydantic import ValidationError
+
+    from clipper_agency.config.schema import AssetSemanticInspection
+
+    inspection = AssetSemanticInspection(
+        asset_id="asset_1",
+        beat_id="beat_2",
+        person_match=0.8,
+        event_match=0.7,
+        claim_support=0.9,
+        visual_quality=0.85,
+        misleading_risk=0.1,
+        decision="accept",
+        reason="same person and event",
+        frame_paths=["cache/frame_000000ms.jpg", "cache/frame_000500ms.jpg"],
+        model="gemini-2.5-flash",
+    )
+
+    assert inspection.frame_paths == ["cache/frame_000000ms.jpg", "cache/frame_000500ms.jpg"]
+    assert inspection.temporal_match == 0.0
+    assert inspection.source_credibility == 0.0
+    assert inspection.cleanliness_score == 0.0
+
+    with pytest.raises(ValidationError):
+        AssetSemanticInspection(
+            asset_id="asset_1",
+            beat_id="beat_2",
+            person_match=1.1,
+            event_match=0.7,
+            claim_support=0.9,
+            visual_quality=0.85,
+            misleading_risk=0.1,
+            decision="accept",
+            reason="invalid score",
+            frame_paths=[],
+            model="gemini-2.5-flash",
+        )
+
+
+def test_repair_cycle_record_tracks_agents_and_score_changes():
+    from clipper_agency.config.schema import RepairCycleRecord
+
+    record = RepairCycleRecord(
+        cycle=1,
+        source_agent="reviewer",
+        target_agent="visual_director",
+        before_scores={"claim_support": 0.42, "misleading_risk": 0.66},
+        after_scores={"claim_support": 0.81, "misleading_risk": 0.18},
+    )
+
+    payload = record.model_dump()
+
+    assert payload["cycle"] == 1
+    assert payload["source_agent"] == "reviewer"
+    assert payload["target_agent"] == "visual_director"
+    assert payload["before_scores"]["claim_support"] == 0.42
+    assert payload["after_scores"]["misleading_risk"] == 0.18
