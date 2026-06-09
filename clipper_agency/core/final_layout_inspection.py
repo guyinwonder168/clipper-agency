@@ -101,66 +101,15 @@ def run_final_layout_inspection(
     face_frame_results: list[dict] = []
 
     for frame in unique_frames:
-        timestamp_sec: float = frame["timestamp_sec"]
-        frame_path: str = frame["path"]
-
-        # --- OCR ---
-        ocr_regions: list = []
-        if ocr_adapter is not None:
-            ocr_result = ocr_adapter.inspect(frame_path, timestamp_sec)
-            ocr_regions = getattr(ocr_result, "regions", []) or []
-            ocr_frame_results.append({
-                "timestamp_sec": timestamp_sec,
-                "path": frame_path,
-                "region_count": len(ocr_regions),
-            })
-
-        # --- Face detection ---
-        face_regions: list = []
-        if face_detector is not None:
-            face_result = face_detector.detect(frame_path, timestamp_sec)
-            face_regions = getattr(face_result, "faces", []) or []
-            face_frame_results.append({
-                "timestamp_sec": timestamp_sec,
-                "path": frame_path,
-                "face_count": len(face_regions),
-                "primary_faces": sum(1 for fg in face_regions if getattr(fg, "is_primary", False)),
-            })
-
-        # --- Active generated text regions at this timestamp ---
-        active_generated = regions_at_timestamp(generated_text_regions, timestamp_sec)
-
-        # --- Convert model objects to plain dicts for geometry functions ---
-        source_regions: list[dict] = _ocr_regions_to_dicts(ocr_regions)
-        face_dicts: list[dict] = _face_regions_to_dicts(face_regions)
-
-        # --- Text collision (source text vs generated overlays) ---
-        if source_regions and active_generated:
-            issues = detect_text_collisions(
-                source_regions, active_generated, _DEFAULT_COLLISION_THRESHOLDS,
-            )
-            all_collisions.extend(_issues_to_dicts(issues))
-
-        # --- Source text density ---
-        if source_regions:
-            density_issues = detect_source_text_density(
-                source_regions,
-                frame_size,
-                warning_area_ratio=_DEFAULT_DENSITY_WARNING,
-                reject_area_ratio=_DEFAULT_DENSITY_REJECT,
-            )
-            all_collisions.extend(_issues_to_dicts(density_issues))
-
-        # --- Safe area checks ---
-        if active_generated or face_dicts:
-            safe_issues = detect_safe_area_issues(
-                generated_regions=active_generated,
-                face_regions=face_dicts,
-                frame_size=frame_size,
-                platform=safe_cfg["platform"],
-                face_overlap_max=safe_cfg["face_overlap_max"],
-            )
-            all_safe_area_issues.extend(_issues_to_dicts(safe_issues))
+        collisions, safe_issues, ocr_res, face_res = _inspect_single_frame(
+            frame, frame_size, generated_text_regions, ocr_adapter, face_detector, safe_cfg,
+        )
+        all_collisions.extend(collisions)
+        all_safe_area_issues.extend(safe_issues)
+        if ocr_res is not None:
+            ocr_frame_results.append(ocr_res)
+        if face_res is not None:
+            face_frame_results.append(face_res)
 
     # ------------------------------------------------------------------
     # Build aggregated summaries
@@ -180,6 +129,84 @@ def run_final_layout_inspection(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _inspect_single_frame(
+    frame: dict,
+    frame_size: tuple[int, int],
+    generated_text_regions: list[dict],
+    ocr_adapter: Any,
+    face_detector: Any,
+    safe_cfg: dict,
+) -> tuple[list[dict], list[dict], dict | None, dict | None]:
+    """Inspect a single frame. Returns (collisions, safe_area_issues, ocr_result, face_result)."""
+    timestamp_sec: float = frame["timestamp_sec"]
+    frame_path: str = frame["path"]
+
+    collisions: list[dict] = []
+    safe_area_issues: list[dict] = []
+
+    # --- OCR ---
+    ocr_regions: list = []
+    ocr_result: dict | None = None
+    if ocr_adapter is not None:
+        ocr_raw = ocr_adapter.inspect(frame_path, timestamp_sec)
+        ocr_regions = getattr(ocr_raw, "regions", []) or []
+        ocr_result = {
+            "timestamp_sec": timestamp_sec,
+            "path": frame_path,
+            "region_count": len(ocr_regions),
+        }
+
+    # --- Face detection ---
+    face_regions: list = []
+    face_result: dict | None = None
+    if face_detector is not None:
+        face_raw = face_detector.detect(frame_path, timestamp_sec)
+        face_regions = getattr(face_raw, "faces", []) or []
+        face_result = {
+            "timestamp_sec": timestamp_sec,
+            "path": frame_path,
+            "face_count": len(face_regions),
+            "primary_faces": sum(1 for fg in face_regions if getattr(fg, "is_primary", False)),
+        }
+
+    # --- Active generated text regions at this timestamp ---
+    active_generated = regions_at_timestamp(generated_text_regions, timestamp_sec)
+
+    # --- Convert model objects to plain dicts for geometry functions ---
+    source_regions: list[dict] = _ocr_regions_to_dicts(ocr_regions)
+    face_dicts: list[dict] = _face_regions_to_dicts(face_regions)
+
+    # --- Text collision (source text vs generated overlays) ---
+    if source_regions and active_generated:
+        issues = detect_text_collisions(
+            source_regions, active_generated, _DEFAULT_COLLISION_THRESHOLDS,
+        )
+        collisions.extend(_issues_to_dicts(issues))
+
+    # --- Source text density ---
+    if source_regions:
+        density_issues = detect_source_text_density(
+            source_regions,
+            frame_size,
+            warning_area_ratio=_DEFAULT_DENSITY_WARNING,
+            reject_area_ratio=_DEFAULT_DENSITY_REJECT,
+        )
+        collisions.extend(_issues_to_dicts(density_issues))
+
+    # --- Safe area checks ---
+    if active_generated or face_dicts:
+        safe_issues = detect_safe_area_issues(
+            generated_regions=active_generated,
+            face_regions=face_dicts,
+            frame_size=frame_size,
+            platform=safe_cfg["platform"],
+            face_overlap_max=safe_cfg["face_overlap_max"],
+        )
+        safe_area_issues.extend(_issues_to_dicts(safe_issues))
+
+    return collisions, safe_area_issues, ocr_result, face_result
 
 
 def _ocr_regions_to_dicts(regions: list) -> list[dict]:

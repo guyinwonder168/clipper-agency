@@ -132,7 +132,7 @@ def parse_inspection_response(raw_content: str) -> dict:
         return {"decision": "error", "reason": "Empty response from LLM"}
 
     # Try to extract JSON from markdown code fences first
-    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    fence_match = re.search(r"```(?:json)?[^\S\r\n]*\n([\s\S]*?)```", text)
     if fence_match:
         text = fence_match.group(1).strip()
 

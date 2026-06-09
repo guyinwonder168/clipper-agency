@@ -650,7 +650,7 @@ class VisualDirectorAgent(BaseAgent):
         )
         cached = lookup(cache_dir, cache_key) if cache_dir else None
         inspection = cached or self._run_multimodal_inspection(
-            candidate, beat, plan_item, job_id, cache_dir, cache_key,
+            candidate, beat, job_id, cache_dir, cache_key,
             agent_dir=agent_dir,
         )
         if inspection is None:
@@ -681,7 +681,6 @@ class VisualDirectorAgent(BaseAgent):
         self,
         candidate: Any,
         beat: StoryBeat,
-        plan_item: dict,
         job_id: int,
         cache_dir: str,
         cache_key: str,

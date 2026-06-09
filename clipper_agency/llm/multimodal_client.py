@@ -282,7 +282,7 @@ class MultimodalInspectionClient:
             return result
 
         except Exception as exc:
-            logger.error(
+            logger.exception(
                 "Inspection failed: job=%s beat=%s asset=%s error=%s",
                 job_id, beat_id, asset_id, exc,
             )

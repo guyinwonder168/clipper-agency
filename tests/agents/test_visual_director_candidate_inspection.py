@@ -580,7 +580,7 @@ class TestRunMultimodalInspectionUsesFramePaths:
             mock_cls.return_value = mock_inspector
 
             agent._run_multimodal_inspection(
-                cand, beat, plan_item, 1, "/tmp/cache", "key", agent_dir="/tmp/agent",
+                cand, beat, 1, "/tmp/cache", "key", agent_dir="/tmp/agent",
             )
 
         call_kwargs = mock_inspector.inspect_asset.call_args

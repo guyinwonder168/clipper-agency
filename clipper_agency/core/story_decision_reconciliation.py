@@ -78,7 +78,6 @@ def _is_roundup_contradiction(
 
 def _build_reason(
     rule: int,
-    classifier: StoryModeDecision,
     legacy: FormatDecision | None,
     contradiction: bool,
     original_mode: str,
@@ -113,7 +112,7 @@ def _apply_roundup(
     return StoryModeDecision(
         story_mode="roundup",
         confidence=classifier.confidence,
-        reason=_build_reason(rule, classifier, legacy, contradiction, original_mode),
+        reason=_build_reason(rule, legacy, contradiction, original_mode),
         item_count=max(entity_count, 2),
         target_duration_sec=classifier.target_duration_sec,
         requires_intro_card=True,
@@ -153,7 +152,7 @@ def reconcile_story_decisions(
         return StoryModeDecision(
             story_mode=classifier.story_mode,
             confidence=classifier.confidence,
-            reason=_build_reason(1, classifier, legacy, False, original_mode),
+            reason=_build_reason(1, legacy, False, original_mode),
             item_count=classifier.item_count,
             target_duration_sec=classifier.target_duration_sec,
             requires_intro_card=classifier.requires_intro_card,
@@ -173,7 +172,7 @@ def reconcile_story_decisions(
     return StoryModeDecision(
         story_mode=classifier.story_mode,
         confidence=classifier.confidence,
-        reason=_build_reason(4, classifier, legacy, False, original_mode),
+        reason=_build_reason(4, legacy, False, original_mode),
         item_count=classifier.item_count,
         target_duration_sec=classifier.target_duration_sec,
         requires_intro_card=classifier.requires_intro_card,
