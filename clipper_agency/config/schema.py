@@ -278,6 +278,7 @@ class AssetCandidate(BaseModel):
     related_beat_id: int | None = None
     story_id: str = ""
     license_status: str = "unknown"
+    source_type: str = ""  # "youtube_official", "web_video", "tiktok_clip", "image", "article", "firecrawl"
 
 
 class BeatFallback(BaseModel):

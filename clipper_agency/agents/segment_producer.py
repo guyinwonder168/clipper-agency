@@ -44,6 +44,29 @@ logger = logging.getLogger(__name__)
 MAX_SOURCE_CHARS = 40_000  # ~10K tokens worth of text
 MAX_CHARS_PER_SOURCE = 500
 
+# ── source quality tiers ────────────────────────────────────────────────────
+# Base relevance scores by source type.  TikTok clips downgraded due to
+# watermarks and hardcoded subtitles; firecrawl is lowest (article text).
+SOURCE_QUALITY_TIERS: dict[str, float] = {
+    "youtube_official": 0.95,
+    "web_video": 0.85,
+    "tiktok_clip": 0.50,   # downgraded — watermark / hardcoded subs
+    "image": 0.70,
+    "article": 0.40,
+    "firecrawl": 0.30,
+}
+DEFAULT_SOURCE_QUALITY: float = 0.40
+
+# Map source_type → candidate type for _build_asset_candidates_from_sources.
+_SOURCE_TYPE_TO_CANDIDATE_TYPE: dict[str, str] = {
+    "tiktok_clip": "tiktok_clip",
+    "firecrawl": "screenshot",
+    "image": "photo",
+    "article": "screenshot",
+    "youtube_official": "tiktok_clip",
+    "web_video": "tiktok_clip",
+}
+
 
 SEGMENT_PRODUCER_PROMPT = """You are a Segment Producer for {channel_description}.
 
@@ -190,9 +213,8 @@ class SegmentProducerAgent(BaseAgent):
         aggregated = self._aggregate_data(firecrawl_data, scrapecreators_data)
 
         # ── 1b. Extract visual asset candidates from raw sources ────────
-        discovered_candidates = self._build_asset_candidates_from_sources(
-            firecrawl_data, scrapecreators_data,
-        )
+        all_sources = self._normalize_sources(firecrawl_data, scrapecreators_data)
+        discovered_candidates = self._build_asset_candidates_from_sources(all_sources)
 
         # ── 2. Synthesize research brief (cached or live LLM) ───────────
         synthesis = self._get_research_brief(
@@ -346,42 +368,61 @@ class SegmentProducerAgent(BaseAgent):
         }
 
     @staticmethod
-    def _build_asset_candidates_from_sources(
+    def _normalize_sources(
         firecrawl_data: list[dict],
         scrapecreators_data: list[dict],
     ) -> list[dict]:
-        """Build visual asset candidates from raw research sources."""
-        candidates: list[dict] = []
+        """Convert legacy separate source lists into unified source_type dicts."""
+        sources: list[dict] = []
         for item in scrapecreators_data:
-            url = item.get("url", "")
-            if not url:
-                continue
-            candidates.append({
-                "type": "tiktok_clip",
-                "url": url,
-                "reason": item.get("title") or item.get("desc") or "ScrapeCreators video candidate",
-                "source": "scrapecreators",
-                "page_url": url,
-                "title": item.get("title", ""),
-                "relevance_score": 0.9,
-                "provenance": "primary_clip",
-                "license_status": "unknown",
-            })
+            sources.append({**item, "source_type": "tiktok_clip", "source": "scrapecreators"})
         for item in firecrawl_data:
+            sources.append({**item, "source_type": "firecrawl", "source": "firecrawl"})
+        return sources
+
+    @staticmethod
+    def _build_asset_candidates_from_sources(
+        sources: list[dict] | None = None,
+        firecrawl_data: list[dict] | None = None,
+        scrapecreators_data: list[dict] | None = None,
+    ) -> list[dict]:
+        """Build visual asset candidates from raw research sources.
+
+        Supports two calling conventions:
+          1. New:   _build_asset_candidates_from_sources(sources=unified_list)
+          2. Legacy: _build_asset_candidates_from_sources(firecrawl_data=..., scrapecreators_data=...)
+        """
+        if sources is None:
+            sources = SegmentProducerAgent._normalize_sources(
+                firecrawl_data or [], scrapecreators_data or [],
+            )
+
+        candidates: list[dict] = []
+        for item in sources:
             url = item.get("url", "")
             if not url:
                 continue
-            candidates.append({
-                "type": "screenshot",
+            source_type = item.get("source_type", "")
+            base_score = SOURCE_QUALITY_TIERS.get(source_type, DEFAULT_SOURCE_QUALITY)
+            candidate_type = _SOURCE_TYPE_TO_CANDIDATE_TYPE.get(source_type, "screenshot")
+            candidate = {
+                "type": candidate_type,
                 "url": url,
-                "reason": item.get("description") or item.get("title") or "Firecrawl supporting context",
-                "source": "firecrawl",
+                "reason": (
+                    item.get("description") or item.get("title") or item.get("desc")
+                    or "Candidate source"
+                ),
+                "source": item.get("source", source_type),
                 "page_url": url,
                 "title": item.get("title", ""),
-                "relevance_score": 0.7,
-                "provenance": "supporting_context",
+                "relevance_score": base_score,
+                "provenance": (
+                    "primary_clip" if source_type == "tiktok_clip" else "supporting_context"
+                ),
                 "license_status": "unknown",
-            })
+                "source_type": source_type,
+            }
+            candidates.append(candidate)
         return candidates
 
     @staticmethod
