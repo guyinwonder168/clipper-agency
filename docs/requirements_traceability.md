@@ -1,8 +1,8 @@
 # Clipper Agency — Requirements Traceability Matrix
 
-**Version:** 4.0
-**Date:** 2026-06-07
-**Status:** v2.0.0 Architecture Redesign Complete — Audio-First Continuous Voiceover Implemented
+**Version:** 4.1
+**Date:** 2026-06-09
+**Status:** Phase 21 Complete — Deterministic Quality Gates + Repair Routing
 
 ---
 
@@ -108,7 +108,7 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 71 | Researcher token guard: `MAX_SOURCE_CHARS=40000`, `MAX_CHARS_PER_SOURCE=500` prevents 551K token LLM overflow | SRS §2 FR-16, Design §4 |
 | 72 | Researcher file cache existed as `scrapecreators.json`, `firecrawl.json`, `research_brief.json` per job output dir in Phase 11; Phase 12 supersedes this with `ASSETS_CACHE/job_{id}/agents/researcher/` raw/normalized artifacts and `research_brief.md` | Design §4, Design §9 |
 | 73 | `clipper_agency/core/paths.py`: shared cache path helpers; `clipper_agency/core/logging.py`: `setup_logging()` + `get_logger()` | Design §9 |
-| 74 | `test-agent` CLI subcommand: runs individual agents independently, bypasses orchestrator DB tracking | SRS §2 FR-19, Design §13 |
+| 74 | `test-agent` CLI subcommand: runs individual agents independently, bypasses orchestrator DB tracking | SRS §2 FR-19, Design §14 |
 
 ### From Fish Audio TTS Implementation (post-Phase 11)
 
@@ -148,22 +148,22 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 91 | Scene normalization: every clip re-encoded to 1080x1920, yuv420p, h264, metadata stripped, duration 1-5s, before concat. Provenance recorded in `provenance.json`. | Design §7 |
 | 92 | Generated card fallback: Visual Director uses Pillow to render 1080x1920 PNG text-on-background cards when no clips or stock footage available | PRD §9, SRS §2 FR-30, Design §7 |
 | 93 | Deterministic video validation (G10): check `video.mp4` exists, >1KB, 9:16, 1080x1920, 20-60s, audio track, h264/aac, metadata stripped — before Reviewer multimodal spend | SRS §2 FR-31, Design §3 G10 |
-| 94 | Output package fixed-contract nomenclature ensures `video.mp4`, not `final.mp4`; packager uses OWASP-safe path sandbox (S6549) | PRD §4, Design §1, Design §13 |
-| 95 | Thumbnail generated as 1080x1920 PNG using Pillow with template-based styling, included in final package as `thumbnail.png` | PRD §4, Design §13 |
+| 94 | Output package fixed-contract nomenclature ensures `video.mp4`, not `final.mp4`; packager uses OWASP-safe path sandbox (S6549) | PRD §4, Design §1, Design §14 |
+| 95 | Thumbnail generated as 1080x1920 PNG using Pillow with template-based styling, included in final package as `thumbnail.png` | PRD §4, Design §14 |
 
 ### From Phase 15a Template Rendering Engine
 
 | # | Fact | New Location |
 |---|------|-------------|
 | 96 | YAML template definitions under `templates/` drive rendering; 3 built-in templates: News Card, B-Roll Narration, Rapid Update | PRD §5 PR-07, SRS §2 FR-21, Design §10 |
-| 97 | `TemplateLoader` validates template YAML at load time (required fields, type checks, default values) — fails fast before any FFmpeg work | Design §10, Design §13 |
-| 98 | Render contracts (`RenderContract`, `ClipSpec`, `AudioTrack`, `TextOverlay`, `TransitionSpec`) define typed inputs for every adapter | Design §7, Design §13 |
-| 99 | Shared rendering primitives (`build_concat_filter`, `build_audio_mix`, `build_fade`, `build_crossfade`, `build_drawtext`) produce FFmpeg filter chains | Design §7, Design §13 |
-| 100 | Template thumbnails generated via Pillow with title text, template-specific styling, and 1080x1920 output — replaces generic thumbnail when template selected | PRD §4, Design §13 |
-| 101 | `RenderEngine` orchestrates FFmpeg filter graph from primitives + adapter output; produces intermediate and final video via two-pass concat + overlay | Design §7, Design §13 |
-| 102 | Three adapters (`NewsCardRenderer`, `BRollNarrationRenderer`, `RapidUpdateRenderer`) translate template specs into `RenderContract` + filter chains | Design §10, Design §13 |
-| 103 | Composer agent routes template selection by niche config and script structure; runs FFmpeg preflight diagnostics before rendering | Design §4, Design §7, Design §13 |
-| 104 | All rendering tests offline: template loading, contract validation, primitive filter chains, thumbnail generation, adapter output, engine orchestration, composer template routing | SRS §3 NFR-09, Design §13 |
+| 97 | `TemplateLoader` validates template YAML at load time (required fields, type checks, default values) — fails fast before any FFmpeg work | Design §10, Design §14 |
+| 98 | Render contracts (`RenderContract`, `ClipSpec`, `AudioTrack`, `TextOverlay`, `TransitionSpec`) define typed inputs for every adapter | Design §7, Design §14 |
+| 99 | Shared rendering primitives (`build_concat_filter`, `build_audio_mix`, `build_fade`, `build_crossfade`, `build_drawtext`) produce FFmpeg filter chains | Design §7, Design §14 |
+| 100 | Template thumbnails generated via Pillow with title text, template-specific styling, and 1080x1920 output — replaces generic thumbnail when template selected | PRD §4, Design §14 |
+| 101 | `RenderEngine` orchestrates FFmpeg filter graph from primitives + adapter output; produces intermediate and final video via two-pass concat + overlay | Design §7, Design §14 |
+| 102 | Three adapters (`NewsCardRenderer`, `BRollNarrationRenderer`, `RapidUpdateRenderer`) translate template specs into `RenderContract` + filter chains | Design §10, Design §14 |
+| 103 | Composer agent routes template selection by niche config and script structure; runs FFmpeg preflight diagnostics before rendering | Design §4, Design §7, Design §14 |
+| 104 | All rendering tests offline: template loading, contract validation, primitive filter chains, thumbnail generation, adapter output, engine orchestration, composer template routing | SRS §3 NFR-09, Design §14 |
 
 ### From Phase 16 Visual Director LLM Planning
 
@@ -229,6 +229,24 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 152 | Gemini TTS fallback uses FFmpeg silencedetect for approximate timestamps when provider returns raw PCM only (no timestamps) | SRS §2 FR-39, Design §4, ADR 0021 |
 | 153 | Backward-compat files removed: researcher.py, researcher.md, 2 test wrappers. All references updated to segment_producer | Design §4, ADR 0021 |
 
+### From Phase 21 Deterministic Quality Gates + Repair Routing
+
+| # | Fact | New Location |
+|---|------|-------------|
+| 154 | Visual coverage evaluation: `evaluate_visual_coverage()` scores frame-level completeness via sampled thumbnails; detects black/freeze frames | PRD §5 PR-30, SRS §2 FR-43, Design §13 |
+| 155 | Frame sampler: `plan_frame_samples()` + `deduplicate_samples_by_hash()` produce deterministic sampling schedules for coverage analysis | SRS §2 FR-43, Design §13 |
+| 156 | Text collision detection: `detect_text_collisions()` + `detect_source_text_density()` flag overlapping or dense on-screen text regions | PRD §5 PR-30, SRS §2 FR-44, Design §13 |
+| 157 | Safe-area compliance: `detect_safe_area_issues()` validates placement against TikTok safe zones | PRD §5 PR-30, SRS §2 FR-45, Design §13 |
+| 158 | Story mode classification: `classify_story_mode()` determines narrative structure and validates consistency | PRD §5 PR-30, SRS §2 FR-46, Design §13 |
+| 159 | Duration budget allocation: `allocate_duration_budget()` distributes total duration across beats by role weight | SRS §2 FR-47, Design §13 |
+| 160 | Package consistency: `evaluate_package_consistency()` validates story mode matches actual scene/clip composition | PRD §5 PR-30, SRS §2 FR-48, Design §13 |
+| 161 | Semantic visual relevance: `score_visual_relevance()` scores claim-to-visual alignment using keyword overlap and evidence contracts | PRD §5 PR-30, SRS §2 FR-49, Design §13 |
+| 162 | Structured repair routing: `route_repair()` + `build_repair_plan()` map quality failures to correct existing agent for targeted fix | PRD §5 PR-30, SRS §2 FR-50, Design §13 |
+| 163 | Reviewer gate chain: visual_coverage → text_collision → safe_area → package_consistency → semantic_review → LLM | PRD §5 PR-30, Design §13, ADR 0023 |
+| 164 | 10 new core modules, 0 new top-level agents; all modules are pure functions with injected dependencies | Design §13, ADR 0023 |
+| 165 | Evidence contracts on StoryBeat: each claim maps to required visual evidence and actual alignment score | SRS §2 FR-49, Design §13 |
+| 166 | Repair routing table: visual_coverage→Composer, text_collision→Visual Director, safe_area→Visual Director, package_consistency→Segment Producer, semantic_review→Segment Producer | SRS §2 FR-50, Design §13 |
+
 ---
 
 ## Requirements Traceability Matrix
@@ -239,9 +257,9 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 |--------|--------|---------------|------|------------|------------|
 | PR-01 | FR-01 | §3 Gated Pipeline | All gates | Empty topic, no niche config | G1 preflight |
 | PR-02 | FR-01..FR-14 | §3, §4 | G1-G10 | See edge case catalog below | Gate definitions |
-| PR-03 | FR-17 | §13 Dashboard | N/A | Dashboard unavailable | N/A |
-| PR-04 | FR-18 | §13 CLI | N/A | Invalid CLI args | N/A |
-| PR-05 | FR-10 | §3, §13 Output | G10 | Missing file, wrong format | Deterministic check — **Phase 15a**: `clipper_agency/rendering/engine.py` produces video via template-driven rendering; `clipper_agency/rendering/thumbnails.py` generates thumbnail; tests: `tests/test_rendering_engine.py`, `tests/test_rendering_thumbnails.py` |
+| PR-03 | FR-17 | §14 Dashboard | N/A | Dashboard unavailable | N/A |
+| PR-04 | FR-18 | §14 CLI | N/A | Invalid CLI args | N/A |
+| PR-05 | FR-10 | §3, §14 Output | G10 | Missing file, wrong format | Deterministic check — **Phase 15a**: `clipper_agency/rendering/engine.py` produces video via template-driven rendering; `clipper_agency/rendering/thumbnails.py` generates thumbnail; tests: `tests/test_rendering_engine.py`, `tests/test_rendering_thumbnails.py` |
 | PR-06 | FR-27 | §9 Config | N/A | Invalid config | Config validation |
 | PR-10 | FR-02 | §4 Safety, §3 G4 | G4 pre + post | See safety edge cases | G1 preflight + G4 |
 | PR-11 | FR-13 | §3 G2 | G2 | Zero credits | G2 estimate |
@@ -253,6 +271,7 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | PR-27 | FR-33 | §7 Scene Normalization | G9 | Mixed framerates, non-1:1 SAR, static images, flash frames | Scene normalizer in Composer pipeline: framerate→30fps, SAR→1:1, zoompan for images, reject <1s clips |
 | PR-28 | FR-34, FR-35, FR-36 | §7 Audio/Subtitle/Transition, §4 Composer | G9, G10 | Audio silence padding, missing script text, xfade on short clips, special chars in drawtext | Audio sequencer + subtitle engine + xfade chain + production flags |
 | PR-29 | FR-37, FR-38, FR-39, FR-40, FR-41, FR-42 | §7 Audio-First Architecture, §3 G7/G8/G10, §4 Agent Contracts | G7, G8, G9, G10 | TTS too long/short (atempo ±15%), single TTS failure, word timestamp inaccuracy, clip longer than beat (smart trim), clip shorter (slow 30%), downloaded clip watermarks, no video clips (text_only), fewer clips than stories (deep dive), generic stock for named-person (visual rules), unverified claim as fact (reviewer catch) | Story beats with visual rules, continuous voiceover contract, word-level timestamps, beat-driven visual planning, smart scene trimming, keyword captions, 4 reviewer quality checks, shared schema.py contract |
+| PR-30 | FR-43, FR-44, FR-45, FR-46, FR-47, FR-48, FR-49, FR-50 | §13 Deterministic Quality Gates, §3 G10, §4 Agent Roles | G10 (extended) | Black/freeze frames undetected, text collisions from overlapping overlays, safe-area violations, story mode vs actual composition mismatch, claim-to-visual irrelevance, repair routing to wrong agent | Deterministic gate chain (visual_coverage→text_collision→safe_area→package_consistency→semantic_review→LLM), evidence contracts on StoryBeat, repair routing table, 10 pure-function core modules |
 
 ### MVP P1 Requirements
 
@@ -366,6 +385,18 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | E26 | Reviewer rejects (1st time) | Recommend specific step to retry. Human triggers. | PRD §8, Design §4 |
 | E27 | Reviewer rejects (2nd time) | Human review required. No more auto-retry. | PRD §8, Design §4 |
 | E28 | Variation exhausted | MVP: human review. Stage 2: Creative Director. | Design §8 |
+
+### Deterministic Quality Gate Edge Cases (Phase 21)
+
+| # | Edge Case | Handling | Location |
+|---|-----------|----------|----------|
+| E46 | Visual coverage detects black/freeze frame | `visual_coverage` gate fails → repair router routes to Composer for re-render | SRS §2 FR-43, Design §13 |
+| E47 | Text collision between caption and source clip text | `text_collision` gate fails → repair router routes to Visual Director for overlay repositioning | SRS §2 FR-44, Design §13 |
+| E48 | Caption placed in TikTok safe zone | `safe_area` gate fails → repair router routes to Visual Director for safe-area adjustment | SRS §2 FR-45, Design §13 |
+| E49 | Story mode declared as roundup but actual composition is deep dive | `package_consistency` gate fails → repair router routes to Segment Producer for beat adjustment | SRS §2 FR-46/FR-48, Design §13 |
+| E50 | Narration describes specific person but visuals show generic stock | `semantic_visual_review` gate fails → repair router routes to Segment Producer for visual_must_show update | SRS §2 FR-49, Design §13 |
+| E51 | Repair plan targets multiple agents | Engine executes patches in dependency order: Segment Producer → Visual Director → Composer | SRS §2 FR-50, Design §13 |
+| E52 | All deterministic gates pass but LLM rejects | LLM rejection follows existing Reviewer retry policy (max 2 human-triggered retries) | PRD §8, Design §4 |
 
 ### Cost/Credit Edge Cases
 
@@ -514,3 +545,13 @@ Use this checklist to verify the documentation set is airtight. Any reviewer (hu
 | **Smart Scene Trimming** | Composer technique: ffprobe keyframe boundary detection with ±15% tolerance, speed adjustment ±20%, for fitting visuals to audio timeline |
 | **Keyword Captions** | Short captions (max 6 words, beat-aligned, bottom-positioned) replacing full-sentence subtitles. Changed at each beat boundary |
 | **Continuous Voiceover** | Single TTS call generating complete narration (75-110 words) with word-level timestamps, replacing 8 per-scene TTS calls (87.5% cost reduction) |
+| **Visual Coverage** | Frame-level visual completeness check via sampled thumbnails — detects black/freeze frames and blank regions (`clipper_agency/core/visual_coverage.py`) |
+| **Text Collision** | Overlap detection between on-screen text regions (captions, overlays, source text) — flags overlapping bounding boxes and excessive density (`clipper_agency/core/text_collision.py`) |
+| **Safe Area** | TikTok safe-zone compliance check for caption/overlay placement — validates against top/bottom UI overlays and side action buttons (`clipper_agency/core/safe_area.py`) |
+| **Story Mode** | Narrative structure classification (single_deep_dive, three_roundup, two_highlight) validated against actual scene composition (`clipper_agency/core/story_mode.py`) |
+| **Duration Budget** | Per-role duration allocation distributing total video time across beats by role weight (hook, main_claim, evidence, reaction, closing_cta) (`clipper_agency/core/duration_budget.py`) |
+| **Package Consistency** | Validation that declared story mode, scene count, clip types, and visual hierarchy match actual composition (`clipper_agency/core/package_consistency.py`) |
+| **Semantic Visual Review** | Claim-to-visual alignment scoring using keyword overlap between narration goals and actual visual content with evidence contracts (`clipper_agency/core/semantic_visual_review.py`) |
+| **Repair Router** | Quality failure → agent mapping service that produces targeted repair plans for specific agents without full pipeline re-runs (`clipper_agency/core/repair_router.py`) |
+| **Evidence Contract** | Mapping on StoryBeat that links each claim to required visual evidence and tracks actual alignment score |
+| **Reviewer Gate Chain** | Ordered deterministic quality checks run before LLM multimodal review: visual_coverage → text_collision → safe_area → package_consistency → semantic_review → LLM |

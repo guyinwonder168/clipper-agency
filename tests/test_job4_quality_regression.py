@@ -454,3 +454,148 @@ class TestWatermarkFreeURLRegression:
         assert candidate["download_url"] == "https://www.tiktok.com/@user/video/789"
         assert candidate["download_url_type"] == "canonical"
 
+
+# ---------------------------------------------------------------------------
+# Failure Mode 6-11: Job #4 Quality Defect Regression
+# ---------------------------------------------------------------------------
+
+
+class TestJob4QualityDefectRegression:
+    """Regression: deterministic modules must detect all 6 Job #4 defect types.
+
+    Each test exercises a specific defect found in Job #4 through the
+    corresponding deterministic quality module.  These are pure-function
+    unit tests — no I/O, no mocking, no LLM calls.
+    """
+
+    # -- 1. BLACK_FRAME --------------------------------------------------
+
+    def test_black_frame_detected_by_visual_coverage(self):
+        """BLACK_FRAME: evaluator flags black segment exceeding threshold."""
+        from clipper_agency.core.visual_coverage import evaluate_visual_coverage
+
+        result = evaluate_visual_coverage(
+            output_duration_sec=23.25,
+            voiceover_duration_sec=23.25,
+            black_segments=[(5.0, 5.8)],  # 800ms black segment
+            freeze_segments=[],
+            empty_segments=[],
+            scene_segments=[(0.0, 23.25)],
+            thresholds={"black_frame_max_ms": 200},  # 200ms limit → 800ms exceeds
+        )
+
+        assert result.status == "fail", "BLACK_FRAME should cause status='fail'"
+        black_issues = [i for i in result.issues if i.type == "BLACK_FRAME"]
+        assert len(black_issues) == 1, f"Expected 1 BLACK_FRAME issue, got {len(black_issues)}"
+        assert black_issues[0].severity == "hard_fail"
+        assert black_issues[0].start_sec == 5.0
+        assert black_issues[0].end_sec == 5.8
+
+    # -- 2. TEXT_COLLISION -----------------------------------------------
+
+    def test_text_collision_detected_between_subtitle_and_source(self):
+        """TEXT_COLLISION: detector flags subtitle overlapping source text."""
+        from clipper_agency.core.text_collision import detect_text_collisions
+
+        # Source text at bottom of frame
+        source_regions = [{"bbox": [100, 800, 980, 900], "text": "@sarwendah"}]
+        # Generated subtitle overlaps with source text
+        generated_regions = [{"bbox": [100, 820, 980, 920], "layer": "subtitle"}]
+
+        issues = detect_text_collisions(
+            source_regions=source_regions,
+            generated_regions=generated_regions,
+            thresholds={"subtitle_overlap_max": 0.20},
+        )
+
+        assert len(issues) >= 1, "Expected at least one collision issue"
+        assert "OVERLAP" in issues[0].type
+        assert issues[0].overlap_ratio > 0.20
+
+    # -- 3. SOURCE_TEXT_DENSITY ------------------------------------------
+
+    def test_source_text_density_warns_on_large_area(self):
+        """SOURCE_TEXT_DENSITY: density check warns when source text area is large."""
+        from clipper_agency.core.text_collision import detect_source_text_density
+
+        # Frame is 1080x1920 = 2,073,600 px
+        # Text covers 600*400 + 600*500 = 540,000 px ≈ 26.0% → triggers warning (>25%)
+        source_regions = [
+            {"bbox": [100, 100, 700, 500], "text": "BIG WATERMARK TEXT"},
+            {"bbox": [100, 600, 700, 1100], "text": "ANOTHER OVERLAY"},
+        ]
+
+        issues = detect_source_text_density(
+            source_regions=source_regions,
+            frame_size=(1080, 1920),
+            warning_area_ratio=0.25,
+            reject_area_ratio=0.40,
+        )
+
+        assert len(issues) >= 1, "Expected at least one density issue"
+        assert issues[0].type == "SOURCE_TEXT_DENSITY"
+        assert issues[0].severity == "warning"
+        assert issues[0].overlap_ratio >= 0.25
+
+    # -- 4. PACKAGE_SCOPE_MISMATCH ---------------------------------------
+
+    def test_package_scope_mismatch_detected_for_roundup_with_single_thumbnail(self):
+        """PACKAGE_SCOPE_MISMATCH: evaluator catches roundup video with single-entity thumbnail."""
+        from clipper_agency.core.package_consistency import evaluate_package_consistency
+
+        result = evaluate_package_consistency(
+            topic="Top 3 Drama Artis Hari Ini",
+            script="Story about Sarwendah, Ruben, and Bella...",
+            thumbnail_text="Drama Sarwendah",  # Only mentions 1 of 3 entities
+            caption="3 drama artis terbaru",
+            story_mode="roundup",
+            main_entities=["Sarwendah", "Ruben", "Bella"],
+        )
+
+        assert result.status == "fail", (
+            f"Roundup with single-entity thumbnail should fail, got '{result.status}'"
+        )
+        assert result.issue == "PACKAGE_SCOPE_MISMATCH"
+        assert "Sarwendah" in result.detail
+
+    # -- 5. ROUNDUP_FORMAT_WEAKNESS --------------------------------------
+
+    def test_roundup_format_weakness_identified_by_story_mode_classifier(self):
+        """ROUNDUP_FORMAT_WEAKNESS: classifier correctly identifies broad entertainment topic as roundup."""
+        from clipper_agency.core.story_mode import classify_story_mode
+
+        decision = classify_story_mode(
+            topic="berita artis terbaru hari ini",
+            target_duration_sec=30,
+        )
+
+        assert decision.story_mode == "roundup", (
+            f"Expected story_mode='roundup', got '{decision.story_mode}'"
+        )
+        assert decision.requires_intro_card is True
+        assert decision.item_count >= 2
+        assert decision.confidence >= 0.8
+
+    # -- 6. CLAIM_VISUAL_RELEVANCE_WEAKNESS ------------------------------
+
+    def test_claim_visual_relevance_weakness_flags_misleading_match(self):
+        """CLAIM_VISUAL_RELEVANCE_WEAKNESS: semantic scoring flags high person match + low event/claim as misleading."""
+        from clipper_agency.core.semantic_visual_review import score_visual_relevance
+
+        score = score_visual_relevance(
+            beat={"beat_id": 1, "claim": "Sarwendah tertangkap kamera"},
+            asset_inspection={
+                "person_match": 0.95,     # Very high person match
+                "event_match": 0.10,      # Very low event match
+                "claim_support": 0.10,    # Very low claim support
+                "visual_quality": 0.80,   # Good visual quality
+            },
+        )
+
+        assert score.misleading_risk > 0.5, (
+            f"Expected misleading_risk > 0.5 for high person + low event/claim, got {score.misleading_risk}"
+        )
+        assert score.decision in ("revise", "reject"), (
+            f"Expected 'revise' or 'reject' for misleading visual, got '{score.decision}'"
+        )
+

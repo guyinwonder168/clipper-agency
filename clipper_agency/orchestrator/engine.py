@@ -20,6 +20,8 @@ from clipper_agency.config.loader import (
 )
 from clipper_agency.core.artifacts import write_json
 from clipper_agency.core.logging import add_job_file_handler, remove_job_file_handler
+from clipper_agency.core.repair_router import route_repair
+from clipper_agency.config.schema import RepairPatch, RepairPlan
 from clipper_agency.core.manifest import (
     create_manifest,
     update_manifest_agent,
@@ -120,6 +122,71 @@ class Orchestrator:
             "failed_at": agent_name,
             "reason": error,
             "job_id": job_id,
+        }
+
+    def _handle_repair_plan(
+        self,
+        review_output: dict[str, Any],
+        assets_cache: str,
+        job_id: int,
+        current_cycle: int,
+    ) -> dict[str, Any] | None:
+        """Route a reviewer repair plan to the correct agent.
+
+        Returns a dict with ``decision``, ``target_agent``, and ``patches``
+        if a repair plan is present and within cycle limits, or ``None``
+        if no repair is needed or cycles are exhausted.
+        """
+        raw_plan = review_output.get("repair_plan")
+        if raw_plan is None:
+            return None
+
+        max_cycles = raw_plan.get("max_repair_cycles", 2)
+        if current_cycle >= max_cycles:
+            logger.warning(
+                "Repair cycle limit reached: %d >= %d for job %d",
+                current_cycle, max_cycles, job_id,
+            )
+            return None
+
+        patches_raw = raw_plan.get("patches", [])
+        if not patches_raw:
+            return None
+
+        # Build a validated RepairPlan
+        validated = [
+            RepairPatch(
+                beat_id=p["beat_id"],
+                action=p["action"],
+                reason=p["reason"],
+                rerun_from=p["rerun_from"],
+                timestamp_start_sec=p.get("timestamp_start_sec", 0.0),
+                timestamp_end_sec=p.get("timestamp_end_sec", 0.0),
+                required_visual=p.get("required_visual", ""),
+            )
+            for p in patches_raw
+        ]
+        plan = RepairPlan(
+            decision=raw_plan.get("decision", "revise"),
+            max_repair_cycles=max_cycles,
+            patches=validated,
+        )
+
+        # Persist the plan to reviewer workspace
+        plan_dir = Path(assets_cache) / f"job_{job_id}" / "agents" / "reviewer"
+        write_json(str(plan_dir / "repair_plan.json"), plan.model_dump())
+
+        # Route first patch to the correct agent
+        target = route_repair(patches_raw[0])
+        logger.info(
+            "Repair plan routed to %s (decision=%s, cycle=%d/%d)",
+            target, plan.decision, current_cycle, max_cycles,
+        )
+
+        return {
+            "decision": plan.decision,
+            "target_agent": target,
+            "patches": [p.model_dump() for p in validated],
         }
 
     def _enforce_gate(self, conn, job_id: int, gate_name: str,
@@ -448,6 +515,19 @@ class Orchestrator:
             if abort:
                 return abort
 
+            # Handle repair routing from reviewer
+            if review_output and review_output.get("repair_routing"):
+                logger.info(
+                    "Pipeline paused for repair: job #%d → %s",
+                    job_id, review_output["repair_routing"]["target_agent"],
+                )
+                remove_job_file_handler()
+                return {
+                    "status": "awaiting_repair",
+                    "job_id": job_id,
+                    "repair_routing": review_output["repair_routing"],
+                }
+
             update_job_status(conn, job_id, "COMPLETED")
             logger.info("Pipeline COMPLETED: job #%d", job_id)
             remove_job_file_handler()
@@ -611,6 +691,22 @@ class Orchestrator:
             narrative_structure=script_output.get("narrative_structure", []),
             unverified_claims=script_output.get("unverified_claims", []),
         )
+        # Route repair plan if reviewer requested revisions
+        repair_routing = self._handle_repair_plan(
+            review_output=review_output,
+            assets_cache=assets_cache,
+            job_id=job_id,
+            current_cycle=1,
+        )
+
+        if repair_routing:
+            review_output["repair_routing"] = repair_routing
+            logger.info(
+                "Reviewer repair plan routed to %s for job #%d",
+                repair_routing["target_agent"], job_id,
+            )
+            return None, review_output, None
+
         self._complete_agent(conn, assets_cache, job_id, "reviewer")
 
         pkg_output = self._package_output(

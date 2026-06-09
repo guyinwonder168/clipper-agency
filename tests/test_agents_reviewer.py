@@ -295,14 +295,16 @@ class TestReviewerExecute:
             script=[{"scene": 1, "text": "Voiceover text", "duration": 5}],
             caption="Hot news! #kpop",
             safety_rules=[],
-            audio_duration_sec=30.0,
-            visual_duration_sec=30.1,
-            narrative_structure=[
-                {"beat_id": "hook", "section": "intro", "word_range": [0, 50]},
-            ],
-            unverified_claims=[
-                {"claim": "dating rumor", "safe_wording": "Reportedly dating"},
-            ],
+            context={
+                "audio_duration_sec": 30.0,
+                "visual_duration_sec": 30.1,
+                "narrative_structure": [
+                    {"beat_id": "hook", "section": "intro", "word_range": [0, 50]},
+                ],
+                "unverified_claims": [
+                    {"claim": "dating rumor", "safe_wording": "Reportedly dating"},
+                ],
+            },
         )
         assert result["status"] == "pass"
         checks = result["programmatic_checks"]
@@ -343,8 +345,10 @@ class TestReviewerExecute:
             script=[{"scene": 1, "text": "Test", "duration": 3}],
             caption="Short #ok",
             safety_rules=[],
-            audio_duration_sec=10.0,
-            visual_duration_sec=12.0,
+            context={
+                "audio_duration_sec": 10.0,
+                "visual_duration_sec": 12.0,
+            },
         )
         assert "programmatic_checks" in result
         checks = result["programmatic_checks"]
@@ -366,8 +370,10 @@ class TestReviewerExecute:
             script=[{"scene": 1, "text": "Test", "duration": 3}],
             caption="Caption #tag",
             safety_rules=[],
-            audio_duration_sec=10.0,
-            visual_duration_sec=10.0,
+            context={
+                "audio_duration_sec": 10.0,
+                "visual_duration_sec": 10.0,
+            },
         )
         system_content = mock_chat.call_args.kwargs["messages"][0]["content"]
         assert "av_sync: pass" in system_content
@@ -405,8 +411,10 @@ class TestReviewerHardGates:
             topic="Test topic",
             script=[{"scene": 1, "text": "Hello"}],
             caption="Great video #test",
-            audio_duration_sec=23.25,
-            visual_duration_sec=21.21,
+            context={
+                "audio_duration_sec": 23.25,
+                "visual_duration_sec": 21.21,
+            },
         )
         # The LLM returned pass/90 but the hard gate should override to fail
         assert result["status"] == "fail", (
@@ -436,12 +444,359 @@ class TestReviewerHardGates:
             topic="Test topic",
             script=[{"scene": 1, "text": "Hello"}],
             caption="Nice #viral",
-            visual_plan_actions=[
-                {"type": "tiktok_clip"},  # broken: no source_url
-                {"type": "text_card", "headline": "Story 2"},
-            ],
+            context={
+                "visual_plan_actions": [
+                    {"type": "tiktok_clip"},  # broken: no source_url
+                    {"type": "text_card", "headline": "Story 2"},
+                ],
+            },
         )
         assert result["status"] == "fail", (
             "Reviewer should fail when visual plan has broken tiktok_clip action, "
             f"got status={result['status']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Reviewer deterministic quality gates (Batch 2 — visual coverage,
+# text collision, safe area)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewerVisualCoverageGate:
+    """Visual coverage hard gate blocks LLM when coverage fails."""
+
+    def test_blocks_llm_on_visual_coverage_failure(self, mocker):
+        """When visual coverage fails, Reviewer must fail WITHOUT calling LLM."""
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 90, "feedback": "Great!", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test topic",
+            script=[{"scene": 1, "text": "Hello"}],
+            caption="Nice #test",
+            context={
+                "audio_duration_sec": 21.0,
+                "visual_duration_sec": 21.0,
+            },
+            diagnostics={
+                "visual_coverage": {
+                    "status": "fail",
+                    "output_duration_sec": 21.0,
+                    "voiceover_duration_sec": 21.0,
+                    "coverage_ratio": 0.6,
+                    "issues": [{"type": "BLACK_FRAME", "severity": "hard_fail", "detail": "test"}],
+                },
+            },
+        )
+        assert result["status"] == "fail"
+        assert "visual_coverage" in result.get("reason", "").lower() or "VISUAL_COVERAGE" in result.get("reason", "") or "visual coverage" in result.get("feedback", "").lower()
+        mock_chat.assert_not_called()
+
+    def test_allows_llm_when_visual_coverage_passes(self, mocker):
+        """When visual coverage passes, Reviewer proceeds to LLM."""
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "Good", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test topic",
+            script=[{"scene": 1, "text": "Hello"}],
+            caption="Nice #test",
+            context={
+                "audio_duration_sec": 21.0,
+                "visual_duration_sec": 21.0,
+            },
+            diagnostics={
+                "visual_coverage": {
+                    "status": "pass",
+                    "output_duration_sec": 21.0,
+                    "voiceover_duration_sec": 21.0,
+                    "coverage_ratio": 1.0,
+                    "issues": [],
+                },
+            },
+        )
+        assert result["status"] == "pass"
+
+
+class TestReviewerTextCollisionGate:
+    """Text collision hard gate blocks LLM when collisions detected."""
+
+    def test_blocks_llm_on_text_collision(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test",
+            script=[{"scene": 1, "text": "Hi"}],
+            caption="Ok #tag",
+            diagnostics={
+                "visual_coverage": {"status": "pass", "issues": []},
+                "text_collision": [
+                    {"type": "SUBTITLE_OVERLAP", "severity": "hard_fail", "detail": "test"},
+                ],
+            },
+        )
+        assert result["status"] == "fail"
+        mock_chat.assert_not_called()
+
+
+class TestReviewerSafeAreaGate:
+    """Safe area hard gate blocks LLM when issues detected."""
+
+    def test_blocks_llm_on_safe_area_issue(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test",
+            script=[{"scene": 1, "text": "Hi"}],
+            caption="Ok #tag",
+            diagnostics={
+                "visual_coverage": {"status": "pass", "issues": []},
+                "safe_area": [
+                    {"type": "FACE_TEXT_OVERLAP", "severity": "hard_fail", "detail": "test"},
+                ],
+            },
+        )
+        assert result["status"] == "fail"
+        mock_chat.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Reviewer package consistency gate (Batch 3)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewerPackageConsistencyGate:
+    """Package consistency hard gate blocks LLM when scope mismatches."""
+
+    def test_blocks_llm_on_package_consistency_failure(self, mocker):
+        """Package consistency failure should skip LLM review."""
+        from clipper_agency.core.package_consistency import evaluate_package_consistency
+        from clipper_agency.config.schema import PackageConsistencyResult
+
+        mocker.patch(
+            "clipper_agency.agents.reviewer.evaluate_package_consistency",
+            return_value=PackageConsistencyResult(
+                status="fail",
+                issue="PACKAGE_SCOPE_MISMATCH",
+                detail="Roundup video has single-entity thumbnail",
+            ),
+        )
+        llm_mock = mocker.patch("clipper_agency.llm.client.OpenRouterClient.chat")
+
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="berita artis terbaru",
+            caption="test caption #viral",
+            context={
+                "audio_duration_sec": 30.0,
+                "visual_duration_sec": 30.0,
+                "story_mode_decision": {"story_mode": "roundup", "item_count": 3},
+                "thumbnail_text": "Ruben Akhirnya Jujur",
+                "main_entities": ["Ruben", "A", "B"],
+            },
+        )
+
+        assert result["status"] == "fail"
+        assert "PACKAGE" in result.get("reason", "") or "package" in result.get("feedback", "").lower()
+        llm_mock.assert_not_called()
+
+    def test_allows_llm_when_package_consistency_passes(self, mocker):
+        """When package consistency passes, Reviewer proceeds to LLM."""
+        from clipper_agency.config.schema import PackageConsistencyResult
+
+        mocker.patch(
+            "clipper_agency.agents.reviewer.evaluate_package_consistency",
+            return_value=PackageConsistencyResult(status="pass"),
+        )
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "Good", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="berita artis terbaru",
+            caption="test caption #viral",
+            context={
+                "audio_duration_sec": 30.0,
+                "visual_duration_sec": 30.0,
+                "story_mode_decision": {"story_mode": "roundup", "item_count": 3},
+                "thumbnail_text": "3 Kabar Artis Viral!",
+                "main_entities": ["Ruben", "A", "B"],
+            },
+        )
+
+        assert result["status"] == "pass"
+        mock_chat.assert_called_once()
+
+    def test_skips_gate_when_no_story_mode_decision(self, mocker):
+        """No story_mode_decision should skip the check and proceed to LLM."""
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 90, "feedback": "Great", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="berita artis terbaru",
+            caption="test caption #viral",
+            context={
+                "audio_duration_sec": 30.0,
+                "visual_duration_sec": 30.0,
+            },
+        )
+
+        assert result["status"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Reviewer semantic review gate (Batch 4 — Worker O)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewerSemanticReviewGate:
+    """Semantic review repair plan output gate."""
+
+    def test_reviewer_returns_repair_plan_for_semantic_revise(self, mocker):
+        """Reviewer should return repair_plan when semantic review says revise."""
+        mock_chat = mocker.patch("clipper_agency.llm.client.OpenRouterClient.chat")
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="test topic",
+            context={
+                "audio_duration_sec": 20.0,
+                "visual_duration_sec": 20.0,
+            },
+            diagnostics={
+                "semantic_review": {
+                    "decision": "revise",
+                    "patches": [
+                        {
+                            "beat_id": "B04",
+                            "action": "replace_visual",
+                            "reason": "wrong_event",
+                            "rerun_from": "visual_director",
+                            "timestamp_start_sec": 12.4,
+                            "timestamp_end_sec": 17.8,
+                            "required_visual": "same-event interview",
+                        }
+                    ],
+                }
+            },
+        )
+
+        assert result["status"] == "fail"
+        assert result["reason"] == "SEMANTIC_REVIEW_FAILED"
+        assert "repair_plan" in result
+        assert result["repair_plan"]["decision"] == "revise"
+        assert len(result["repair_plan"]["patches"]) == 1
+        assert result["repair_plan"]["patches"][0]["beat_id"] == "B04"
+        mock_chat.assert_not_called()
+
+    def test_reviewer_returns_repair_plan_for_semantic_reject(self, mocker):
+        """Reviewer should return repair_plan with reject decision."""
+        mock_chat = mocker.patch("clipper_agency.llm.client.OpenRouterClient.chat")
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="test topic",
+            context={
+                "audio_duration_sec": 20.0,
+                "visual_duration_sec": 20.0,
+            },
+            diagnostics={
+                "semantic_review": {
+                    "decision": "reject",
+                    "patches": [],
+                }
+            },
+        )
+
+        assert result["status"] == "fail"
+        assert result["reason"] == "SEMANTIC_REVIEW_FAILED"
+        assert result["repair_plan"]["decision"] == "reject"
+        mock_chat.assert_not_called()
+
+    def test_reviewer_allows_llm_when_semantic_accept(self, mocker):
+        """Reviewer should proceed to LLM when semantic review accepts."""
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 90, "feedback": "OK", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="test topic",
+            context={
+                "audio_duration_sec": 20.0,
+                "visual_duration_sec": 20.0,
+            },
+            diagnostics={
+                "semantic_review": {
+                    "decision": "accept",
+                    "patches": [],
+                }
+            },
+        )
+
+        assert result["status"] == "pass"
+        mock_chat.assert_called_once()
+
+    def test_reviewer_skips_semantic_gate_when_no_diagnostics(self, mocker):
+        """Reviewer should skip semantic gate when no diagnostics provided."""
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "OK", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="test topic",
+            context={
+                "audio_duration_sec": 20.0,
+                "visual_duration_sec": 20.0,
+            },
+        )
+
+        assert result["status"] == "pass"

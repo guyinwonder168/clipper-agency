@@ -1,8 +1,8 @@
 # Clipper Agency — Technical Design Document
 
-**Version:** 5.0
-**Date:** 2026-06-07
-**Status:** v2.0.0 Architecture Redesign Complete — Audio-First Continuous Voiceover Implemented
+**Version:** 5.1
+**Date:** 2026-06-09
+**Status:** Phase 21 Complete — Deterministic Quality Gates + Repair Routing
 **Related:** `docs/PRD.md`, `docs/SRS.md`, `docs/requirements_traceability.md`
 
 ---
@@ -873,14 +873,93 @@ SQLite for MVP (same schema migrates to PostgreSQL). Multi-tenant from day one.
 
 ---
 
-## 13. MVP Deliverables
+## 13. Deterministic Quality Gates and Repair Routing (Phase 21)
 
-1. **7 MVP Agents** — Safety, Segment Producer (edit blueprint + story beats), Scriptwriter (continuous voiceover), Voice Producer (single audio + word timestamps), Visual Director (beat-driven, audio-aware), Composer (smart trimming + keyword captions + single audio timeline), Reviewer (4 quality gates: AV sync, caption quality, fact safety, narrative structure)
-2. **Orchestrator** — Gated state machine with human-triggered retry
+### Design Decision: Extend Existing Agents, No New Top-Level Agents
+
+Job #4 output analysis revealed four categories of issues that the existing LLM-only Reviewer gate did not catch:
+
+1. **Black/freeze frames** — video segments with no visual content
+2. **Text collisions** — overlapping on-screen text from captions, overlays, and source clip text
+3. **Package-scope mismatches** — declared story mode (e.g., `three_story_roundup`) did not match actual scene composition
+4. **Claim-to-visual irrelevance** — narration described specific visuals but actual footage was generic or unrelated
+
+Instead of adding new top-level agents (which would increase cost, latency, state transitions, and debugging complexity), these checks are implemented as deterministic service modules called by existing agents.
+
+### New Core Modules
+
+| Module | File | Key Functions | Owned By |
+|--------|------|---------------|----------|
+| Visual Coverage | `core/visual_coverage.py` | `evaluate_visual_coverage()` | Composer |
+| Frame Sampler | `core/frame_sampler.py` | `plan_frame_samples()`, `deduplicate_samples_by_hash()` | Composer |
+| Text Detection | `core/text_detection.py` | `normalize_text_region()`, `filter_text_regions()` | Visual Director |
+| Text Collision | `core/text_collision.py` | `detect_text_collisions()`, `detect_source_text_density()` | Visual Director |
+| Safe Area | `core/safe_area.py` | `detect_safe_area_issues()` | Visual Director |
+| Story Mode | `core/story_mode.py` | `classify_story_mode()` | Segment Producer |
+| Duration Budget | `core/duration_budget.py` | `allocate_duration_budget()` | Segment Producer |
+| Package Consistency | `core/package_consistency.py` | `evaluate_package_consistency()` | Reviewer |
+| Semantic Visual Review | `core/semantic_visual_review.py` | `score_visual_relevance()` | Reviewer |
+| Repair Router | `core/repair_router.py` | `route_repair()`, `build_repair_plan()` | Engine |
+
+### New Schema Models (in `config/schema.py`)
+
+| Model | Purpose |
+|-------|---------|
+| `VisualCoverageIssue` | Individual frame coverage problem (black frame, freeze, blank region) |
+| `VisualCoverageResult` | Aggregate visual coverage score + per-frame issues |
+| `DetectedTextRegion` | Normalized text bounding box with position, size, source |
+| `TextCollisionIssue` | Pair of overlapping text regions with overlap area |
+| `SafeAreaIssue` | Caption/overlay violating TikTok safe zone boundary |
+| `StoryModeDecision` | Classified narrative structure + confidence + rationale |
+| `DurationBudgetSection` | Per-role duration allocation (hook, main_claim, evidence, reaction, closing_cta) |
+| `DurationBudget` | Total budget + sections + remaining buffer |
+| `EvidenceContract` | Maps story beat to required visual evidence + actual visual alignment |
+| `VisualRelevanceScore` | Per-beat relevance score + keyword overlap + evidence match |
+| `PackageConsistencyResult` | Story mode vs actual composition consistency report |
+| `RepairPatch` | Single targeted fix instruction for a specific agent |
+| `RepairPlan` | Ordered list of repair patches routed to correct agents |
+
+### Revised Reviewer Hard-Gate Order
+
+Before Phase 21, the Reviewer ran a single multimodal LLM call. Now it runs a deterministic gate chain first:
+
+```text
+visual_coverage → text_collision → safe_area → package_consistency → semantic_review → LLM
+```
+
+Each gate is a pure function that returns pass/fail with structured issues. The LLM only runs if all deterministic gates pass. This saves cost on clearly broken outputs and provides more specific failure diagnostics for repair routing.
+
+### Repair Routing Table
+
+| Failure Category | Detected By | Routed To | Repair Action |
+|------------------|-------------|-----------|---------------|
+| Black/freeze frames | `visual_coverage` | Composer | Re-render affected segments |
+| Text collision | `text_collision` | Visual Director | Adjust overlay positions, reduce density |
+| Safe-area violation | `safe_area` | Visual Director | Reposition captions/overlays |
+| Package-scope mismatch | `package_consistency` | Segment Producer | Adjust story_beats to match declared format |
+| Claim-to-visual irrelevance | `semantic_visual_review` | Segment Producer | Update visual_must_show / evidence contracts |
+
+The engine's `route_repair()` maps each failure to a `RepairPlan` containing ordered `RepairPatch` objects. Each patch targets a specific agent with a specific fix instruction. The engine re-runs only the affected agent(s), not the entire pipeline.
+
+### Design Principles
+
+- **Pure functions with injected dependencies** — all modules are offline-testable without FFmpeg or LLM calls
+- **Composable** — each module can be called independently or as part of the gate chain
+- **Agent ownership, not agent creation** — existing agents own their quality domain, no new top-level agents
+- **Deterministic before LLM** — cheap checks run first, expensive LLM only when deterministic gates pass
+- **Structured repair, not blind retry** — failures produce targeted repair plans, not full pipeline re-runs
+
+---
+
+## 14. MVP Deliverables
+
+1. **7 MVP Agents** — Safety, Segment Producer (edit blueprint + story beats + evidence contracts), Scriptwriter (continuous voiceover), Voice Producer (single audio + word timestamps), Visual Director (beat-driven, audio-aware, safe-area/text collision compliance), Composer (smart trimming + keyword captions + single audio timeline + visual coverage), Reviewer (deterministic gate chain: visual_coverage → text_collision → safe_area → package_consistency → semantic_review → LLM multimodal)
+2. **Orchestrator** — Gated state machine with human-triggered retry + structured repair routing
 3. **Creative Memory** — Pre-generation check, variation rotation
 4. **Web Dashboard** — Agent observability, config editing, basic auth + 2 groups
 5. **CLI** — `python3 cli.py run --topic "..." --niche indonesian_artists`; `test-agent` subcommand for independent agent debugging; `--log-level` option
 6. **3 Templates + Treatment System + Audio/Subtitle Engine** — News Card, B-Roll Narration, Rapid Update + 9 treatments + 5 transitions in `templates/treatments.yaml` + per-scene audio sequencing + timed subtitle overlays + TikTok output validation
 7. **Scene Normalizer** — Framerate unification (30fps), SAR normalization, Ken Burns zoompan for static images, clip duration validation
-8. **Config System** — Agent → Niche → Account → Job hierarchy with versioning
-9. **Output Packager** — `video.mp4` + `caption.txt` + `thumbnail.png` + `metadata.json`
+8. **Deterministic Quality Gates + Repair Routing** — 10 core modules (visual_coverage, frame_sampler, text_detection, text_collision, safe_area, story_mode, duration_budget, package_consistency, semantic_visual_review, repair_router) extending existing agents with deterministic checks before LLM review
+9. **Config System** — Agent → Niche → Account → Job hierarchy with versioning
+10. **Output Packager** — `video.mp4` + `caption.txt` + `thumbnail.png` + `metadata.json`

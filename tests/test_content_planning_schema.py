@@ -39,3 +39,70 @@ class TestContentPlanningConfig:
         cp = data.get("content_planning", {})
         assert cp.get("default_format") == "three_story_roundup"
         assert cp.get("max_stories_per_video") == 3
+
+
+# --- Batch 0 / Task 0.1: Quality and editorial schema models ---
+
+
+def test_visual_coverage_result_is_json_serializable():
+    from clipper_agency.config.schema import VisualCoverageIssue, VisualCoverageResult
+
+    result = VisualCoverageResult(
+        status="fail",
+        output_duration_sec=21.2,
+        voiceover_duration_sec=21.0,
+        coverage_ratio=0.79,
+        issues=[
+            VisualCoverageIssue(
+                type="BLACK_FRAME",
+                start_sec=17.83,
+                end_sec=21.2,
+                severity="hard_fail",
+                detail="black segment exceeds threshold",
+            )
+        ],
+    )
+
+    payload = result.model_dump()
+    assert payload["issues"][0]["type"] == "BLACK_FRAME"
+    assert payload["status"] == "fail"
+
+
+def test_story_mode_decision_supports_roundup_contract():
+    from clipper_agency.config.schema import StoryModeDecision
+
+    decision = StoryModeDecision(
+        story_mode="roundup",
+        confidence=0.97,
+        reason="Broad entertainment topic requests multiple recent stories.",
+        item_count=3,
+        target_duration_sec=30,
+        requires_intro_card=True,
+        thumbnail_strategy="roundup",
+        cta_strategy="compare_items",
+    )
+
+    assert decision.story_mode == "roundup"
+    assert decision.requires_intro_card is True
+
+
+def test_repair_plan_limits_cycles_and_routes_patch():
+    from clipper_agency.config.schema import RepairPatch, RepairPlan
+
+    plan = RepairPlan(
+        decision="revise",
+        max_repair_cycles=2,
+        patches=[
+            RepairPatch(
+                beat_id="B04",
+                action="replace_visual",
+                reason="wrong_event",
+                rerun_from="visual_director",
+                timestamp_start_sec=12.4,
+                timestamp_end_sec=17.8,
+                required_visual="same-event interview",
+            )
+        ],
+    )
+
+    assert plan.patches[0].rerun_from == "visual_director"

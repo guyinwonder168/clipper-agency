@@ -1,8 +1,8 @@
 # Clipper Agency — Product Requirements Document
 
-**Version:** 3.0
-**Date:** 2026-06-07
-**Status:** v2.0.0 Architecture Redesign Complete — Audio-First Continuous Voiceover Implemented
+**Version:** 3.1
+**Date:** 2026-06-09
+**Status:** Phase 21 Complete — Deterministic Quality Gates + Repair Routing
 **Related:** `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
@@ -105,6 +105,7 @@ Intermediate execution material is not part of the final upload package. Each jo
 | PR-27 | Scene normalizer: unify mixed-asset framerates to 30fps target, normalize SAR to 1:1, apply Ken Burns zoompan for static images, validate clip duration bounds (1-5s), enforce consistent encoding parameters across all scenes before composition | P0 | MVP |
 | PR-28 | Per-scene audio sequencing with silence padding, timed subtitle overlays from script text via drawtext, xfade/concat mixed transition chain with duration clamping and safety margins, and TikTok-ready production output flags (yuv420p, faststart, H.264/AAC) | P0 | MVP |
 | PR-29 | Audio-first continuous voiceover architecture: Segment Producer outputs story_beats (visual_must_show/must_not_show, asset_candidates, edit blueprint), Scriptwriter writes continuous narration (75-110 words, no emojis, spoken-word style), Voice Producer generates single voiceover.mp3 with word-level timestamps via ElevenLabs `/with-timestamps` (87.5% TTS cost reduction vs per-scene), Visual Director plans beat-driven visuals against audio timeline with visual rules, Composer smart-trims at keyframe boundaries and overlays keyword captions (max 6 words, beat-aligned), Reviewer validates AV sync + caption quality + fact safety + narrative structure. See `docs/adr/0021-audio-first-continuous-voiceover.md` | P0 | MVP |
+| PR-30 | Deterministic visual quality gates, package consistency, semantic visual relevance, and structured repair routing: Reviewer runs deterministic gate chain (visual coverage → text collision → safe area → package consistency → semantic relevance) before LLM multimodal review. Story-mode classification validates narrative structure matches actual scene composition. Evidence contracts on StoryBeat ensure claim-to-visual alignment. Repair router maps quality failures to the correct existing agent for targeted fix. 10 new core modules, 0 new top-level agents. See `docs/adr/0023-job4-quality-gates-and-repair-routing.md` | P0 | MVP |
 
 ---
 

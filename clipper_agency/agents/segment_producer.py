@@ -32,6 +32,9 @@ from clipper_agency.llm.client import OpenRouterClient
 from clipper_agency.services.firecrawl_service import FirecrawlService
 from clipper_agency.services.scrapecreators import ScrapeCreatorsService
 
+from clipper_agency.core.duration_budget import allocate_duration_budget
+from clipper_agency.core.story_mode import classify_story_mode
+
 logger = logging.getLogger(__name__)
 
 # ── token guard ──────────────────────────────────────────────────────────────
@@ -171,6 +174,14 @@ class SegmentProducerAgent(BaseAgent):
             )
         ensure_research_cache_dir(output_dir, job_id)
 
+        # ── Resolve target duration from settings ────────────────────────
+        settings = load_settings()
+        target_dur = (
+            settings.content_planning.target_duration_sec
+            if settings.content_planning
+            else 55
+        )
+
         # ── 1. Gather sources (cached or live) ──────────────────────────
         scrapecreators_data = self._get_scrapecreators(topic, output_dir, job_id)
         firecrawl_data = self._get_firecrawl(topic, max_results, output_dir, job_id)
@@ -185,6 +196,14 @@ class SegmentProducerAgent(BaseAgent):
         synthesis = self._get_research_brief(
             aggregated, topic, rules, output_dir, job_id,
             channel_description, language, tone, content_angle,
+        )
+
+        # ── 3. Classify story mode and allocate budget ─────────────────
+        story_mode_decision = classify_story_mode(topic, target_duration_sec=target_dur)
+        duration_budget = allocate_duration_budget(
+            story_mode=story_mode_decision.story_mode,
+            item_count=story_mode_decision.item_count,
+            target_duration_sec=target_dur,
         )
 
         result = {
@@ -202,6 +221,8 @@ class SegmentProducerAgent(BaseAgent):
             "verified_facts": synthesis.get("verified_facts", []),
             "unverified_claims": synthesis.get("unverified_claims", []),
             "reference_style": synthesis.get("reference_style"),
+            "story_mode_decision": story_mode_decision.model_dump(),
+            "duration_budget": duration_budget.model_dump(),
         }
         if assets_cache:
             result.update(
@@ -654,7 +675,9 @@ class SegmentProducerAgent(BaseAgent):
             return {
                 "research_brief": str(brief),
                 "content_direction": data.get("content_direction"),
-                "story_beats": data.get("story_beats", []),
+                "story_beats": self._enrich_beats_with_evidence_contracts(
+                    data.get("story_beats", [])
+                ),
                 "format_decision": data.get("format_decision"),
                 "asset_candidates": data.get("asset_candidates", []),
                 "do_not_use": data.get("do_not_use", []),
@@ -674,3 +697,20 @@ class SegmentProducerAgent(BaseAgent):
                 "unverified_claims": [],
                 "reference_style": None,
             }
+
+    @staticmethod
+    def _enrich_beats_with_evidence_contracts(beats: list[dict]) -> list[dict]:
+        """Populate evidence_contract on each beat from visual_must_show/not_show."""
+        enriched = []
+        for beat in beats:
+            must_show = beat.get("visual_must_show", "")
+            must_not_show = beat.get("visual_must_not_show", "")
+            preferred = [s.strip() for s in must_show.split(",") if s.strip()] if must_show else []
+            forbidden = [s.strip() for s in must_not_show.split(",") if s.strip()] if must_not_show else []
+            beat["evidence_contract"] = {
+                "preferred": preferred,
+                "acceptable": [],
+                "forbidden": forbidden,
+            }
+            enriched.append(beat)
+        return enriched

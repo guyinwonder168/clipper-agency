@@ -1965,3 +1965,191 @@ class TestEngineHelpers:
         assert result["status"] == "failed"
         assert "unexpected crash" in result.get("error", "")
         assert result["job_id"] > 0
+
+
+# ── Task 5.2: Engine repair-cycle routing hook ──────────────────────
+
+
+class TestEngineRepairRouting:
+    """Engine routes reviewer repair plans to the correct agent."""
+
+    def test_engine_persist_repair_plan_from_reviewer(
+        self, tmp_path,
+    ):
+        """When reviewer returns repair_plan, engine persists it to workspace."""
+        orch = Orchestrator(db_path=str(tmp_path / "test.db"))
+        ac = str(tmp_path / "cache")
+        repair_plan = {
+            "decision": "revise",
+            "max_repair_cycles": 2,
+            "patches": [
+                {
+                    "beat_id": "beat_1",
+                    "action": "replace_visual",
+                    "reason": "wrong_event",
+                    "rerun_from": "visual_director",
+                },
+            ],
+        }
+        review_output = {
+            "status": "fail",
+            "score": 40,
+            "repair_plan": repair_plan,
+        }
+
+        result = orch._handle_repair_plan(
+            review_output=review_output,
+            assets_cache=ac,
+            job_id=1,
+            current_cycle=0,
+        )
+
+        assert result is not None
+        assert result["decision"] == "revise"
+        assert len(result["patches"]) == 1
+        # Verify persisted to workspace
+        from clipper_agency.core.artifacts import read_json
+        plan_path = Path(ac) / "job_1" / "agents" / "reviewer" / "repair_plan.json"
+        assert plan_path.exists()
+        persisted = read_json(plan_path)
+        assert persisted["decision"] == "revise"
+
+    def test_engine_routes_visual_repair_to_visual_director(
+        self, tmp_path,
+    ):
+        """Wrong_event patch routes to visual_director."""
+        orch = Orchestrator(db_path=str(tmp_path / "test.db"))
+        ac = str(tmp_path / "cache")
+        review_output = {
+            "status": "fail",
+            "repair_plan": {
+                "decision": "revise",
+                "max_repair_cycles": 2,
+                "patches": [
+                    {
+                        "beat_id": "beat_1",
+                        "action": "replace_visual",
+                        "reason": "wrong_event",
+                        "rerun_from": "visual_director",
+                    },
+                ],
+            },
+        }
+
+        result = orch._handle_repair_plan(
+            review_output=review_output,
+            assets_cache=ac,
+            job_id=1,
+            current_cycle=0,
+        )
+
+        assert result is not None
+        assert result["target_agent"] == "visual_director"
+
+    def test_engine_routes_composer_repair_to_composer(
+        self, tmp_path,
+    ):
+        """Black frame patch routes to composer."""
+        orch = Orchestrator(db_path=str(tmp_path / "test.db"))
+        ac = str(tmp_path / "cache")
+        review_output = {
+            "status": "fail",
+            "repair_plan": {
+                "decision": "revise",
+                "max_repair_cycles": 2,
+                "patches": [
+                    {
+                        "beat_id": "beat_2",
+                        "action": "fix_frame",
+                        "reason": "black_frame",
+                        "rerun_from": "composer",
+                    },
+                ],
+            },
+        }
+
+        result = orch._handle_repair_plan(
+            review_output=review_output,
+            assets_cache=ac,
+            job_id=1,
+            current_cycle=0,
+        )
+
+        assert result is not None
+        assert result["target_agent"] == "composer"
+
+    def test_engine_respects_max_repair_cycles(self, tmp_path):
+        """Engine stops retrying after max_repair_cycles exceeded."""
+        orch = Orchestrator(db_path=str(tmp_path / "test.db"))
+        ac = str(tmp_path / "cache")
+        review_output = {
+            "status": "fail",
+            "repair_plan": {
+                "decision": "revise",
+                "max_repair_cycles": 2,
+                "patches": [
+                    {
+                        "beat_id": "beat_1",
+                        "action": "replace_visual",
+                        "reason": "wrong_event",
+                        "rerun_from": "visual_director",
+                    },
+                ],
+            },
+        }
+
+        # At cycle 2 with max 2, should be blocked
+        result = orch._handle_repair_plan(
+            review_output=review_output,
+            assets_cache=ac,
+            job_id=1,
+            current_cycle=2,
+        )
+
+        assert result is None
+
+    def test_engine_no_repair_plan_returns_none(self, tmp_path):
+        """When review output has no repair_plan, returns None."""
+        orch = Orchestrator(db_path=str(tmp_path / "test.db"))
+        review_output = {"status": "pass", "score": 85}
+
+        result = orch._handle_repair_plan(
+            review_output=review_output,
+            assets_cache=str(tmp_path / "cache"),
+            job_id=1,
+            current_cycle=0,
+        )
+
+        assert result is None
+
+    def test_engine_routes_segment_producer_repair(
+        self, tmp_path,
+    ):
+        """Wrong_event with redo_research routes to segment_producer."""
+        orch = Orchestrator(db_path=str(tmp_path / "test.db"))
+        ac = str(tmp_path / "cache")
+        review_output = {
+            "status": "fail",
+            "repair_plan": {
+                "decision": "revise",
+                "max_repair_cycles": 2,
+                "patches": [
+                    {
+                        "beat_id": "beat_1",
+                        "action": "redo_research",
+                        "reason": "wrong_event",
+                        "rerun_from": "segment_producer",
+                    },
+                ],
+            },
+        }
+
+        result = orch._handle_repair_plan(
+            review_output=review_output,
+            assets_cache=ac,
+            job_id=1,
+            current_cycle=0,
+        )
+
+        assert result is not None
+        assert result["target_agent"] == "segment_producer"
