@@ -332,7 +332,7 @@ class TestRepairableFailure:
     def test_repairable_failure_sets_repair_pending_without_deleting_candidate(
         self, tmp_path, mocker, mock_niche_config,
     ):
-        """When reviewer fails with repair plan, repair_status=pending, artifact stays candidate."""
+        """When reviewer fails with repair plan and repair loop exhausts, repair_status=exhausted."""
         db_path = str(tmp_path / "test.db")
         _make_orchestrator_with_db(db_path, mocker, mock_niche_config)
         _run_full_pipeline_mocks(
@@ -347,8 +347,8 @@ class TestRepairableFailure:
                     "patches": [{
                         "beat_id": "beat_1",
                         "action": "replace_visual",
-                        "reason": "poor quality",
-                        "rerun_from": "visual_director",
+                        "reason": "black_frame",
+                        "rerun_from": "composer",
                         "timestamp_start_sec": 0.0,
                         "timestamp_end_sec": 5.0,
                         "required_visual": "better image",
@@ -367,13 +367,20 @@ class TestRepairableFailure:
             "clipper_agency.orchestrator.engine.load_settings",
             return_value=mock_settings,
         )
-        # Mock route_repair to return a valid agent
+        # Mock repair loop methods — reviewer always returns same repair plan
+        # so the loop detects repeated patches and exhausts
         mocker.patch(
             "clipper_agency.orchestrator.engine.route_repair",
-            return_value="visual_director",
+            return_value="composer",
         )
 
         from clipper_agency.orchestrator.engine import Orchestrator
+        mocker.patch.object(
+            Orchestrator, "_retry_composer_stage",
+            return_value=({"status": "completed", "video_path": "v.mp4",
+                           "thumbnail_path": "", "duration_sec": 5.0}, None),
+        )
+
         orch = Orchestrator(db_path=db_path)
 
         conn = get_connection(db_path)
@@ -383,17 +390,17 @@ class TestRepairableFailure:
         result = orch.run_pipeline(topic="test topic", niche="test_niche",
                                     output_dir=str(tmp_path / "out"))
 
-        # Pipeline should return awaiting_repair
-        assert result.get("status") == "awaiting_repair"
+        # Repair loop runs but exhausts due to repeated patches
+        assert result.get("status") in ("exhausted", "failed")
         job_id = result["job_id"]
 
         conn = get_connection(db_path)
         job = get_job(conn, job_id)
         close_connection(db_path)
 
-        assert job["repair_status"] == "pending"
-        assert job["artifact_status"] == "rejected"
-        assert job["quality_status"] == "failed"
+        assert job["repair_status"] == "exhausted"
+        assert job["artifact_status"] == "manual_review_required"
+        assert job["quality_status"] == "repair_exhausted"
         assert job["publication_status"] == "blocked"
 
 
