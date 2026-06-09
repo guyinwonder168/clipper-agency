@@ -159,3 +159,20 @@ def test_app_settings_include_runtime_inspection_quality_defaults():
         assert settings.quality.semantic_review.max_repair_cycles == 2
         assert settings.quality.enforcement.block_on_reviewer_fail is True
         assert settings.quality.enforcement.block_publication_on_quality_fail is True
+
+
+def test_app_settings_include_llm_trace_observability_defaults():
+    from clipper_agency.config.schema import AppSettings
+
+    with patch.dict("os.environ", {}, clear=True):
+        settings = AppSettings(_env_file=None)
+
+        assert settings.observability.llm_traces.enabled is True
+        assert settings.observability.llm_traces.persist_resolved_prompts is True
+        assert settings.observability.llm_traces.persist_raw_responses is True
+        assert settings.observability.llm_traces.persist_parsed_responses is True
+        assert settings.observability.llm_traces.persist_validation_results is True
+        assert settings.observability.llm_traces.log_full_payload_inline is False
+        assert settings.observability.llm_traces.redact_secrets is True
+        assert settings.observability.llm_traces.retention_days == 30
+        assert settings.observability.llm_traces.required is False

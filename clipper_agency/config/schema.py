@@ -164,6 +164,26 @@ class QualityConfig(BaseModel):
     enforcement: EnforcementConfig = Field(default_factory=EnforcementConfig)
 
 
+class LLMTracesConfig(BaseModel):
+    """Structured LLM trace persistence settings."""
+
+    enabled: bool = True
+    persist_resolved_prompts: bool = True
+    persist_raw_responses: bool = True
+    persist_parsed_responses: bool = True
+    persist_validation_results: bool = True
+    log_full_payload_inline: bool = False
+    redact_secrets: bool = True
+    retention_days: int = 30
+    required: bool = False
+
+
+class ObservabilityConfig(BaseModel):
+    """Observability configuration for runtime diagnostics."""
+
+    llm_traces: LLMTracesConfig = Field(default_factory=LLMTracesConfig)
+
+
 class AppSettings(BaseSettings):
     """Application-level settings loaded from .env / environment.
 
@@ -214,6 +234,9 @@ class AppSettings(BaseSettings):
 
     # Quality gates
     quality: QualityConfig = Field(default_factory=QualityConfig)
+
+    # Observability
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
 
 # ---------------------------------------------------------------------------
