@@ -675,7 +675,9 @@ class SegmentProducerAgent(BaseAgent):
             return {
                 "research_brief": str(brief),
                 "content_direction": data.get("content_direction"),
-                "story_beats": data.get("story_beats", []),
+                "story_beats": self._enrich_beats_with_evidence_contracts(
+                    data.get("story_beats", [])
+                ),
                 "format_decision": data.get("format_decision"),
                 "asset_candidates": data.get("asset_candidates", []),
                 "do_not_use": data.get("do_not_use", []),
@@ -695,3 +697,20 @@ class SegmentProducerAgent(BaseAgent):
                 "unverified_claims": [],
                 "reference_style": None,
             }
+
+    @staticmethod
+    def _enrich_beats_with_evidence_contracts(beats: list[dict]) -> list[dict]:
+        """Populate evidence_contract on each beat from visual_must_show/not_show."""
+        enriched = []
+        for beat in beats:
+            must_show = beat.get("visual_must_show", "")
+            must_not_show = beat.get("visual_must_not_show", "")
+            preferred = [s.strip() for s in must_show.split(",") if s.strip()] if must_show else []
+            forbidden = [s.strip() for s in must_not_show.split(",") if s.strip()] if must_not_show else []
+            beat["evidence_contract"] = {
+                "preferred": preferred,
+                "acceptable": [],
+                "forbidden": forbidden,
+            }
+            enriched.append(beat)
+        return enriched

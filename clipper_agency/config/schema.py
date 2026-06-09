@@ -221,6 +221,14 @@ class BeatFallback(BaseModel):
     image_search: str = ""
 
 
+class EvidenceContract(BaseModel):
+    """Visual evidence guidance for a story beat."""
+
+    preferred: list[str] = Field(default_factory=list)
+    acceptable: list[str] = Field(default_factory=list)
+    forbidden: list[str] = Field(default_factory=list)
+
+
 class StoryBeat(BaseModel):
     """A single beat in the edit blueprint produced by the Segment Producer."""
 
@@ -237,6 +245,7 @@ class StoryBeat(BaseModel):
     fallback: BeatFallback
     evidence_source: str = ""
     risk_note: str = ""
+    evidence_contract: EvidenceContract | None = None
 
 
 class FormatDecision(BaseModel):
@@ -390,14 +399,6 @@ class DurationBudget(BaseModel):
 
     target_duration_sec: int
     sections: list[DurationBudgetSection]
-
-
-class EvidenceContract(BaseModel):
-    """Visual evidence guidance for a story beat."""
-
-    preferred: list[str] = Field(default_factory=list)
-    acceptable: list[str] = Field(default_factory=list)
-    forbidden: list[str] = Field(default_factory=list)
 
 
 class VisualRelevanceScore(BaseModel):

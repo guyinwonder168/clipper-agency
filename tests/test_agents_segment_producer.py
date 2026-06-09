@@ -884,3 +884,91 @@ class TestSegmentProducerAssetPortfolio:
         assert len(image_candidates) >= 1 or len(fallback_candidates) >= 1, (
             "Expected at least 1 image or fallback candidate"
         )
+
+
+class TestStoryBeatEvidenceContract:
+    """Test evidence_contract field on StoryBeat and Segment Producer output."""
+
+    def test_story_beat_model_accepts_evidence_contract(self):
+        """StoryBeat model should accept optional evidence_contract."""
+        from clipper_agency.config.schema import StoryBeat, EvidenceContract, BeatFallback
+
+        ec = EvidenceContract(
+            preferred=["same-event interview"],
+            acceptable=["press conference footage"],
+            forbidden=["unrelated event"],
+        )
+        beat = StoryBeat(
+            beat_id=1,
+            role="evidence",
+            narration_goal="Show the interview",
+            spoken_point="Ruben gave an interview",
+            safe_wording="Reportedly",
+            visual_must_show="Ruben interview footage",
+            visual_must_not_show="unrelated person",
+            overlay_text="",
+            caption_keywords=["ruben"],
+            asset_candidates=[],
+            fallback=BeatFallback(type="text_card", headline="Test"),
+            evidence_contract=ec,
+        )
+        assert beat.evidence_contract is not None
+        assert beat.evidence_contract.preferred == ["same-event interview"]
+        assert beat.evidence_contract.forbidden == ["unrelated event"]
+
+    def test_story_beat_without_evidence_contract_defaults_to_none(self):
+        """StoryBeat without evidence_contract should default to None."""
+        from clipper_agency.config.schema import StoryBeat, BeatFallback
+
+        beat = StoryBeat(
+            beat_id=1,
+            role="hook",
+            narration_goal="Hook",
+            spoken_point="test",
+            safe_wording="test",
+            visual_must_show="test",
+            visual_must_not_show="test",
+            overlay_text="",
+            caption_keywords=[],
+            asset_candidates=[],
+            fallback=BeatFallback(type="text_card", headline="Test"),
+        )
+        assert beat.evidence_contract is None
+
+    def test_segment_producer_populates_evidence_contracts(self):
+        """Segment Producer should populate evidence_contract from visual_must_show/not_show."""
+        from clipper_agency.agents.segment_producer import SegmentProducerAgent
+
+        beats = [
+            {
+                "beat_id": 1,
+                "role": "evidence",
+                "visual_must_show": "Ruben interview footage, behind the scenes",
+                "visual_must_not_show": "unrelated person, stock footage",
+            },
+            {
+                "beat_id": 2,
+                "role": "hook",
+                "visual_must_show": "dramatic reaction clip",
+                "visual_must_not_show": "",
+            },
+        ]
+
+        result = SegmentProducerAgent._enrich_beats_with_evidence_contracts(beats)
+
+        assert len(result) == 2
+
+        # Beat 1 has both visual_must_show and visual_must_not_show
+        beat1 = result[0]
+        assert beat1["evidence_contract"] is not None
+        assert "Ruben interview footage" in beat1["evidence_contract"]["preferred"]
+        assert "behind the scenes" in beat1["evidence_contract"]["preferred"]
+        assert "unrelated person" in beat1["evidence_contract"]["forbidden"]
+        assert "stock footage" in beat1["evidence_contract"]["forbidden"]
+
+        # Beat 2 has visual_must_show but empty visual_must_not_show
+        beat2 = result[1]
+        assert beat2["evidence_contract"] is not None
+        assert len(beat2["evidence_contract"]["preferred"]) == 1
+        assert beat2["evidence_contract"]["preferred"][0] == "dramatic reaction clip"
+        assert len(beat2["evidence_contract"]["forbidden"]) == 0
