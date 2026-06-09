@@ -1834,3 +1834,72 @@ class TestComposerIntroCard:
             assert output_dur >= 20.0, (
                 f"Output {output_dur}s should cover at least the voiceover 20s"
             )
+
+
+class TestVisualCoverageDiagnostics:
+    """Composer must attach visual_coverage diagnostics to output."""
+
+    def test_composer_output_includes_visual_coverage_diagnostic(
+        self, tmp_path, mocker,
+    ):
+        """Composer must attach visual_coverage diagnostics to output."""
+        from clipper_agency.config.schema import (
+            VisualCoverageIssue,
+            VisualCoverageResult,
+        )
+
+        _mock_preflight_ok(mocker)
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080, height=1920, codec="h264",
+                duration=10.0, has_audio=False,
+                pix_fmt="yuv420p", file_size=10000,
+            ),
+        )
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mocker.MagicMock(success=True, error=""),
+        )
+        mocker.patch(
+            "clipper_agency.agents.composer.ComposerAgent._probe_output_duration",
+            return_value=21.0,
+        )
+        mocker.patch(
+            "clipper_agency.agents.composer.ComposerAgent._generate_thumbnail",
+        )
+        mocker.patch(
+            "clipper_agency.agents.composer.ComposerAgent._assemble_video",
+            return_value={"cmd": ["ffmpeg"], "card_fallback_scenes": []},
+        )
+        mock_vc = mocker.patch(
+            "clipper_agency.agents.composer.evaluate_visual_coverage",
+            return_value=VisualCoverageResult(
+                status="pass",
+                output_duration_sec=21.0,
+                voiceover_duration_sec=21.0,
+                coverage_ratio=1.0,
+                issues=[],
+            ),
+        )
+
+        agent = ComposerAgent()
+        result = agent.execute(
+            job_id=99,
+            assets=[{"scene": 1, "path": "/tmp/scene_1.mp4"}],
+            audio_files=["/tmp/voice.mp3"],
+            output_dir=str(tmp_path),
+            voiceover_duration_sec=21.0,
+        )
+
+        assert "diagnostics" in result, "Missing 'diagnostics' key in output"
+        assert "visual_coverage" in result["diagnostics"], (
+            "Missing 'visual_coverage' in diagnostics"
+        )
+        assert result["diagnostics"]["visual_coverage"]["status"] == "pass"
+        mock_vc.assert_called_once()

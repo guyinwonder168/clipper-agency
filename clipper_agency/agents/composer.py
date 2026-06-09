@@ -34,6 +34,7 @@ from clipper_agency.rendering.subtitle_engine import (
     build_subtitle_overlays,
     build_word_subtitle_captions,
 )
+from clipper_agency.core.visual_coverage import evaluate_visual_coverage
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
@@ -428,6 +429,9 @@ class ComposerAgent(BaseAgent):
             self._persist_diagnostics(agent_dir, ffmpeg_cmd, "")
             write_json(agent_output_file(assets_cache, job_id, "composer"),
                         output)
+        output = self._attach_visual_coverage_diagnostics(
+            output, voiceover_duration_sec,
+        )
         return output
 
     def _handle_ffmpeg_error(
@@ -450,6 +454,31 @@ class ComposerAgent(BaseAgent):
             "video_path": video_path,
             "thumbnail_path": "",
         }
+
+    def _attach_visual_coverage_diagnostics(
+        self,
+        output: dict[str, Any],
+        voiceover_duration_sec: float | None,
+    ) -> dict[str, Any]:
+        """Attach visual coverage evaluation to output diagnostics."""
+        if output.get("status") != "completed":
+            return output
+        output_dur = output.get("output_duration_sec", 0.0)
+        if output_dur <= 0:
+            return output
+        result = evaluate_visual_coverage(
+            output_duration_sec=output_dur,
+            voiceover_duration_sec=voiceover_duration_sec or output_dur,
+            black_segments=[],
+            freeze_segments=[],
+            empty_segments=[],
+            scene_segments=[],
+            thresholds={},
+        )
+        if "diagnostics" not in output:
+            output["diagnostics"] = {}
+        output["diagnostics"]["visual_coverage"] = result.model_dump()
+        return output
 
     def _render_via_template(
         self,
@@ -1413,4 +1442,5 @@ class ComposerAgent(BaseAgent):
             write_json(
                 agent_output_file(assets_cache, job_id, "composer"), output,
             )
+        output = self._attach_visual_coverage_diagnostics(output, None)
         return output
