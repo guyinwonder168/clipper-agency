@@ -41,6 +41,10 @@ from clipper_agency.db.queries import (
     mark_agent_completed,
     mark_agent_failed,
     mark_agent_running,
+    update_job_artifact_status,
+    update_job_publication_status,
+    update_job_quality_status,
+    update_job_repair_status,
     update_job_status,
 )
 from clipper_agency.db.schema import initialize_schema
@@ -90,6 +94,12 @@ class Orchestrator:
         self.db_path = db_path
         conn = get_connection(db_path)
         initialize_schema(conn)
+
+    def _init_job_statuses(self, conn, job_id: int) -> None:
+        """Initialize lifecycle statuses at pipeline start."""
+        update_job_quality_status(conn, job_id, "not_reviewed")
+        update_job_publication_status(conn, job_id, "blocked")
+        update_job_repair_status(conn, job_id, "none")
 
     def _record_gate(self, assets_cache: str, job_id: int,
                      gate_name: str, result: GateResult) -> str:
@@ -239,6 +249,7 @@ class Orchestrator:
         ]
         for name in agent_names:
             create_agent_state(conn, job_id, name)
+        self._init_job_statuses(conn, job_id)
 
         # G2: Cost Estimate
         g2 = GateCostEstimate()
@@ -700,6 +711,11 @@ class Orchestrator:
         )
 
         if repair_routing:
+            # Reviewer failed with repair plan
+            update_job_artifact_status(conn, job_id, "rejected")
+            update_job_quality_status(conn, job_id, "failed")
+            update_job_publication_status(conn, job_id, "blocked")
+            update_job_repair_status(conn, job_id, "pending")
             review_output["repair_routing"] = repair_routing
             logger.info(
                 "Reviewer repair plan routed to %s for job #%d",
@@ -708,6 +724,17 @@ class Orchestrator:
             return None, review_output, None
 
         self._complete_agent(conn, assets_cache, job_id, "reviewer")
+
+        # Set lifecycle statuses based on reviewer outcome
+        if review_output.get("status") == "pass":
+            update_job_artifact_status(conn, job_id, "approved")
+            update_job_quality_status(conn, job_id, "passed")
+            update_job_publication_status(conn, job_id, "ready")
+        else:
+            # Reviewer failed without a repair plan
+            update_job_artifact_status(conn, job_id, "rejected")
+            update_job_quality_status(conn, job_id, "failed")
+            update_job_publication_status(conn, job_id, "blocked")
 
         pkg_output = self._package_output(
             job_id=job_id,

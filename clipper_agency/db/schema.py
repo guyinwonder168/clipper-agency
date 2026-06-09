@@ -167,6 +167,26 @@ def initialize_schema(conn) -> None:
     """Create all database tables if they don't exist."""
     conn.executescript(SCHEMA_SQL)
     conn.commit()
+    ensure_status_columns(conn)
+
+
+def ensure_status_columns(conn) -> None:
+    """Add lifecycle status columns to jobs table if missing.
+
+    Idempotent — safe to call multiple times.
+    """
+    _STATUS_COLUMNS = [
+        ("quality_status", "TEXT NOT NULL DEFAULT 'not_reviewed'"),
+        ("publication_status", "TEXT NOT NULL DEFAULT 'blocked'"),
+        ("repair_status", "TEXT NOT NULL DEFAULT 'none'"),
+        ("artifact_status", "TEXT NOT NULL DEFAULT 'candidate'"),
+    ]
+    for col_name, col_def in _STATUS_COLUMNS:
+        try:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_def}")
+        except Exception:
+            pass  # Column already exists — safe to ignore
+    conn.commit()
 
 
 def table_exists(conn, table_name: str) -> bool:
