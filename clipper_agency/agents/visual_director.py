@@ -624,7 +624,6 @@ class VisualDirectorAgent(BaseAgent):
 
     def _plan_intro_card(
         self,
-        story_beats: list[dict],
         video_format: str,
         topic: str,
     ) -> dict | None:

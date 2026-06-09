@@ -349,6 +349,114 @@ class SegmentProducerAgent(BaseAgent):
             })
         return candidates
 
+    @staticmethod
+    def _score_keyword_match(
+        text: str,
+        keywords_lower: list[str],
+        total_keywords: int,
+    ) -> float:
+        """Return fraction of keywords found in text."""
+        matched = sum(1 for kw in keywords_lower if kw in text)
+        return matched / total_keywords
+
+    def _build_scrapecreators_candidates(
+        self,
+        items: list[dict],
+        keywords_lower: list[str],
+        total_keywords: int,
+    ) -> list[dict]:
+        """Build candidates from ScrapeCreators results with relevance scores."""
+        candidates: list[dict] = []
+        for item in items:
+            url = item.get("url", "")
+            if not url:
+                continue
+            title = item.get("title", "")
+            relevance = self._score_keyword_match(
+                title.lower(), keywords_lower, total_keywords,
+            ) * 0.7 + 0.3
+
+            # Download URL logic: prefer no-watermark → existing download → canonical
+            download_url, download_url_type = self._resolve_download_url(item, url)
+
+            candidates.append({
+                "url": url,
+                "type": "tiktok_clip",
+                "source": "scrapecreators",
+                "relevance_score": relevance,
+                "provenance": "scrapecreators_tiktok",
+                "download_url": download_url,
+                "download_url_type": download_url_type,
+                "play_count": item.get("play_count"),
+                "title": title,
+            })
+        return candidates
+
+    @staticmethod
+    def _resolve_download_url(item: dict, fallback_url: str) -> tuple[str, str]:
+        """Resolve download URL from item, preferring no-watermark variant."""
+        if item.get("download_no_watermark_addr"):
+            return item["download_no_watermark_addr"], "no_watermark"
+        if item.get("download_url"):
+            return item["download_url"], "standard"
+        return fallback_url, "canonical"
+
+    def _build_firecrawl_candidates(
+        self,
+        items: list[dict],
+        keywords_lower: list[str],
+        total_keywords: int,
+    ) -> list[dict]:
+        """Build candidates from Firecrawl results with relevance scores."""
+        candidates: list[dict] = []
+        for item in items:
+            url = item.get("url", "")
+            if not url:
+                continue
+            title = item.get("title", "")
+            content = item.get("content", "")
+            search_text = f"{title} {content}".lower()
+            relevance = self._score_keyword_match(
+                search_text, keywords_lower, total_keywords,
+            ) * 0.6 + 0.2
+
+            candidates.append({
+                "url": url,
+                "type": "article",
+                "source": "firecrawl",
+                "relevance_score": relevance,
+                "provenance": "firecrawl_search",
+                "title": title,
+            })
+
+            image_url = item.get("image")
+            if image_url:
+                candidates.append({
+                    "url": image_url,
+                    "type": "image",
+                    "source": "firecrawl",
+                    "relevance_score": relevance,
+                    "provenance": "firecrawl_search",
+                })
+        return candidates
+
+    @staticmethod
+    def _ensure_minimum_coverage(candidates: list[dict]) -> None:
+        """Add fallback text_card for important beats lacking video/image coverage."""
+        video_types = {"tiktok_clip", "video"}
+        image_types = {"photo", "screenshot", "image"}
+        video_count = sum(1 for c in candidates if c.get("type") in video_types)
+        image_count = sum(1 for c in candidates if c.get("type") in image_types)
+
+        if video_count < 2 or image_count < 1:
+            candidates.append({
+                "type": "text_card",
+                "source": "fallback",
+                "relevance_score": 0.0,
+                "provenance": "generated_fallback",
+                "url": "",
+            })
+
     def _build_asset_portfolio(
         self,
         scrapecreators_results: list[dict],
@@ -357,94 +465,22 @@ class SegmentProducerAgent(BaseAgent):
         is_important_beat: bool = False,
     ) -> list[dict]:
         """Build ranked asset portfolio with relevance scores and download metadata."""
-        candidates: list[dict] = []
         keywords_lower = [kw.lower() for kw in beat_keywords]
-        total_keywords = len(keywords_lower) or 1  # avoid division by zero
+        total_keywords = len(keywords_lower) or 1
 
-        # ── ScrapeCreators candidates ─────────────────────────────────────
-        for item in scrapecreators_results:
-            url = item.get("url", "")
-            if not url:
-                continue
-            title = item.get("title", "")
-            title_lower = title.lower()
+        candidates = self._build_scrapecreators_candidates(
+            scrapecreators_results, keywords_lower, total_keywords,
+        )
+        candidates.extend(
+            self._build_firecrawl_candidates(
+                firecrawl_results, keywords_lower, total_keywords,
+            ),
+        )
 
-            matched = sum(1 for kw in keywords_lower if kw in title_lower)
-            relevance_score = (matched / total_keywords) * 0.7 + 0.3
-
-            # Download URL logic: prefer no-watermark → existing download → canonical
-            if item.get("download_no_watermark_addr"):
-                download_url = item["download_no_watermark_addr"]
-                download_url_type = "no_watermark"
-            elif item.get("download_url"):
-                download_url = item["download_url"]
-                download_url_type = "standard"
-            else:
-                download_url = url
-                download_url_type = "canonical"
-
-            candidates.append({
-                "url": url,
-                "type": "tiktok_clip",
-                "source": "scrapecreators",
-                "relevance_score": relevance_score,
-                "provenance": "scrapecreators_tiktok",
-                "download_url": download_url,
-                "download_url_type": download_url_type,
-                "play_count": item.get("play_count"),
-                "title": title,
-            })
-
-        # ── Firecrawl candidates ──────────────────────────────────────────
-        for item in firecrawl_results:
-            url = item.get("url", "")
-            if not url:
-                continue
-            title = item.get("title", "")
-            content = item.get("content", "")
-            search_text = f"{title} {content}".lower()
-
-            matched = sum(1 for kw in keywords_lower if kw in search_text)
-            relevance_score = (matched / total_keywords) * 0.6 + 0.2
-
-            candidates.append({
-                "url": url,
-                "type": "article",
-                "source": "firecrawl",
-                "relevance_score": relevance_score,
-                "provenance": "firecrawl_search",
-                "title": title,
-            })
-
-            # Extract image candidate if present
-            image_url = item.get("image")
-            if image_url:
-                candidates.append({
-                    "url": image_url,
-                    "type": "image",
-                    "source": "firecrawl",
-                    "relevance_score": relevance_score,
-                    "provenance": "firecrawl_search",
-                })
-
-        # ── Sort by relevance descending ──────────────────────────────────
         candidates.sort(key=lambda c: c["relevance_score"], reverse=True)
 
-        # ── Important beat: ensure minimum coverage ───────────────────────
         if is_important_beat:
-            video_types = {"tiktok_clip", "video"}
-            image_types = {"photo", "screenshot", "image"}
-            video_count = sum(1 for c in candidates if c.get("type") in video_types)
-            image_count = sum(1 for c in candidates if c.get("type") in image_types)
-
-            if video_count < 2 or image_count < 1:
-                candidates.append({
-                    "type": "text_card",
-                    "source": "fallback",
-                    "relevance_score": 0.0,
-                    "provenance": "generated_fallback",
-                    "url": "",
-                })
+            self._ensure_minimum_coverage(candidates)
 
         return candidates
 

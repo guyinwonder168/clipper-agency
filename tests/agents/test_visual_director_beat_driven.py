@@ -914,13 +914,7 @@ class TestIntroCardContract:
     def test_visual_director_adds_intro_card_scene_zero_for_roundup(self):
         """For three_story_roundup format, first scene should be intro_card."""
         director = VisualDirectorAgent()
-        story_beats = [
-            _make_beat(beat_id=1, role="story_1", narration_goal="Story one"),
-            _make_beat(beat_id=2, role="story_2", narration_goal="Story two"),
-            _make_beat(beat_id=3, role="story_3", narration_goal="Story three"),
-        ]
         plan = director._plan_intro_card(
-            story_beats=story_beats,
             video_format="three_story_roundup",
             topic="Ruben Onsu dan Sarwendah Drama",
         )
@@ -936,9 +930,7 @@ class TestIntroCardContract:
     def test_visual_director_skips_intro_card_for_non_roundup(self):
         """For non-roundup formats, intro card should not be added."""
         director = VisualDirectorAgent()
-        story_beats = [_make_beat(beat_id=1, role="main_claim")]
         plan = director._plan_intro_card(
-            story_beats=story_beats,
             video_format="single_story_deep_dive",
             topic="Some topic",
         )
@@ -947,12 +939,7 @@ class TestIntroCardContract:
     def test_intro_card_has_breaking_news_style(self):
         """Intro card for roundup should use breaking_news style."""
         director = VisualDirectorAgent()
-        story_beats = [
-            _make_beat(beat_id=1, role="story_1"),
-            _make_beat(beat_id=2, role="story_2"),
-        ]
         plan = director._plan_intro_card(
-            story_beats=story_beats,
             video_format="three_story_roundup",
             topic="Hot Topic",
         )

@@ -1,29 +1,25 @@
-"""Tests for universal model-call diagnostics (Batch 1A — must fail)."""
+"""Tests for universal model-call diagnostics."""
 
 import json
 from pathlib import Path
 
 import pytest
 
+from clipper_agency.core.model_diagnostics import (
+    ModelCallDiagnostic,
+    write_model_call_diagnostic,
+)
+
 
 class TestLLMModelCallDiagnostics:
-    """Tests for LLM client model-call diagnostic logging.
-
-    These tests MUST FAIL until model_diagnostics helper is implemented in Batch 2A.
-    """
+    """Tests for LLM client model-call diagnostic logging."""
 
     def test_llm_client_writes_model_call_diagnostic_when_context_provided(self, tmp_path, mocker):
         """LLM call with diagnostic context should write a JSON diagnostic file."""
-        # Import the future module — will fail with ImportError
-        from clipper_agency.core.model_diagnostics import write_model_call_diagnostic
-
         job_dir = tmp_path / "job_99" / "agents" / "visual_director" / "model_calls"
         job_dir.mkdir(parents=True)
 
-        write_model_call_diagnostic(
-            output_dir=str(job_dir),
-            agent="visual_director",
-            purpose="scene_plan",
+        diag = ModelCallDiagnostic(
             provider="openrouter",
             model="google/gemini-2.0-flash-001",
             input_payload={"messages": [{"role": "user", "content": "plan scenes"}]},
@@ -35,6 +31,13 @@ class TestLLMModelCallDiagnostics:
             retry_count=0,
             status="success",
             error=None,
+        )
+
+        write_model_call_diagnostic(
+            output_dir=str(job_dir),
+            agent="visual_director",
+            purpose="scene_plan",
+            diagnostic=diag,
         )
 
         # Should have written exactly one JSON file
@@ -53,15 +56,10 @@ class TestLLMModelCallDiagnostics:
 
     def test_llm_diagnostic_includes_error_on_failure(self, tmp_path):
         """Failed model call should write diagnostic with error details."""
-        from clipper_agency.core.model_diagnostics import write_model_call_diagnostic
-
         job_dir = tmp_path / "job_99" / "agents" / "scriptwriter" / "model_calls"
         job_dir.mkdir(parents=True)
 
-        write_model_call_diagnostic(
-            output_dir=str(job_dir),
-            agent="scriptwriter",
-            purpose="generate_script",
+        diag = ModelCallDiagnostic(
             provider="openrouter",
             model="test-model",
             input_payload={},
@@ -75,6 +73,13 @@ class TestLLMModelCallDiagnostics:
             error="HTTP 429 Rate Limited",
         )
 
+        write_model_call_diagnostic(
+            output_dir=str(job_dir),
+            agent="scriptwriter",
+            purpose="generate_script",
+            diagnostic=diag,
+        )
+
         files = list(job_dir.glob("*.json"))
         assert len(files) == 1
         data = json.loads(files[0].read_text())
@@ -84,22 +89,14 @@ class TestLLMModelCallDiagnostics:
 
 
 class TestTTSModelCallDiagnostics:
-    """Tests for TTS provider model-call diagnostic logging.
-
-    These tests MUST FAIL until model_diagnostics helper is implemented in Batch 2A.
-    """
+    """Tests for TTS provider model-call diagnostic logging."""
 
     def test_tts_provider_writes_model_call_diagnostic_when_context_provided(self, tmp_path):
         """TTS call with diagnostic context should write a JSON diagnostic file."""
-        from clipper_agency.core.model_diagnostics import write_model_call_diagnostic
-
         job_dir = tmp_path / "job_99" / "agents" / "voice_producer" / "model_calls"
         job_dir.mkdir(parents=True)
 
-        write_model_call_diagnostic(
-            output_dir=str(job_dir),
-            agent="voice_producer",
-            purpose="tts_generation",
+        diag = ModelCallDiagnostic(
             provider="elevenlabs",
             model="eleven_multilingual_v2",
             input_payload={"text_length": 450, "voice_id": "abc123"},
@@ -111,6 +108,13 @@ class TestTTSModelCallDiagnostics:
             retry_count=0,
             status="success",
             error=None,
+        )
+
+        write_model_call_diagnostic(
+            output_dir=str(job_dir),
+            agent="voice_producer",
+            purpose="tts_generation",
+            diagnostic=diag,
         )
 
         files = list(job_dir.glob("*.json"))

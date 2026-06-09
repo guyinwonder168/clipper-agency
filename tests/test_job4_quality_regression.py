@@ -319,7 +319,6 @@ class TestIntroCardRegression:
         director = VisualDirectorAgent()
 
         plan = director._plan_intro_card(
-            story_beats=[{"beat_id": 1, "role": "story_1"}],
             video_format="three_story_roundup",
             topic="Top 3 Drama Artis Hari Ini",
         )
@@ -335,7 +334,6 @@ class TestIntroCardRegression:
         director = VisualDirectorAgent()
 
         plan = director._plan_intro_card(
-            story_beats=[{"beat_id": 1, "role": "story_1"}, {"beat_id": 2, "role": "story_2"}],
             video_format="two_story_highlight",
             topic="Dua Drama Viral",
         )
@@ -348,7 +346,6 @@ class TestIntroCardRegression:
         director = VisualDirectorAgent()
 
         plan = director._plan_intro_card(
-            story_beats=[{"beat_id": 1, "role": "main_claim"}],
             video_format="single_story_deep_dive",
             topic="Drama Sarwendah",
         )
@@ -360,7 +357,6 @@ class TestIntroCardRegression:
         director = VisualDirectorAgent()
 
         plan = director._plan_intro_card(
-            story_beats=[{"beat_id": 1, "role": "hook"}],
             video_format="unknown_format_xyz",
             topic="Test",
         )
