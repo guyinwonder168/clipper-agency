@@ -160,6 +160,9 @@ class Orchestrator:
                 action=p["action"],
                 reason=p["reason"],
                 rerun_from=p["rerun_from"],
+                timestamp_start_sec=p.get("timestamp_start_sec", 0.0),
+                timestamp_end_sec=p.get("timestamp_end_sec", 0.0),
+                required_visual=p.get("required_visual", ""),
             )
             for p in patches_raw
         ]
@@ -512,6 +515,19 @@ class Orchestrator:
             if abort:
                 return abort
 
+            # Handle repair routing from reviewer
+            if review_output and review_output.get("repair_routing"):
+                logger.info(
+                    "Pipeline paused for repair: job #%d → %s",
+                    job_id, review_output["repair_routing"]["target_agent"],
+                )
+                remove_job_file_handler()
+                return {
+                    "status": "awaiting_repair",
+                    "job_id": job_id,
+                    "repair_routing": review_output["repair_routing"],
+                }
+
             update_job_status(conn, job_id, "COMPLETED")
             logger.info("Pipeline COMPLETED: job #%d", job_id)
             remove_job_file_handler()
@@ -675,6 +691,22 @@ class Orchestrator:
             narrative_structure=script_output.get("narrative_structure", []),
             unverified_claims=script_output.get("unverified_claims", []),
         )
+        # Route repair plan if reviewer requested revisions
+        repair_routing = self._handle_repair_plan(
+            review_output=review_output,
+            assets_cache=assets_cache,
+            job_id=job_id,
+            current_cycle=1,
+        )
+
+        if repair_routing:
+            review_output["repair_routing"] = repair_routing
+            logger.info(
+                "Reviewer repair plan routed to %s for job #%d",
+                repair_routing["target_agent"], job_id,
+            )
+            return None, review_output, None
+
         self._complete_agent(conn, assets_cache, job_id, "reviewer")
 
         pkg_output = self._package_output(

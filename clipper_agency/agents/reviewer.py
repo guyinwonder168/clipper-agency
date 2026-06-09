@@ -205,7 +205,7 @@ class ReviewerAgent(BaseAgent):
         vc = diagnostics.get("visual_coverage")
         if not vc or vc.get("status") != "fail":
             return None
-        hard_fails = [i for i in vc.get("issues", []) if isinstance(i, dict) and i.get("severity") == "hard_fail"]
+        hard_fails = [i for i in vc.get("issues", []) if isinstance(i, dict) and i.get("severity") in ("hard_fail", "reject")]
         if hard_fails:
             return {
                 "status": "fail",
@@ -224,7 +224,7 @@ class ReviewerAgent(BaseAgent):
         tc = diagnostics.get("text_collision")
         if not tc:
             return None
-        hard_fails = [i for i in tc if isinstance(i, dict) and i.get("severity") == "hard_fail"]
+        hard_fails = [i for i in tc if isinstance(i, dict) and i.get("severity") in ("hard_fail", "reject")]
         if hard_fails:
             return {
                 "status": "fail",
@@ -243,7 +243,7 @@ class ReviewerAgent(BaseAgent):
         sa = diagnostics.get("safe_area")
         if not sa:
             return None
-        hard_fails = [i for i in sa if isinstance(i, dict) and i.get("severity") == "hard_fail"]
+        hard_fails = [i for i in sa if isinstance(i, dict) and i.get("severity") in ("hard_fail", "reject")]
         if hard_fails:
             return {
                 "status": "fail",
