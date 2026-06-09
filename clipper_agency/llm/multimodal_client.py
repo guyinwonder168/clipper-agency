@@ -151,7 +151,7 @@ def parse_inspection_json(raw_content: str) -> dict[str, Any]:
         return {"decision": "error", "reason": "Empty response from LLM"}
 
     # Strip markdown code fences
-    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    fence_match = re.search(r"```(?:json)?[^\S\r\n]*\n([\s\S]*?)```", text)
     if fence_match:
         text = fence_match.group(1).strip()
 
