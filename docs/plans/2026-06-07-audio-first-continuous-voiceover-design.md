@@ -1,8 +1,7 @@
-# Audio-First Continuous Voiceover Design
+# Audio-First Continuous Voiceover Design ✅ IMPLEMENTED
 
 **Date:** 2026-06-07
-**Status:** Approved
-**Author:** OpenAgent + User + ChatGPT Review Integration
+**Status:** Implemented — full audio-first pipeline built and running. Segment Producer renamed from Researcher with 5 sub-roles. Scriptwriter produces continuous voiceover. Voice Producer uses single TTS call with word-level timestamps. Visual Director is beat-driven. Composer uses single audio timeline with smart trimming. Reviewer has 4 programmatic quality checks. See `docs/adr/0021-audio-first-continuous-voiceover.md`.
 
 ## Problem Statement
 

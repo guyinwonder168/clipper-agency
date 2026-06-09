@@ -1,7 +1,8 @@
-# Tier 4 Design: Timeline-Aware Agent Orchestration
+# Tier 4 Design: Timeline-Aware Agent Orchestration ✅ SUPERSEDED
 
 **Date:** 2026-06-06  
-**Status:** Proposed  
+**Status:** Superseded by audio-first continuous voiceover architecture (v2.0.0)  
+**Replaced by:** `docs/adr/0021-audio-first-continuous-voiceover.md`  
 **Related:** `docs/PRD.md`, `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`, `docs/adr/0020-use-canonical-timeline-contract.md`
 
 ---

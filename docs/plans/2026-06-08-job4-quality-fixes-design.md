@@ -1,4 +1,6 @@
-# Job #4 Quality Fixes Design
+# Job #4 Quality Fixes Design ✅ IMPLEMENTED
+
+> **Status:** Implemented — merged via PR #42 to master. Ten fixes delivered: duplicate/replacement of invalid visual URLs, Composer output-duration guard, Reviewer hard gates for AV duration mismatch + broken tiktok_clip actions, explicit roundup intro-card handling, no-watermark URL preference, improved model diagnostics, keyword-based asset relevance ranking, and 3 SonarCloud issue resolutions.
 
 ## Goal
 
