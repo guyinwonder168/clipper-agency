@@ -5,6 +5,119 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-06-09
+
+### Phase 21: Deterministic Quality Gates + Repair Routing
+
+Deterministic visual quality gates, package consistency, semantic visual relevance, evidence contracts, and structured repair routing — addressing all 4 Job #4 output issue categories (black/freeze frames, text collisions, package-scope mismatches, claim-to-visual irrelevance).
+
+#### New Modules (10)
+
+- **`core/visual_coverage.py`** — `evaluate_visual_coverage()` scores frame-level completeness via sampled thumbnails. Detects black/freeze frames, blank regions, insufficient visual content.
+- **`core/frame_sampler.py`** — `plan_frame_samples()` + `deduplicate_samples_by_hash()` produce deterministic sampling schedules for coverage analysis.
+- **`core/text_detection.py`** — `normalize_text_region()` standardizes OCR bounding boxes for consistent collision checks.
+- **`core/text_collision.py`** — `detect_text_collisions()` identifies overlapping text bounding boxes from captions, overlays, and source clip text. `detect_source_text_density()` flags dense on-screen text.
+- **`core/safe_area.py`** — `detect_safe_area_issues()` validates caption/overlay placement against TikTok safe zones with face overlap detection.
+- **`core/story_mode.py`** — `classify_story_mode()` deterministically determines narrative structure (single_deep_dive, three_roundup, two_highlight) and validates consistency with actual composition.
+- **`core/duration_budget.py`** — `allocate_duration_budget()` distributes total video duration across beats by role weight (hook, main_claim, evidence, reaction, closing_cta).
+- **`core/package_consistency.py`** — `evaluate_package_consistency()` validates story mode, scene count, clip types, and visual hierarchy match declared format_decision.
+- **`core/semantic_visual_review.py`** — `score_visual_relevance()` scores claim-to-visual alignment using keyword overlap and evidence contracts on StoryBeat.
+- **`core/repair_router.py`** — `route_repair()` + `build_repair_plan()` map quality gate failures to the correct existing agent: visual_coverage→Composer, text_collision/safe_area→Visual Director, consistency/relevance→Segment Producer.
+
+#### Reviewer Gate Chain
+
+```
+visual_coverage → text_collision → safe_area → package_consistency → semantic_review → LLM
+```
+
+Sequential deterministic gate chain before LLM multimodal review. Each gate owns a specific quality dimension. Evidence contracts on StoryBeat verify claim-to-visual alignment. Composer emits structured visual quality diagnostics.
+
+#### Repair Routing
+
+- Engine `_handle_repair_plan()` routes repair plans to correct agent via repair_router.
+- Repair patches preserve beat window (`timestamp_start_sec`, `timestamp_end_sec`) and replacement visual intent (`required_visual`).
+- Pipeline returns `"awaiting_repair"` instead of packaging when repair is needed.
+- Codex review: 3 issues (2 P1, 1 P2) — all resolved in follow-up commit.
+
+#### Config & Schema
+
+- Quality gate configuration defaults in niche YAML.
+- `RepairPatch`, `RepairPlan` models in `config/schema.py`.
+- Evidence contract fields on StoryBeat model.
+
+#### Bug Fixes (SonarCloud + Codex)
+
+- S3776 CRITICAL — extracted `_check_zone_overlaps()` / `_check_face_overlaps()` from safe_area.py (→ cognitive complexity ~4).
+- S107 — bundled 8 `execute()` params into `ReviewContext` TypedDict.
+- S1172×3 — prefixed unused params with `_` in package_consistency.py.
+- S5852 — replaced ReDoS regex with string-based split in story_mode.py.
+- Codex P1 — repair routing wired into pipeline (was dead code).
+- Codex P1 — reject severity caught alongside hard_fail in gate filters.
+- Codex P2 — repair patch timing/visual fields preserved in construction.
+
+#### Tests
+
+- 1170 → 1222 total tests (+52 new).
+- New test files: `test_visual_coverage` (325), `test_frame_sampler` (51), `test_text_detection` (62), `test_text_collision` (106), `test_safe_area` (136), `test_story_mode` (89), `test_duration_budget` (72), `test_package_consistency` (83), `test_semantic_visual_review` (30), `test_repair_router` (35), `test_job4_quality_regression` (145).
+- All 1210+ offline tests pass + 12 new post-merge Codex fix tests.
+
+#### Documentation
+
+- PRD v3.1 (PR-30), SRS v3.1 (FR-43–FR-50), technical_design v5.1 (§13), requirements_traceability v4.1 (facts #154–166).
+- ADR 0023 — Job4 Quality Gates and Repair Routing.
+
+### Phase 20: Job #4 Quality Fixes
+
+Scoped quality improvements from Job #4 output analysis — addressing config aliases, intro card contract, and introducing regression test fixture for 6 defect types.
+
+#### Changes
+
+- **Config aliases** — shortcut env var names for common settings, improved `.env.example`.
+- **Intro card contract** — structured metadata for opening card image generation.
+- **SonarCloud fixes** — S3776 (cognitive complexity), S1172 (unused param), S107 (too many params) in engine.py.
+- **Job #4 regression fixture** — `test_job4_quality_regression.py` covers 6 defect types as failing baseline for Phase 21.
+
+## [2.0.0] — 2026-06-07
+
+### Audio-First Continuous Voiceover Architecture (v2.0.0)
+
+Complete architecture overhaul from per-scene sequential processing to audio-first continuous voiceover pipeline. Single TTS call (87.5% cost reduction), beat-driven Visual Director, sequential voice→visual execution.
+
+#### Architectural Changes
+
+- **Segment Producer** — Researcher renamed with 5 sub-roles: Fact Checker, Viral Analyst, Clip Scout, Story Producer, Edit Planner. Outputs edit blueprint with story_beats (visual_must_show/must_not_show, asset_candidates, overlay_text, caption_keywords), format_decision, verified_facts, unverified_claims, do_not_use list.
+- **Continuous Voiceover** — Single TTS call replaces 8 per-scene calls (87.5% cost reduction). ElevenLabs `/with-timestamps` returns character-level word timestamps. Fallback: Gemini TTS (silence detection) → Fish Audio → fail clearly.
+- **Sequential Voice→Visual** — Voice Producer must complete before Visual Director starts. Removed parallel `asyncio.gather` from engine.
+- **Beat-Driven Visual Director** — Consumes story_beats + word timestamps + visual rules (must_show/must_not_show). Each beat has exact audio duration from timestamps.
+- **Smart Scene Trimming** — ffprobe keyframe boundary detection (±15% tolerance), speed adjustment ±20%.
+- **Keyword Captions** — Max 6 words, beat-aligned, bottom-positioned. Replace full-sentence subtitles.
+- **Reviewer Enhancement** — 4 programmatic quality checks: (1) AV sync (drift < 0.5s), (2) caption quality (max 6 words), (3) fact safety (safe wording for unverified claims), (4) narrative structure (beat completeness).
+
+#### Shared Schema Contract
+
+- 11 Pydantic models in `config/schema.py`: StoryBeat, FormatDecision, VerifiedFact, UnverifiedClaim, VisualInstruction, AssetCandidate, KeywordCaption, VoiceSettings, VoiceProviderResult, ContentBrief, NarrativeSection.
+
+#### Agent Changes
+
+- **Segment Producer** — renamed from researcher.py; outputs edit blueprint with beat-level visual instructions.
+- **Scriptwriter** — continuous voiceover narration (75-110 words, no emojis, spoken-word style). Outputs narrative_structure mapping beats to word ranges.
+- **Voice Producer** — single TTS call with word-level timestamps via ElevenLabs `/with-timestamps`.
+- **Visual Director** — beat-driven planning from story_beats + timestamps + visual rules.
+- **Composer** — single audio timeline (voiceover.mp3 immutable anchor), smart trimming, keyword captions.
+- **Reviewer** — 4 programmatic checks + multimodal. Timeline reconciler removed from engine.
+- All backward-compat files removed (researcher.py, researcher.md, 2 test wrappers).
+
+#### Tests
+
+- 990 → 1170 tests (+180 new, -7 dead, net +173).
+- 93%+ line coverage maintained.
+
+#### Documentation
+
+- PRD v3.0, SRS v3.0, technical_design v5.0, requirements_traceability v4.0.
+- ADR 0021 — Audio-First Continuous Voiceover.
+- All prompt files: segment_producer.md (renamed, rewritten), scriptwriter.md (rewritten for voiceover).
+
 ## [1.3.0] — 2026-06-06
 
 ### Tier 4: Timeline-Aware Agent Orchestration
