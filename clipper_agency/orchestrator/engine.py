@@ -2,7 +2,9 @@
 
 import json
 import logging
+import os
 import re
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -346,7 +348,7 @@ class Orchestrator:
             ):
                 compose_output, abort = self._retry_composer_stage(
                     conn, job_id, visual_output, voice_output,
-                    output_dir, assets_cache,
+                    output_dir, assets_cache, cycle=cycle,
                 )
 
             if abort:
@@ -787,7 +789,8 @@ class Orchestrator:
                     niche=niche,
                 )
                 if repair_result.get("status") == "completed":
-                    # Repair passed — package the output
+                    # Repair passed — package and promote to final/
+                    repair_cycle = repair_result.get("cycle", 0)
                     compose_output = self._load_agent_output(
                         assets_cache, job_id, "composer")
                     pkg_output = self._package_output(
@@ -798,6 +801,12 @@ class Orchestrator:
                         output_dir=output_dir,
                         template_name=compose_output.get("template_name"),
                     )
+                    # Promote cycle artifacts to final/
+                    if pkg_output.get("status") != "failed":
+                        self._promote_to_final(
+                            output_dir=output_dir, job_id=job_id,
+                            cycle=repair_cycle,
+                        )
                     update_job_status(conn, job_id, "COMPLETED")
                     logger.info(
                         "Pipeline COMPLETED after repair: job #%d", job_id)
@@ -931,8 +940,12 @@ class Orchestrator:
     def _retry_composer_stage(
         self, conn, job_id: int, visual_output: dict[str, Any],
         voice_output: dict[str, Any], output_dir: str, assets_cache: str,
+        cycle: int = 0,
     ) -> tuple[dict[str, Any], dict | None]:
         """Run composer with error handling and G10 gate enforcement.
+
+        When cycle > 0, writes output to a cycle-specific subdirectory
+        to preserve the original (cycle 0) output.
 
         Returns (compose_output, abort_response). If abort_response is not
         None, it should be returned immediately from run_pipeline_from.
@@ -941,16 +954,28 @@ class Orchestrator:
         # Load script scenes from completed scriptwriter for subtitles
         script_output = self._load_agent_output(assets_cache, job_id, "scriptwriter")
 
+        # For repair cycles, use a cycle-specific subdirectory
+        composer_output_dir = output_dir
+        if cycle > 0:
+            cycle_dir = Path(output_dir) / f"job_{job_id}" / f"cycle_{cycle}"
+            cycle_dir.mkdir(parents=True, exist_ok=True)
+            composer_output_dir = str(cycle_dir)
+
         compose_output = self._run_composer(
             job_id=job_id,
             assets=visual_output.get("assets", []),
             audio_files=voice_output.get("audio_files", []),
-            output_dir=output_dir, assets_cache=assets_cache,
+            output_dir=composer_output_dir, assets_cache=assets_cache,
             script_scenes=script_output.get("script", []),
             voiceover_path=voice_output.get("voiceover_path", ""),
             timestamps=voice_output.get("timestamps", []),
             narrative_structure=script_output.get("narrative_structure", []),
         )
+
+        # Tag output with cycle info for downstream promotion
+        if cycle > 0 and compose_output.get("status") != "failed":
+            compose_output["cycle"] = cycle
+            compose_output["cycle_video_path"] = compose_output.get("video_path", "")
 
         if compose_output.get("status") == "failed":
             return compose_output, self._fail_agent(
@@ -1021,11 +1046,18 @@ class Orchestrator:
             update_job_quality_status(conn, job_id, "passed")
             update_job_publication_status(conn, job_id, "ready")
         else:
-            # Reviewer failed without a repair plan
+            # Reviewer failed without a repair plan — block publication,
+            # keep artifacts on disk, do NOT package or create final/ dir.
             update_job_artifact_status(conn, job_id, "rejected")
             update_job_quality_status(conn, job_id, "failed")
             update_job_publication_status(conn, job_id, "blocked")
+            logger.info(
+                "Reviewer failed without repair plan for job #%d — "
+                "artifacts kept, publication blocked", job_id,
+            )
+            return None, review_output, None
 
+        # Reviewer passed — package and promote to final/
         pkg_output = self._package_output(
             job_id=job_id,
             video_path=compose_output.get("video_path", ""),
@@ -1042,6 +1074,17 @@ class Orchestrator:
                 "reason": pkg_output.get("error", _PACKAGING_FAILED),
                 "job_id": job_id,
             }, review_output, pkg_output
+
+        # Promote to final/ directory
+        promotion = self._promote_to_final(
+            output_dir=output_dir, job_id=job_id,
+        )
+        if promotion.get("status") == "failed":
+            logger.warning(
+                "Promotion failed for job #%d: %s — "
+                "approved artifact stays, publication stays blocked until retry",
+                job_id, promotion.get("error", "unknown"),
+            )
 
         update_manifest_final(assets_cache, job_id, {
             "video": pkg_output.get("video_path", ""),
@@ -1502,3 +1545,61 @@ class Orchestrator:
             metadata=metadata,
             output_dir=output_dir,
         )
+
+    def _promote_to_final(
+        self, output_dir: str, job_id: int, cycle: int = 0,
+    ) -> dict[str, Any]:
+        """Atomically promote cycle artifacts to outputs/final/job_{id}/.
+
+        Only called when quality_status=passed and artifact_status=approved.
+        Uses temp directory + os.rename for atomicity on same filesystem.
+
+        Returns {"status": "completed", "final_dir": ...} or
+                {"status": "failed", ...}.
+        """
+        base = Path(output_dir)
+        if cycle > 0:
+            src = base / f"job_{job_id}" / f"cycle_{cycle}"
+        else:
+            src = base / f"job_{job_id}"
+
+        if not src.is_dir():
+            return {
+                "status": "failed",
+                "error": f"Source directory {src} does not exist",
+            }
+
+        final_dir = base / "final" / f"job_{job_id}"
+        tmp_dir = base / "final" / f".tmp_job_{job_id}"
+
+        try:
+            # Create parent final/ directory
+            (base / "final").mkdir(parents=True, exist_ok=True)
+
+            # Copy to temp directory first
+            if tmp_dir.exists():
+                shutil.rmtree(tmp_dir)
+            shutil.copytree(src, tmp_dir)
+
+            # Atomic rename (same filesystem)
+            if final_dir.exists():
+                shutil.rmtree(final_dir)
+            os.rename(str(tmp_dir), str(final_dir))
+
+            logger.info("Promoted job #%d (cycle %d) to %s", job_id, cycle, final_dir)
+            return {
+                "status": "completed",
+                "final_dir": str(final_dir),
+            }
+        except Exception as e:
+            # Clean up temp dir on failure (ignore permission errors)
+            try:
+                if tmp_dir.exists():
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+            except (PermissionError, OSError):
+                pass
+            logger.error("Promotion FAILED for job #%d: %s", job_id, e)
+            return {
+                "status": "failed",
+                "error": str(e),
+            }
