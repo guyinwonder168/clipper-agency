@@ -1,8 +1,8 @@
 # Clipper Agency — Software Requirements Specification
 
-**Version:** 3.0
-**Date:** 2026-06-07
-**Status:** v2.0.0 Architecture Redesign Complete — Audio-First Continuous Voiceover Implemented
+**Version:** 3.1
+**Date:** 2026-06-09
+**Status:** Phase 21 Complete — Deterministic Quality Gates + Repair Routing
 **Related:** `docs/PRD.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
@@ -59,6 +59,14 @@
 | FR-40 | Shared schema contract via `config/schema.py`: 11 Pydantic models (StoryBeat, FormatDecision, VerifiedFact, UnverifiedClaim, VisualInstruction, AssetCandidate, KeywordCaption, VoiceSettings, VoiceProviderResult, ContentBrief, NarrativeSection) defining cross-agent data contracts | P0 | MVP |
 | FR-41 | Beat-driven visual planning: Visual Director consumes story_beats + word timestamps + visual rules. Each beat has exact audio duration from timestamps. Sequential Voice→Visual execution enforced in engine | P0 | MVP |
 | FR-42 | Audio-first composition: voiceover.mp3 is immutable timeline anchor (never trimmed). Composer smart-trims visuals at keyframe boundaries, overlays keyword captions (max 6 words, beat-aligned), speed-adjusts visuals ±20% to match audio | P0 | MVP |
+| FR-43 | Visual coverage evaluation: `evaluate_visual_coverage()` in `clipper_agency/core/visual_coverage.py` scores frame-level visual completeness via sampled thumbnails. Detects black/freeze frames, blank regions, and insufficient visual content. Composer owns frame-level technical quality checks | P0 | MVP |
+| FR-44 | OCR text region detection and collision checking: `detect_text_collisions()` in `clipper_agency/core/text_collision.py` identifies overlapping text bounding boxes from captions, overlays, and source clip text. `detect_source_text_density()` flags excessively dense on-screen text. Visual Director owns layout-level text compliance | P0 | MVP |
+| FR-45 | Safe-area compliance: `detect_safe_area_issues()` in `clipper_agency/core/safe_area.py` validates caption and overlay placement against TikTok safe zones (top/bottom UI overlays, side action buttons). Visual Director owns safe-area positioning | P0 | MVP |
+| FR-46 | Story mode classification: `classify_story_mode()` in `clipper_agency/core/story_mode.py` determines narrative structure (single_deep_dive, three_roundup, two_highlight) from segment producer output and validates consistency with actual scene composition | P0 | MVP |
+| FR-47 | Duration budget allocation: `allocate_duration_budget()` in `clipper_agency/core/duration_budget.py` distributes total video duration across beats by role weight (hook, main_claim, evidence, reaction, closing_cta). Ensures no beat exceeds its allocated budget | P0 | MVP |
+| FR-48 | Package consistency validation: `evaluate_package_consistency()` in `clipper_agency/core/package_consistency.py` validates that story mode, scene count, clip types, and visual hierarchy match the declared format_decision. Flags scope mismatches between declared and actual composition | P0 | MVP |
+| FR-49 | Semantic visual relevance scoring: `score_visual_relevance()` in `clipper_agency/core/semantic_visual_review.py` scores claim-to-visual alignment using keyword overlap between story_beat narration goals and actual visual content. Uses evidence contracts on StoryBeat to verify each claim has supporting visuals | P0 | MVP |
+| FR-50 | Structured repair routing: `route_repair()` + `build_repair_plan()` in `clipper_agency/core/repair_router.py` map quality gate failures to the correct existing agent for targeted repair. Routes visual coverage failures to Composer, text collision/safe-area failures to Visual Director, consistency/relevance failures to Segment Producer. Engine executes repair plan without creating new pipeline branches | P0 | MVP |
 
 ### 2.2 User Interfaces
 
