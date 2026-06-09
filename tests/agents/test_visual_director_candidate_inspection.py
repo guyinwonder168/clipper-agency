@@ -401,3 +401,187 @@ class TestExecuteInitializesInspections:
 
         # After execute, _candidate_inspections should be fresh
         assert output.get("candidate_inspections") == []
+
+
+# ---------------------------------------------------------------------------
+# 10. test_extract_candidate_frames_image_type
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCandidateFramesImageType:
+    """_extract_candidate_frames downloads image and returns local path."""
+
+    def test_downloads_photo(self, tmp_path: Any) -> None:
+        agent = _make_agent()
+        cand = _make_candidate("photo", "https://example.com/photo.jpg")
+        agent_dir = str(tmp_path / "agent_dir")
+
+        with patch.object(agent, "_download_image_frame", return_value=["/fake/path.jpg"]):
+            paths = agent._extract_candidate_frames(cand, agent_dir)
+
+        assert paths == ["/fake/path.jpg"]
+
+    def test_downloads_screenshot(self, tmp_path: Any) -> None:
+        agent = _make_agent()
+        cand = _make_candidate("screenshot", "https://example.com/screen.png")
+        agent_dir = str(tmp_path / "agent_dir")
+
+        with patch.object(agent, "_download_image_frame", return_value=["/fake/screen.png"]):
+            paths = agent._extract_candidate_frames(cand, agent_dir)
+
+        assert paths == ["/fake/screen.png"]
+
+
+# ---------------------------------------------------------------------------
+# 11. test_extract_candidate_frames_video_type
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCandidateFramesVideoType:
+    """_extract_candidate_frames downloads video and extracts frame."""
+
+    def test_downloads_and_extracts(self, tmp_path: Any) -> None:
+        agent = _make_agent()
+        cand = _make_candidate("tiktok_clip", "https://tiktok.com/clip1")
+        agent_dir = str(tmp_path / "agent_dir")
+
+        with patch.object(agent, "_download_video_frame", return_value=["/fake/frame.jpg"]):
+            paths = agent._extract_candidate_frames(cand, agent_dir)
+
+        assert paths == ["/fake/frame.jpg"]
+
+
+# ---------------------------------------------------------------------------
+# 12. test_extract_candidate_frames_text_types
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCandidateFramesTextTypes:
+    """_extract_candidate_frames returns empty for text types."""
+
+    def test_text_card(self) -> None:
+        agent = _make_agent()
+        cand = _make_candidate("text_card", "")
+        paths = agent._extract_candidate_frames(cand, "/tmp/agent_dir")
+        assert paths == []
+
+    def test_text_overlay(self) -> None:
+        agent = _make_agent()
+        cand = _make_candidate("text_overlay", "")
+        paths = agent._extract_candidate_frames(cand, "/tmp/agent_dir")
+        assert paths == []
+
+
+# ---------------------------------------------------------------------------
+# 13. test_extract_candidate_frames_no_agent_dir
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCandidateFramesNoAgentDir:
+    """Returns empty when agent_dir is empty (graceful degradation)."""
+
+    def test_empty_agent_dir(self) -> None:
+        agent = _make_agent()
+        cand = _make_candidate("photo", "https://example.com/photo.jpg")
+        paths = agent._extract_candidate_frames(cand, "")
+        assert paths == []
+
+
+# ---------------------------------------------------------------------------
+# 14. test_download_image_frame_success
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadImageFrameSuccess:
+    """_download_image_frame downloads and saves image."""
+
+    def test_downloads_image(self, tmp_path: Any) -> None:
+        import httpx
+
+        agent = _make_agent()
+        frames_dir = tmp_path / "frames"
+        frames_dir.mkdir()
+
+        fake_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24  # minimal PNG-ish data
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_resp = MagicMock()
+            mock_resp.content = fake_image
+            mock_resp.raise_for_status = MagicMock()
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.get.return_value = mock_resp
+            mock_client_cls.return_value = mock_client
+
+            paths = agent._download_image_frame(
+                "https://example.com/photo.jpg", frames_dir,
+            )
+
+        assert len(paths) == 1
+        assert paths[0].endswith(".jpg")
+        from pathlib import Path as P
+        assert P(paths[0]).parent == frames_dir
+
+
+# ---------------------------------------------------------------------------
+# 15. test_download_image_frame_error_returns_empty
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadImageFrameError:
+    """_download_image_frame returns [] on download error."""
+
+    def test_http_error(self, tmp_path: Any) -> None:
+        agent = _make_agent()
+        frames_dir = tmp_path / "frames"
+        frames_dir.mkdir()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.get.side_effect = Exception("network error")
+            mock_client_cls.return_value = mock_client
+
+            paths = agent._download_image_frame(
+                "https://bad.com/photo.jpg", frames_dir,
+            )
+
+        assert paths == []
+
+
+# ---------------------------------------------------------------------------
+# 16. test_run_multimodal_inspection_uses_frame_paths
+# ---------------------------------------------------------------------------
+
+
+class TestRunMultimodalInspectionUsesFramePaths:
+    """_run_multimodal_inspection passes frame_paths from helper."""
+
+    @patch(
+        "clipper_agency.agents.visual_director.store",
+    )
+    def test_photo_gets_frames(self, mock_store: MagicMock) -> None:
+        agent = _make_agent()
+        cand = _make_candidate("photo", "https://example.com/img.jpg")
+        beat = _make_beat()
+        plan_item = _make_plan_item()
+
+        with patch.object(
+            agent, "_extract_candidate_frames", return_value=["/fake/frame.jpg"],
+        ), patch(
+            "clipper_agency.llm.multimodal_client.MultimodalInspectionClient",
+        ) as mock_cls, patch(
+            "clipper_agency.llm.client.OpenRouterClient",
+        ):
+            mock_inspector = MagicMock()
+            mock_inspector.inspect_asset.return_value = _high_inspection()
+            mock_cls.return_value = mock_inspector
+
+            agent._run_multimodal_inspection(
+                cand, beat, plan_item, 1, "/tmp/cache", "key", agent_dir="/tmp/agent",
+            )
+
+        call_kwargs = mock_inspector.inspect_asset.call_args
+        assert call_kwargs.kwargs.get("frame_paths") == ["/fake/frame.jpg"]

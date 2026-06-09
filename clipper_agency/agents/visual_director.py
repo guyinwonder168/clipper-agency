@@ -606,7 +606,7 @@ class VisualDirectorAgent(BaseAgent):
                 continue
 
             candidates = self._collect_candidate_scores(
-                beat, plan_item, job_id, cache_dir, all_inspections,
+                beat, plan_item, job_id, cache_dir, agent_dir, all_inspections,
             )
             self._apply_best_candidate(plan_item, beat, candidates)
 
@@ -618,13 +618,14 @@ class VisualDirectorAgent(BaseAgent):
         plan_item: dict,
         job_id: int,
         cache_dir: str,
+        agent_dir: str,
         all_inspections: list[dict],
     ) -> list[dict]:
         """Build scored candidate list for a single beat."""
         candidates: list[dict] = []
         for candidate in beat.asset_candidates:
             scored = self._score_one_candidate(
-                candidate, beat, plan_item, job_id, cache_dir,
+                candidate, beat, plan_item, job_id, cache_dir, agent_dir,
             )
             if scored:
                 candidates.append(scored)
@@ -638,6 +639,7 @@ class VisualDirectorAgent(BaseAgent):
         plan_item: dict,
         job_id: int,
         cache_dir: str,
+        agent_dir: str = "",
     ) -> dict | None:
         """Score a single candidate using cache or multimodal inspection."""
         asset_id = f"{candidate.type}_{candidate.url[:40]}"
@@ -649,6 +651,7 @@ class VisualDirectorAgent(BaseAgent):
         cached = lookup(cache_dir, cache_key) if cache_dir else None
         inspection = cached or self._run_multimodal_inspection(
             candidate, beat, plan_item, job_id, cache_dir, cache_key,
+            agent_dir=agent_dir,
         )
         if inspection is None:
             return None
@@ -682,11 +685,14 @@ class VisualDirectorAgent(BaseAgent):
         job_id: int,
         cache_dir: str,
         cache_key: str,
+        agent_dir: str = "",
     ) -> dict | None:
         """Attempt multimodal inspection; return inspection dict or None."""
         try:
             from clipper_agency.llm.multimodal_client import MultimodalInspectionClient
             from clipper_agency.llm.client import OpenRouterClient
+
+            frame_paths = self._extract_candidate_frames(candidate, agent_dir)
 
             client = OpenRouterClient()
             inspector = MultimodalInspectionClient(client=client)
@@ -700,7 +706,7 @@ class VisualDirectorAgent(BaseAgent):
                     "narration_goal": beat.narration_goal,
                     "spoken_point": beat.spoken_point,
                 },
-                frame_paths=[],
+                frame_paths=frame_paths,
                 source_metadata={"url": candidate.url, "type": candidate.type},
             )
             if cache_dir and result.get("decision") != "error":
@@ -709,6 +715,88 @@ class VisualDirectorAgent(BaseAgent):
         except Exception as exc:
             logger.debug("Multimodal inspection skipped for %s: %s", candidate.url, exc)
             return None
+
+    def _extract_candidate_frames(
+        self,
+        candidate: Any,
+        agent_dir: str,
+    ) -> list[str]:
+        """Download a candidate asset and return local frame paths for inspection.
+
+        Returns empty list for text types or on any download error (graceful
+        degradation — the inspector can still work from URL/metadata alone).
+        """
+        _IMAGE_TYPES = {"photo", "screenshot"}
+        _VIDEO_TYPES = {"tiktok_clip"}
+        _SKIP_TYPES = {"text_card", "text_overlay"}
+
+        if candidate.type in _SKIP_TYPES or not candidate.url:
+            return []
+
+        if not agent_dir:
+            return []
+
+        frames_dir = Path(agent_dir) / "candidate_frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+
+        if candidate.type in _IMAGE_TYPES:
+            return self._download_image_frame(candidate.url, frames_dir)
+
+        if candidate.type in _VIDEO_TYPES:
+            return self._download_video_frame(candidate.url, frames_dir)
+
+        return []
+
+    def _download_image_frame(
+        self,
+        url: str,
+        frames_dir: Path,
+    ) -> list[str]:
+        """Download an image URL and return its local path as a single frame."""
+        import httpx
+
+        try:
+            ext = Path(url.split("?")[0]).suffix or ".jpg"
+            dest = frames_dir / f"img_{hash(url) & 0xFFFF}{ext}"
+            if dest.exists():
+                return [str(dest)]
+            with httpx.Client(timeout=30) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                dest.write_bytes(resp.content)
+            return [str(dest)]
+        except Exception as exc:
+            logger.debug("Image download for inspection failed: %s", exc)
+            return []
+
+    def _download_video_frame(
+        self,
+        url: str,
+        frames_dir: Path,
+    ) -> list[str]:
+        """Download a video and extract one frame for inspection."""
+        from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
+        from clipper_agency.core.frame_extractor import extract_frames
+
+        try:
+            video_dest = frames_dir / f"vid_{hash(url) & 0xFFFF}.mp4"
+            if not video_dest.exists():
+                ytdlp = YtDlpService()
+                result = ytdlp.download(url, str(video_dest))
+                if not result or not result.path:
+                    return []
+            frame_dir = frames_dir / "extracted"
+            frame_dir.mkdir(parents=True, exist_ok=True)
+            frames = extract_frames(
+                video_path=str(video_dest),
+                timestamps=[0.5],
+                output_dir=str(frame_dir),
+                ffmpeg_runner=run_ffmpeg_streaming,
+            )
+            return [f.path for f in frames if f.path]
+        except Exception as exc:
+            logger.debug("Video frame extraction for inspection failed: %s", exc)
+            return []
 
     def _apply_best_candidate(
         self,

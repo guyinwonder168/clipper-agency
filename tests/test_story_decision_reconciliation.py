@@ -87,31 +87,18 @@ class TestExplicitUserModeWins:
 # ---------------------------------------------------------------------------
 
 class TestMultipleEntitiesForceRoundup:
-    """Rule 2: >1 entity from beats or item_count → roundup."""
+    """Rule 2: item_count > 1 → roundup."""
 
-    def test_multiple_beats_override_single_story_classifier(self):
+    def test_multiple_beats_do_not_override_item_count_1(self):
+        """Beat count is no longer a proxy for entity count.
+
+        Only classifier.item_count > 1 triggers Rule 2. A single story
+        with 3 narrative beats but item_count=1 stays single_story.
+        """
         classifier = _classifier("single_story", confidence=0.7, item_count=1)
         legacy = _legacy("single_story_deep_dive", story_count=1)
-        beats = [
-            {"beat_id": 1, "role": "hook", "narration_goal": "a",
-             "spoken_point": "x", "safe_wording": "x",
-             "visual_must_show": "x", "visual_must_not_show": "",
-             "overlay_text": "", "caption_keywords": [],
-             "asset_candidates": [], "fallback": {"type": "text_card", "headline": "h"}},
-            {"beat_id": 2, "role": "main_claim", "narration_goal": "b",
-             "spoken_point": "y", "safe_wording": "y",
-             "visual_must_show": "y", "visual_must_not_show": "",
-             "overlay_text": "", "caption_keywords": [],
-             "asset_candidates": [], "fallback": {"type": "text_card", "headline": "h"}},
-            {"beat_id": 3, "role": "evidence", "narration_goal": "c",
-             "spoken_point": "z", "safe_wording": "z",
-             "visual_must_show": "z", "visual_must_not_show": "",
-             "overlay_text": "", "caption_keywords": [],
-             "asset_candidates": [], "fallback": {"type": "text_card", "headline": "h"}},
-        ]
-        result = reconcile_story_decisions(classifier, legacy, beats)
-        assert result.story_mode == "roundup"
-        assert "Rule 2" in result.reason
+        result = reconcile_story_decisions(classifier, legacy)
+        assert result.story_mode == "single_story"
 
     def test_item_count_gt_1_forces_roundup(self):
         classifier = _classifier("single_story", confidence=0.7, item_count=3)
@@ -319,15 +306,10 @@ class TestItemCountRespected:
         assert result.story_mode == "roundup"
         assert result.item_count == 3
 
-    def test_item_count_from_beats_used_when_classifier_has_one(self):
-        """When beats show >1 entity but classifier item_count is 1."""
+    def test_beats_do_not_override_item_count_1(self):
+        """Beat count is no longer a proxy — only item_count matters."""
         classifier = _classifier("single_story", confidence=0.7, item_count=1)
         legacy = _legacy("single_story_deep_dive", story_count=1)
-        beats = [
-            {"beat_id": 1, "role": "hook"},
-            {"beat_id": 2, "role": "main_claim"},
-            {"beat_id": 3, "role": "evidence"},
-        ]
-        result = reconcile_story_decisions(classifier, legacy, beats)
-        assert result.story_mode == "roundup"
-        assert result.item_count >= 2
+        result = reconcile_story_decisions(classifier, legacy)
+        assert result.story_mode == "single_story"
+        assert result.item_count == 1

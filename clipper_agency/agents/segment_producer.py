@@ -207,7 +207,7 @@ class SegmentProducerAgent(BaseAgent):
         legacy_format = synthesis.get("format_decision")
         story_beats_raw = synthesis.get("story_beats", [])
         reconciled = reconcile_story_decisions(
-            classifier_decision, legacy_format, story_beats_raw,
+            classifier_decision, legacy_format,
         )
 
         # ── 5. Derive production contract from canonical decision ──────

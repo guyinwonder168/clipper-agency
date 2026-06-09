@@ -423,7 +423,7 @@ class ReviewerAgent(BaseAgent):
         """
         if not rendered_scene_manifest or not story_beats:
             return []
-        scenes = rendered_scene_manifest.get("scenes", [])
+        scenes = rendered_scene_manifest.get("entries", [])
         if not scenes:
             return []
         mappings = map_scenes_to_beats(

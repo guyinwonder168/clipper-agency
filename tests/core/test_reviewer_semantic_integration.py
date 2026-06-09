@@ -216,7 +216,7 @@ class TestReviewerTimestampSemanticGate:
                 "story_beats": _make_story_beats(3),
                 "word_timestamps": _make_word_timestamps(60),
                 "rendered_scene_manifest": {
-                    "scenes": [
+                    "entries": [
                         {"scene_index": 0, "start_sec": 0.0, "end_sec": 6.67},
                         {"scene_index": 1, "start_sec": 6.67, "end_sec": 13.33},
                         {"scene_index": 2, "start_sec": 13.33, "end_sec": 20.0},
@@ -243,7 +243,7 @@ class TestReviewerTimestampSemanticGate:
                 "story_beats": _make_story_beats(3),
                 "word_timestamps": _make_word_timestamps(60),
                 "rendered_scene_manifest": {
-                    "scenes": [
+                    "entries": [
                         {"scene_index": 0, "start_sec": 0.0, "end_sec": 6.0},
                         {"scene_index": 1, "start_sec": 6.0, "end_sec": 12.0},
                         {"scene_index": 2, "start_sec": 12.0, "end_sec": 18.0},
@@ -272,7 +272,7 @@ class TestReviewerTimestampSemanticGate:
                 "story_beats": _make_story_beats(5),
                 "word_timestamps": _make_word_timestamps(90, sec_per_word=0.33),
                 "rendered_scene_manifest": {
-                    "scenes": [
+                    "entries": [
                         # This single scene covers the whole 30s
                         {"scene_index": 0, "start_sec": 0.0, "end_sec": 30.0},
                     ],
@@ -323,7 +323,7 @@ class TestReviewerTimestampSemanticGate:
                 "audio_duration_sec": 20.0,
                 "visual_duration_sec": 20.0,
                 "rendered_scene_manifest": {
-                    "scenes": [
+                    "entries": [
                         {"scene_index": 0, "start_sec": 0.0, "end_sec": 10.0},
                     ],
                 },
@@ -376,7 +376,7 @@ class TestReviewerTimestampSemanticGate:
                 "story_beats": _make_story_beats(2),
                 "word_timestamps": _make_word_timestamps(40),
                 "rendered_scene_manifest": {
-                    "scenes": [
+                    "entries": [
                         {"scene_index": 0, "start_sec": 0.0, "end_sec": 10.0},
                         {"scene_index": 1, "start_sec": 10.0, "end_sec": 20.0},
                     ],
@@ -407,7 +407,7 @@ class TestReviewerTimestampSemanticGate:
                 "story_beats": _make_story_beats(2),
                 "word_timestamps": _make_word_timestamps(40),
                 "rendered_scene_manifest": {
-                    "scenes": [
+                    "entries": [
                         {"scene_index": 0, "start_sec": 0.0, "end_sec": 10.0},
                         # Orphan scene
                         {"scene_index": 1, "start_sec": 50.0, "end_sec": 55.0},

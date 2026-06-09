@@ -109,17 +109,25 @@ class MediaPipeFaceDetector:
             FaceInspectionResult with provider="mediapipe", model metadata,
             and a list of FaceRegion objects sorted by primary-face priority.
         """
-        import mediapipe as mp
+        import cv2
+        import numpy as np
 
         model = self._get_model(self.model_selection, self.min_confidence)
 
-        # Load image via MediaPipe's image utility
-        mp_image = mp.Image.create_from_file(image_path)
-        image_width = mp_image.width
-        image_height = mp_image.height
+        # Load image via OpenCV → numpy array (Solutions API expects numpy)
+        image = cv2.imread(image_path)
+        if image is None:
+            return FaceInspectionResult(
+                provider="mediapipe",
+                model=f"face_detection_v{self.model_selection}",
+                timestamp_sec=timestamp_sec,
+                faces=[],
+            )
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_height, image_width = image.shape[:2]
 
         # Run face detection
-        results = model.process(mp_image)
+        results = model.process(image_rgb)
 
         faces: list[FaceRegion] = []
 

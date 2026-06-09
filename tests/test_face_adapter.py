@@ -5,7 +5,7 @@ All tests mock MediaPipe — no real model loaded, no paid API calls.
 
 import sys
 from contextlib import contextmanager
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from clipper_agency.config.schema import (
     FaceDetectionConfig,
@@ -47,12 +47,39 @@ def _mock_detection_single_score(xmin, ymin, width, height, score):
     return det
 
 
-def _mock_mp_image(width=1920, height=1080):
-    """Return a mock mp.Image with dimensions."""
+def _mock_cv2_image(width=1920, height=1080):
+    """Return a mock numpy-like array with shape (height, width, 3)."""
     img = MagicMock()
-    img.width = width
-    img.height = height
+    img.shape = (height, width, 3)
     return img
+
+
+@contextmanager
+def _mock_face_adapter_env(cv2_image=None):
+    """Context manager combining fake mediapipe and mocked cv2.
+
+    Yields ``(mock_fd_module, mock_cv2)`` so tests can configure FaceDetection.
+    Optionally accepts a pre-built cv2 mock image (default: 1920x1080).
+    """
+    if cv2_image is None:
+        cv2_image = _mock_cv2_image()
+
+    mock_cv2 = MagicMock()
+    mock_cv2.imread.return_value = cv2_image
+    mock_cv2.COLOR_BGR2RGB = 4  # cv2 constant value
+    mock_cv2.cvtColor.return_value = cv2_image
+
+    saved_cv2 = sys.modules.get("cv2")
+    sys.modules["cv2"] = mock_cv2
+
+    with _fake_mediapipe() as mock_fd:
+        try:
+            yield mock_fd
+        finally:
+            if saved_cv2 is not None:
+                sys.modules["cv2"] = saved_cv2
+            else:
+                sys.modules.pop("cv2", None)
 
 
 def _mock_process_result(detections):
@@ -71,8 +98,7 @@ def _mock_process_result(detections):
 def _fake_mediapipe():
     """Context manager that sets up fake mediapipe modules in sys.modules.
 
-    Yields ``(mock_image_cls, mock_fd_module)`` so tests can configure
-    the fake ``mp.Image`` and ``FaceDetection`` with appropriate return values.
+    Yields ``mock_fd_module`` so tests can configure the fake ``FaceDetection``.
 
     On exit, all ``mediapipe*`` keys are removed from ``sys.modules``.
     """
@@ -82,11 +108,9 @@ def _fake_mediapipe():
             saved[key] = sys.modules.pop(key)
 
     mock_mp = MagicMock()
-    mock_image_cls = MagicMock()
     mock_fd_module = MagicMock()
     mock_solutions = MagicMock()
 
-    mock_mp.Image = mock_image_cls
     mock_mp.solutions = mock_solutions
     mock_solutions.face_detection = mock_fd_module
 
@@ -98,7 +122,7 @@ def _fake_mediapipe():
     MediaPipeFaceDetector._reset_model()
 
     try:
-        yield mock_image_cls, mock_fd_module
+        yield mock_fd_module
     finally:
         for key in list(sys.modules):
             if key.startswith("mediapipe"):
@@ -154,8 +178,7 @@ class TestLazyImport:
         MFD._reset_model()
         assert "mediapipe" not in sys.modules
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = _mock_mp_image()
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = _mock_process_result([])
             mock_fd.FaceDetection.return_value = mock_model
@@ -176,11 +199,9 @@ class TestBasicDetection:
     def test_returns_face_inspection_result_with_faces(self):
         """A single high-confidence detection produces one FaceRegion."""
         detection = _mock_detection(0.1, 0.1, 0.3, 0.3, 0.95)
-        mp_img = _mock_mp_image(800, 600)
         mock_result = _mock_process_result([detection])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env(_mock_cv2_image(800, 600)) as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -199,11 +220,9 @@ class TestBasicDetection:
             _mock_detection(0.5, 0.1, 0.3, 0.3, 0.85),
             _mock_detection(0.2, 0.6, 0.25, 0.25, 0.80),
         ]
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result(detections)
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -215,11 +234,9 @@ class TestBasicDetection:
 
     def test_empty_image_no_faces(self):
         """No detections → empty faces list, not an error."""
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result([])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -243,11 +260,9 @@ class TestConfidenceThreshold:
             _mock_detection(0.5, 0.5, 0.2, 0.2, 0.45),  # filter
             _mock_detection(0.3, 0.3, 0.2, 0.2, 0.59),  # filter (below 0.60)
         ]
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result(detections)
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -276,11 +291,9 @@ class TestConfidenceThreshold:
             _mock_detection(0.1, 0.1, 0.2, 0.2, 0.95),
             _mock_detection(0.5, 0.5, 0.2, 0.2, 0.75),  # below 0.80
         ]
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result(detections)
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -306,11 +319,9 @@ class TestPrimaryFaceSelection:
             _mock_detection(0.1, 0.1, 0.3, 0.3, 0.90),
             _mock_detection(0.3, 0.3, 0.5, 0.5, 0.85),
         ]
-        mp_img = _mock_mp_image(1000, 1000)
         mock_result = _mock_process_result(detections)
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env(_mock_cv2_image(1000, 1000)) as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -333,11 +344,9 @@ class TestPrimaryFaceSelection:
             _mock_detection(0.05, 0.05, 0.2, 0.2, 0.90),
             _mock_detection(0.5, 0.5, 0.2, 0.2, 0.90),
         ]
-        mp_img = _mock_mp_image(2000, 2000)
         mock_result = _mock_process_result(detections)
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env(_mock_cv2_image(2000, 2000)) as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -353,11 +362,9 @@ class TestPrimaryFaceSelection:
     def test_single_face_is_always_primary(self):
         """A single detected face is marked as primary."""
         detection = _mock_detection(0.2, 0.2, 0.4, 0.4, 0.90)
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result([detection])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -379,11 +386,9 @@ class TestBBoxNormalization:
         """MediaPipe normalized (0-1) coords → absolute pixel coords."""
         # bbox at normalized (0.1, 0.2) size (0.3, 0.4) on 800x600 image
         detection = _mock_detection(0.1, 0.2, 0.3, 0.4, 0.95)
-        mp_img = _mock_mp_image(800, 600)
         mock_result = _mock_process_result([detection])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env(_mock_cv2_image(800, 600)) as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -402,11 +407,9 @@ class TestBBoxNormalization:
         sizes = [(640, 480), (1920, 1080), (720, 1280)]
         for w, h in sizes:
             detection = _mock_detection(0.0, 0.0, 1.0, 1.0, 0.95)
-            mp_img = _mock_mp_image(w, h)
             mock_result = _mock_process_result([detection])
 
-            with _fake_mediapipe() as (mock_image, mock_fd):
-                mock_image.create_from_file.return_value = mp_img
+            with _mock_face_adapter_env(_mock_cv2_image(w, h)) as mock_fd:
                 mock_model = MagicMock()
                 mock_model.process.return_value = mock_result
                 mock_fd.FaceDetection.return_value = mock_model
@@ -426,11 +429,9 @@ class TestProviderMetadata:
     def test_result_includes_provider_and_model(self):
         """FaceInspectionResult carries provider and model metadata."""
         detection = _mock_detection(0.1, 0.1, 0.2, 0.2, 0.90)
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result([detection])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -452,11 +453,9 @@ class TestTimestampPropagation:
     def test_detect_propagates_timestamp_sec(self):
         """timestamp_sec is carried through to FaceInspectionResult."""
         detection = _mock_detection(0.1, 0.1, 0.2, 0.2, 0.90)
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result([detection])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -477,11 +476,9 @@ class TestModelReuse:
     def test_model_is_reused_across_calls(self):
         """The MediaPipe model is created once and reused (singleton behavior)."""
         detection = _mock_detection(0.1, 0.1, 0.2, 0.2, 0.90)
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result([detection])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -497,11 +494,9 @@ class TestModelReuse:
     def test_model_singleton_respected_across_detector_instances(self):
         """Multiple MediaPipeFaceDetector instances share the same class-level model."""
         detection = _mock_detection(0.1, 0.1, 0.2, 0.2, 0.90)
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result([detection])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -523,11 +518,9 @@ class TestScoreExtraction:
     def test_score_list_extracted_as_first_element(self):
         """When detection.score is a list, the first element is used."""
         detection = _mock_detection(0.1, 0.1, 0.2, 0.2, 0.93)  # wrapped to [0.93]
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result([detection])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -541,11 +534,9 @@ class TestScoreExtraction:
     def test_scalar_score_used_directly(self):
         """When detection.score is a scalar float, it is used as-is."""
         detection = _mock_detection_single_score(0.1, 0.1, 0.2, 0.2, 0.87)
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result([detection])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model
@@ -566,11 +557,9 @@ class TestNoIdentityRecognition:
     def test_face_regions_have_no_identity_data(self):
         """FaceRegion only has bbox, confidence, is_primary — no identity fields."""
         detection = _mock_detection(0.1, 0.1, 0.2, 0.2, 0.95)
-        mp_img = _mock_mp_image()
         mock_result = _mock_process_result([detection])
 
-        with _fake_mediapipe() as (mock_image, mock_fd):
-            mock_image.create_from_file.return_value = mp_img
+        with _mock_face_adapter_env() as mock_fd:
             mock_model = MagicMock()
             mock_model.process.return_value = mock_result
             mock_fd.FaceDetection.return_value = mock_model

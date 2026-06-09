@@ -5,7 +5,7 @@ the LLM-produced legacy format into a single canonical StoryModeDecision.
 
 Rules (priority order):
 1. Explicit user mode (confidence >= 0.9) always wins.
-2. >1 entity detected (from story_beats or item_count > 1) → roundup mode,
+2. >1 entity detected (item_count > 1) → roundup mode,
    unless explicitly overridden by Rule 1.
 3. Legacy three_story_roundup cannot coexist with single_story — roundup wins.
 4. Default fallback — use the classifier's story_mode_decision.
@@ -51,13 +51,6 @@ def _normalise_legacy(
     return FormatDecision(**raw)
 
 
-def _count_beat_entities(beats: list[dict] | None) -> int:
-    """Return the number of distinct story beats (proxy for entity count)."""
-    if not beats:
-        return 0
-    return len(beats)
-
-
 def _is_explicit_override(decision: StoryModeDecision) -> bool:
     """Rule 1: high-confidence decision is an explicit user/override signal."""
     return decision.confidence >= EXPLICIT_CONFIDENCE_THRESHOLD
@@ -65,12 +58,9 @@ def _is_explicit_override(decision: StoryModeDecision) -> bool:
 
 def _has_multiple_entities(
     classifier: StoryModeDecision,
-    beats: list[dict] | None,
 ) -> bool:
-    """Rule 2: more than one entity detected from beats or item_count."""
-    if classifier.item_count > 1:
-        return True
-    return _count_beat_entities(beats) > 1
+    """Rule 2: more than one entity detected via classifier item_count."""
+    return classifier.item_count > 1
 
 
 def _is_roundup_contradiction(
@@ -140,7 +130,6 @@ def _apply_roundup(
 def reconcile_story_decisions(
     story_mode_decision: dict | StoryModeDecision,
     legacy_format_decision: dict | FormatDecision | None,
-    story_beats: list[dict] | None = None,
 ) -> StoryModeDecision:
     """Reconcile classifier and legacy decisions into one canonical decision.
 
@@ -150,8 +139,6 @@ def reconcile_story_decisions(
         Output of the deterministic classifier (dict or StoryModeDecision).
     legacy_format_decision:
         Legacy FormatDecision from LLM output, or None.
-    story_beats:
-        Optional list of story beat dicts for entity counting.
 
     Returns
     -------
@@ -175,12 +162,8 @@ def reconcile_story_decisions(
         )
 
     # Rule 2: multiple entities detected
-    if _has_multiple_entities(classifier, story_beats):
-        entity_count = max(
-            classifier.item_count,
-            _count_beat_entities(story_beats),
-        )
-        return _apply_roundup(classifier, entity_count, 2, legacy, original_mode)
+    if _has_multiple_entities(classifier):
+        return _apply_roundup(classifier, classifier.item_count, 2, legacy, original_mode)
 
     # Rule 3: legacy roundup contradicts single_story
     if _is_roundup_contradiction(classifier, legacy):
