@@ -105,10 +105,50 @@ class SafeAreaConfig(BaseModel):
     face_overlap_max: float = 0.15
 
 
+class RuntimeInspectionConfig(BaseModel):
+    """Runtime keyframe extraction and inspection controls."""
+
+    enabled: bool = True
+    persist_keyframes: bool = True
+    frame_interval_sec: float = 0.5
+    max_frames_per_asset: int = 8
+    perceptual_hash_distance: int = 6
+
+
+class OCRConfig(BaseModel):
+    """OCR runtime inspection controls."""
+
+    enabled: bool = True
+    provider: str = "paddleocr"
+    min_confidence: float = 0.55
+    large_region_area_ratio: float = 0.20
+
+
+class FaceDetectionConfig(BaseModel):
+    """Face detection runtime inspection controls."""
+
+    enabled: bool = True
+    provider: str = "mediapipe"
+    min_confidence: float = 0.60
+
+
 class SemanticReviewConfig(BaseModel):
     """Settings for semantic visual review and repair."""
 
+    enabled: bool = True
+    provider: str = "existing_multimodal_llm"
+    max_assets_per_beat: int = 3
+    max_frames_per_asset: int = 4
+    minimum_claim_support: float = 0.70
+    maximum_misleading_risk: float = 0.30
     max_repair_cycles: int = 2
+
+
+class EnforcementConfig(BaseModel):
+    """Quality enforcement controls for review and publication."""
+
+    block_on_reviewer_fail: bool = True
+    block_publication_on_quality_fail: bool = True
 
 
 class QualityConfig(BaseModel):
@@ -117,7 +157,11 @@ class QualityConfig(BaseModel):
     visual_coverage: VisualCoverageConfig = Field(default_factory=VisualCoverageConfig)
     text_collision: TextCollisionConfig = Field(default_factory=TextCollisionConfig)
     safe_area: SafeAreaConfig = Field(default_factory=SafeAreaConfig)
+    runtime_inspection: RuntimeInspectionConfig = Field(default_factory=RuntimeInspectionConfig)
+    ocr: OCRConfig = Field(default_factory=OCRConfig)
+    face_detection: FaceDetectionConfig = Field(default_factory=FaceDetectionConfig)
     semantic_review: SemanticReviewConfig = Field(default_factory=SemanticReviewConfig)
+    enforcement: EnforcementConfig = Field(default_factory=EnforcementConfig)
 
 
 class AppSettings(BaseSettings):
