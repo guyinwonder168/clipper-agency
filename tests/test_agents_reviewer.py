@@ -372,3 +372,76 @@ class TestReviewerExecute:
         system_content = mock_chat.call_args.kwargs["messages"][0]["content"]
         assert "av_sync: pass" in system_content
         assert "programmatic checks already passed" in system_content.lower()
+
+
+# ---------------------------------------------------------------------------
+# Reviewer hard-gate tests (Batch 1A — must fail)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewerHardGates:
+    """Tests for programmatic hard gates that force FAIL before LLM review.
+
+    These tests MUST FAIL until hard gates are implemented in Batch 2A.
+    """
+
+    def test_reviewer_fails_when_video_shorter_than_audio(self, mocker):
+        """Hard gate: video shorter than audio must FAIL regardless of LLM score."""
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 90, "feedback": "Great!", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        mocker.patch(
+            "clipper_agency.agents.reviewer.get_agent_config",
+            return_value={"model": "test-model", "temperature": 0.3, "max_completion_tokens": 500},
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test topic",
+            script=[{"scene": 1, "text": "Hello"}],
+            caption="Great video #test",
+            audio_duration_sec=23.25,
+            visual_duration_sec=21.21,
+        )
+        # The LLM returned pass/90 but the hard gate should override to fail
+        assert result["status"] == "fail", (
+            "Reviewer should fail when video (21.21s) is shorter than audio (23.25s), "
+            f"got status={result['status']} score={result.get('score')}"
+        )
+        # Hard gate means LLM should NOT even be called
+        # (or if called for soft checks, its verdict is overridden)
+
+    def test_reviewer_fails_broken_tiktok_clip_action(self, mocker):
+        """Hard gate: broken tiktok_clip action (no source_url) must FAIL."""
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "Looks fine", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        mocker.patch(
+            "clipper_agency.agents.reviewer.get_agent_config",
+            return_value={"model": "test-model", "temperature": 0.3, "max_completion_tokens": 500},
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test topic",
+            script=[{"scene": 1, "text": "Hello"}],
+            caption="Nice #viral",
+            visual_plan_actions=[
+                {"type": "tiktok_clip"},  # broken: no source_url
+                {"type": "text_card", "headline": "Story 2"},
+            ],
+        )
+        assert result["status"] == "fail", (
+            "Reviewer should fail when visual plan has broken tiktok_clip action, "
+            f"got status={result['status']}"
+        )

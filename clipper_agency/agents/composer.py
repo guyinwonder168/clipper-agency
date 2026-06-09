@@ -15,6 +15,7 @@ from clipper_agency.core.card_generator import CardGenerator, CardType
 from clipper_agency.core.card_to_video import card_to_video
 from clipper_agency.core.ffmpeg_preflight import FFmpegPreflight
 from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
+from clipper_agency.core.media_probe import probe_video
 from clipper_agency.core.paths import (
     agent_input_file,
     agent_output_file,
@@ -237,6 +238,8 @@ class ComposerAgent(BaseAgent):
         assets: list[dict] | None = None,
         audio_files: list[str] | None = None,
         output_dir: str = "",
+        voiceover_duration_sec: float | None = None,
+        intro_card_duration_sec: float | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         # ── Audio-first mode ──
@@ -307,6 +310,7 @@ class ComposerAgent(BaseAgent):
         return self._execute_assembly(
             video_assets, voice_files, output_dir, assets_cache,
             job_id, agent_dir, script_scenes=script_scenes,
+            voiceover_duration_sec=voiceover_duration_sec,
         )
 
     def _execute_assembly(
@@ -318,6 +322,7 @@ class ComposerAgent(BaseAgent):
         job_id: int,
         agent_dir: str,
         script_scenes: list[dict] | None = None,
+        voiceover_duration_sec: float | None = None,
     ) -> dict[str, Any]:
         """Run the assembly pipeline: concat scenes + mix audio + thumbnail."""
         if not video_assets and not voice_files:
@@ -326,6 +331,8 @@ class ComposerAgent(BaseAgent):
                 "status": "completed",
                 "video_path": "",
                 "thumbnail_path": "",
+                "scene_count": 0,
+                "output_duration_sec": 0.0,
             }
 
         video_path = f"{output_dir}/job_{job_id}/video.mp4"
@@ -336,6 +343,7 @@ class ComposerAgent(BaseAgent):
                 video_assets, voice_files, video_path, thumbnail_path,
                 assets_cache, job_id, agent_dir,
                 script_scenes=script_scenes,
+                voiceover_duration_sec=voiceover_duration_sec,
             )
         except subprocess.CalledProcessError as e:
             return self._handle_ffmpeg_error(e, video_path, agent_dir)
@@ -358,6 +366,7 @@ class ComposerAgent(BaseAgent):
         job_id: int,
         agent_dir: str,
         script_scenes: list[dict] | None = None,
+        voiceover_duration_sec: float | None = None,
     ) -> dict[str, Any]:
         """Attempt assembly. Raises on FFmpeg or unexpected errors."""
         assemble_result = self._assemble_video(
@@ -379,23 +388,42 @@ class ComposerAgent(BaseAgent):
                 "video_path": "",
                 "thumbnail_path": "",
                 "card_fallback_scenes": card_fallback_scenes,
+                "scene_count": len(video_assets),
+                "output_duration_sec": 0.0,
             }
             if agent_dir:
                 write_json(agent_output_file(assets_cache, job_id, "composer"), output)
             return output
         self._generate_thumbnail(video_path, thumbnail_path)
 
+        # Probe output duration for duration guard
+        output_dur = self._probe_output_duration(video_path)
+
         logger.info(
-            "Composer: completed — video=%s thumbnail=%s cards=%d",
-            video_path, thumbnail_path, len(card_fallback_scenes),
+            "Composer: completed — video=%s thumbnail=%s cards=%d dur=%.2fs",
+            video_path, thumbnail_path, len(card_fallback_scenes), output_dur,
         )
 
-        output = {
+        output: dict[str, Any] = {
             "status": "completed",
             "video_path": video_path,
             "thumbnail_path": thumbnail_path,
             "card_fallback_scenes": card_fallback_scenes,
+            "scene_count": len(video_assets),
+            "output_duration_sec": output_dur,
         }
+
+        # Duration guard: output must not be shorter than voiceover
+        if (
+            voiceover_duration_sec is not None
+            and output_dur < voiceover_duration_sec
+        ):
+            output["status"] = "failed"
+            output["error"] = (
+                f"Output duration ({output_dur:.2f}s) "
+                f"shorter than voiceover ({voiceover_duration_sec:.2f}s)"
+            )
+
         if agent_dir:
             self._persist_diagnostics(agent_dir, ffmpeg_cmd, "")
             write_json(agent_output_file(assets_cache, job_id, "composer"),
@@ -809,6 +837,17 @@ class ComposerAgent(BaseAgent):
         run_ffmpeg_streaming(cmd, timeout=60, label="thumbnail")
 
     # ── Audio-first smart trim helpers ──
+
+    @staticmethod
+    def _probe_output_duration(video_path: str) -> float:
+        """Probe the output video duration via media_probe. Returns 0.0 on failure."""
+        try:
+            info = probe_video(video_path, str(Path(video_path).parent))
+            if info is not None and info.duration is not None:
+                return info.duration
+        except Exception:
+            logger.warning("Composer: could not probe output duration for %s", video_path)
+        return 0.0
 
     def _probe_duration(self, clip_path: str) -> float:
         """Get clip duration in seconds using ffprobe."""
@@ -1357,12 +1396,17 @@ class ComposerAgent(BaseAgent):
 
         self._generate_thumbnail(video_path, thumbnail_path)
 
+        # Probe output duration for reporting
+        output_dur = self._probe_output_duration(video_path)
+
         output = {
             "status": "completed",
             "video_path": video_path,
             "thumbnail_path": thumbnail_path,
             "card_fallback_scenes": card_fallback_scenes,
             "mode": "audio_first",
+            "scene_count": len(trimmed_clips),
+            "output_duration_sec": output_dur,
         }
         if agent_dir:
             self._persist_diagnostics(agent_dir, cmd, "")

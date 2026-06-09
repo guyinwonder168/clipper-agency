@@ -48,6 +48,26 @@ def test_agent_llm_config():
     assert cfg.temperature == pytest.approx(0.3)
 
 
+def test_content_planning_config_aliases():
+    """ContentPlanningConfig provides semantic aliases for clarity."""
+    from clipper_agency.config.schema import ContentPlanningConfig
+
+    cp = ContentPlanningConfig(
+        target_duration_sec=45,
+        hard_limit_sec=50,
+    )
+    # Aliases mirror primary fields
+    assert cp.target_script_duration_sec == 45
+    assert cp.max_final_duration_sec == 50
+    # Primary fields unchanged
+    assert cp.target_duration_sec == 45
+    assert cp.hard_limit_sec == 50
+    # Defaults
+    defaults = ContentPlanningConfig()
+    assert defaults.target_script_duration_sec == 55
+    assert defaults.max_final_duration_sec == 60
+
+
 # --- Task 5: Config Hierarchy ---
 
 

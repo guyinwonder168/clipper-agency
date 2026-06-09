@@ -585,3 +585,132 @@ class TestSegmentProducerAssetCandidates:
         merged = agent._merge_asset_candidates(group_a, group_b)
         assert len(merged) == 1
         assert merged[0]["reason"] == "A"
+
+
+# ---------------------------------------------------------------------------
+# Segment Producer richer asset portfolio tests (Batch 1A — must fail)
+# ---------------------------------------------------------------------------
+
+
+class TestSegmentProducerAssetPortfolio:
+    """Tests for richer asset portfolio with ranking and no-watermark URLs.
+
+    These tests MUST FAIL until the enhanced portfolio is implemented in Batch 2A.
+    """
+
+    def test_asset_candidates_are_ranked_with_relevance_metadata(self):
+        """Asset candidates should include relevance_score and provenance metadata."""
+        agent = SegmentProducerAgent()
+        # This method will be added in Batch 2A
+        candidates = agent._build_asset_portfolio(
+            scrapecreators_results=[
+                {
+                    "title": "Ruben Onsu Sarwendah drama",
+                    "url": "https://www.tiktok.com/@user/video/111",
+                    "play_count": 500000,
+                    "download_no_watermark_addr": "https://cdn.example.com/nw/111.mp4",
+                },
+                {
+                    "title": "Unrelated cooking video",
+                    "url": "https://www.tiktok.com/@chef/video/222",
+                    "play_count": 1000,
+                },
+            ],
+            firecrawl_results=[
+                {
+                    "title": "Sarwendah apologizes publicly",
+                    "url": "https://news.example.com/sarwendah",
+                    "content": "Sarwendah made a public apology...",
+                },
+            ],
+            beat_keywords=["Sarwendah", "apology", "drama"],
+        )
+        assert len(candidates) >= 1
+        # Each candidate should have relevance metadata
+        for c in candidates:
+            assert "relevance_score" in c
+            assert isinstance(c["relevance_score"], (int, float))
+            assert "provenance" in c
+            assert "source" in c
+
+    def test_scrapecreators_no_watermark_url_becomes_download_url(self):
+        """When download_no_watermark_addr exists, it becomes download_url."""
+        agent = SegmentProducerAgent()
+        candidates = agent._build_asset_portfolio(
+            scrapecreators_results=[
+                {
+                    "title": "TikTok video",
+                    "url": "https://www.tiktok.com/@user/video/111",
+                    "download_no_watermark_addr": "https://cdn.example.com/nw/111.mp4",
+                },
+            ],
+            firecrawl_results=[],
+            beat_keywords=["test"],
+        )
+        tiktok_candidates = [c for c in candidates if c.get("source") == "scrapecreators"]
+        assert len(tiktok_candidates) >= 1
+        c = tiktok_candidates[0]
+        # Canonical URL is preserved
+        assert "tiktok.com" in c.get("url", "")
+        # download_url points to no-watermark version
+        assert c.get("download_url") == "https://cdn.example.com/nw/111.mp4"
+        assert c.get("download_url_type") == "no_watermark"
+
+    def test_scrapecreators_missing_no_watermark_uses_existing_download_url_fallback(self):
+        """When download_no_watermark_addr is absent, use existing download URL logic."""
+        agent = SegmentProducerAgent()
+        candidates = agent._build_asset_portfolio(
+            scrapecreators_results=[
+                {
+                    "title": "TikTok video",
+                    "url": "https://www.tiktok.com/@user/video/222",
+                    # No download_no_watermark_addr field
+                    "download_url": "https://cdn.example.com/wm/222.mp4",
+                },
+            ],
+            firecrawl_results=[],
+            beat_keywords=["test"],
+        )
+        tiktok_candidates = [c for c in candidates if c.get("source") == "scrapecreators"]
+        if tiktok_candidates:
+            c = tiktok_candidates[0]
+            # Should use the existing download_url, not crash
+            assert c.get("download_url") is not None
+            # download_url_type should NOT be "no_watermark"
+            assert c.get("download_url_type") != "no_watermark"
+
+    def test_important_beat_gets_video_image_and_text_fallback_candidates(self):
+        """Important beat should have at least 2 video + 1 image + 1 fallback candidate."""
+        agent = SegmentProducerAgent()
+        candidates = agent._build_asset_portfolio(
+            scrapecreators_results=[
+                {
+                    "title": "Ruben Onsu video 1",
+                    "url": "https://www.tiktok.com/@user/video/301",
+                    "play_count": 500000,
+                },
+                {
+                    "title": "Ruben Onsu video 2",
+                    "url": "https://www.tiktok.com/@user/video/302",
+                    "play_count": 300000,
+                },
+            ],
+            firecrawl_results=[
+                {
+                    "title": "Ruben Onsu news article with image",
+                    "url": "https://news.example.com/ruben",
+                    "content": "Article about Ruben...",
+                    "image": "https://img.example.com/ruben.jpg",
+                },
+            ],
+            beat_keywords=["Ruben Onsu", "drama"],
+            is_important_beat=True,
+        )
+        video_candidates = [c for c in candidates if c.get("type") in ("tiktok_clip", "video")]
+        image_candidates = [c for c in candidates if c.get("type") in ("photo", "screenshot", "image")]
+        fallback_candidates = [c for c in candidates if c.get("type") in ("text_card",)]
+
+        assert len(video_candidates) >= 2, f"Expected >= 2 video candidates, got {len(video_candidates)}"
+        assert len(image_candidates) >= 1 or len(fallback_candidates) >= 1, (
+            "Expected at least 1 image or fallback candidate"
+        )

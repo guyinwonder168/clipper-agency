@@ -557,6 +557,97 @@ class VisualDirectorAgent(BaseAgent):
             deduped.append(item)
         return deduped
 
+    def _resolve_beat_plan_assets(
+        self, plan: list[dict], do_not_use: list[str],
+    ) -> list[dict]:
+        """Resolve source_urls for each beat, replacing duplicates/missing with candidates.
+
+        For each beat, if the current source_url is missing, blocked, or already
+        used, attempt to find a replacement from ``asset_candidates``.  If no
+        usable URL exists for a ``tiktok_clip`` action, fall back to text_card.
+        """
+        blocked: set[str] = set(do_not_use)
+        used_urls: set[str] = set()
+        resolved: list[dict] = []
+
+        for beat in plan:
+            beat = dict(beat)
+            action = dict(beat.get("action", {}))
+            source_url: str | None = action.get("source_url")
+
+            def _is_url_usable(url: str | None) -> bool:
+                return bool(url) and url not in blocked and url not in used_urls
+
+            if _is_url_usable(source_url):
+                used_urls.add(source_url)  # type: ignore[arg-type]
+            else:
+                replacement = self._find_replacement_url(
+                    beat.get("asset_candidates", []),
+                    action.get("type", ""),
+                    blocked,
+                    used_urls,
+                )
+                if replacement:
+                    action["source_url"] = replacement
+                    used_urls.add(replacement)
+                else:
+                    action.pop("source_url", None)
+
+            if action.get("type") == "tiktok_clip" and not action.get("source_url"):
+                action = {
+                    "type": "text_card",
+                    "reason": "No usable source URL for tiktok_clip; fallback to text_card",
+                }
+
+            beat["action"] = action
+            resolved.append(beat)
+        return resolved
+
+    @staticmethod
+    def _find_replacement_url(
+        candidates: list[dict],
+        action_type: str,
+        blocked: set[str],
+        used_urls: set[str],
+    ) -> str | None:
+        """Return the first candidate URL matching action type and not blocked/used."""
+        for candidate in candidates:
+            url = candidate.get("url", "")
+            cand_type = candidate.get("type", "")
+            if not url or url in blocked or url in used_urls:
+                continue
+            if cand_type == action_type:
+                return url
+            if cand_type == "video" and action_type == "tiktok_clip" and "tiktok.com" in url:
+                return url
+        return None
+
+    def _plan_intro_card(
+        self,
+        video_format: str,
+        topic: str,
+    ) -> dict | None:
+        """Plan an intro card (scene 0) for roundup video formats.
+
+        Returns ``None`` for non-roundup formats (single story, text-only).
+        """
+        _ROUNDUP_FORMATS = frozenset({"three_story_roundup", "two_story_highlight"})
+
+        if video_format not in _ROUNDUP_FORMATS:
+            return None
+
+        return {
+            "scene_number": 0,
+            "beat_id": 0,
+            "role": "intro_card",
+            "target_duration": 3.0,
+            "action": {
+                "type": "text_card",
+                "headline": topic,
+                "style": "breaking_news",
+            },
+        }
+
     # ------------------------------------------------------------------
     # Legacy planning paths (kept for backward compatibility)
     # ------------------------------------------------------------------
