@@ -4,6 +4,7 @@ __pycache__/
 .env
 data/
 outputs/
+cache/
 assets/cache/
 *.db
 *.db-wal
