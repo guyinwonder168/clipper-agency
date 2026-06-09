@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 _MAX_CAPTION_LEN = 150
 _AV_DRIFT_TOLERANCE_SEC = 0.5
 
+_FAIL_REASON_VISUAL_COVERAGE = "VISUAL_COVERAGE_FAILED"
+_FAIL_REASON_TEXT_COLLISION = "TEXT_COLLISION_FAILED"
+_FAIL_REASON_SAFE_AREA = "SAFE_AREA_FAILED"
+
 REVIEWER_PROMPT = """You are a content quality reviewer for a TikTok creator channel
 producing short-form infotainment videos with voiceover narration.
 
@@ -178,6 +182,63 @@ class ReviewerAgent(BaseAgent):
 
         return None
 
+    def _fail_if_visual_coverage_failed(self, diagnostics: dict | None) -> dict[str, Any] | None:
+        """Return fail dict if visual coverage hard-failed, else None."""
+        if not diagnostics:
+            return None
+        vc = diagnostics.get("visual_coverage")
+        if not vc or vc.get("status") != "fail":
+            return None
+        hard_fails = [i for i in vc.get("issues", []) if isinstance(i, dict) and i.get("severity") == "hard_fail"]
+        if hard_fails:
+            return {
+                "status": "fail",
+                "reason": _FAIL_REASON_VISUAL_COVERAGE,
+                "score": 0,
+                "feedback": f"Hard gate: visual coverage failed ({len(hard_fails)} hard-fail issues)",
+                "issues": ["visual_coverage_failed"],
+                "programmatic_checks": {},
+            }
+        return None
+
+    def _fail_if_text_collision_failed(self, diagnostics: dict | None) -> dict[str, Any] | None:
+        """Return fail dict if text collision hard-failed, else None."""
+        if not diagnostics:
+            return None
+        tc = diagnostics.get("text_collision")
+        if not tc:
+            return None
+        hard_fails = [i for i in tc if isinstance(i, dict) and i.get("severity") == "hard_fail"]
+        if hard_fails:
+            return {
+                "status": "fail",
+                "reason": _FAIL_REASON_TEXT_COLLISION,
+                "score": 0,
+                "feedback": f"Hard gate: text collision detected ({len(hard_fails)} issues)",
+                "issues": ["text_collision_failed"],
+                "programmatic_checks": {},
+            }
+        return None
+
+    def _fail_if_safe_area_failed(self, diagnostics: dict | None) -> dict[str, Any] | None:
+        """Return fail dict if safe area hard-failed, else None."""
+        if not diagnostics:
+            return None
+        sa = diagnostics.get("safe_area")
+        if not sa:
+            return None
+        hard_fails = [i for i in sa if isinstance(i, dict) and i.get("severity") == "hard_fail"]
+        if hard_fails:
+            return {
+                "status": "fail",
+                "reason": _FAIL_REASON_SAFE_AREA,
+                "score": 0,
+                "feedback": f"Hard gate: safe area violation ({len(hard_fails)} issues)",
+                "issues": ["safe_area_failed"],
+                "programmatic_checks": {},
+            }
+        return None
+
     def execute(
         self,
         job_id: int,
@@ -217,6 +278,16 @@ class ReviewerAgent(BaseAgent):
         )
         if hard_gate_result is not None:
             return hard_gate_result
+
+        # 2b. New deterministic quality gates (Batch 2)
+        diagnostics = kwargs.get("diagnostics")
+        gate_result = (
+            self._fail_if_visual_coverage_failed(diagnostics)
+            or self._fail_if_text_collision_failed(diagnostics)
+            or self._fail_if_safe_area_failed(diagnostics)
+        )
+        if gate_result is not None:
+            return gate_result
 
         # 3. Build text for LLM review
         script_text = _format_script_text(scenes)

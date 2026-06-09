@@ -445,3 +445,123 @@ class TestReviewerHardGates:
             "Reviewer should fail when visual plan has broken tiktok_clip action, "
             f"got status={result['status']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Reviewer deterministic quality gates (Batch 2 — visual coverage,
+# text collision, safe area)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewerVisualCoverageGate:
+    """Visual coverage hard gate blocks LLM when coverage fails."""
+
+    def test_blocks_llm_on_visual_coverage_failure(self, mocker):
+        """When visual coverage fails, Reviewer must fail WITHOUT calling LLM."""
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 90, "feedback": "Great!", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test topic",
+            script=[{"scene": 1, "text": "Hello"}],
+            caption="Nice #test",
+            audio_duration_sec=21.0,
+            visual_duration_sec=21.0,
+            diagnostics={
+                "visual_coverage": {
+                    "status": "fail",
+                    "output_duration_sec": 21.0,
+                    "voiceover_duration_sec": 21.0,
+                    "coverage_ratio": 0.6,
+                    "issues": [{"type": "BLACK_FRAME", "severity": "hard_fail", "detail": "test"}],
+                },
+            },
+        )
+        assert result["status"] == "fail"
+        assert "visual_coverage" in result.get("reason", "").lower() or "VISUAL_COVERAGE" in result.get("reason", "") or "visual coverage" in result.get("feedback", "").lower()
+        mock_chat.assert_not_called()
+
+    def test_allows_llm_when_visual_coverage_passes(self, mocker):
+        """When visual coverage passes, Reviewer proceeds to LLM."""
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "Good", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test topic",
+            script=[{"scene": 1, "text": "Hello"}],
+            caption="Nice #test",
+            audio_duration_sec=21.0,
+            visual_duration_sec=21.0,
+            diagnostics={
+                "visual_coverage": {
+                    "status": "pass",
+                    "output_duration_sec": 21.0,
+                    "voiceover_duration_sec": 21.0,
+                    "coverage_ratio": 1.0,
+                    "issues": [],
+                },
+            },
+        )
+        assert result["status"] == "pass"
+
+
+class TestReviewerTextCollisionGate:
+    """Text collision hard gate blocks LLM when collisions detected."""
+
+    def test_blocks_llm_on_text_collision(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test",
+            script=[{"scene": 1, "text": "Hi"}],
+            caption="Ok #tag",
+            diagnostics={
+                "visual_coverage": {"status": "pass", "issues": []},
+                "text_collision": [
+                    {"type": "SUBTITLE_OVERLAP", "severity": "hard_fail", "detail": "test"},
+                ],
+            },
+        )
+        assert result["status"] == "fail"
+        mock_chat.assert_not_called()
+
+
+class TestReviewerSafeAreaGate:
+    """Safe area hard gate blocks LLM when issues detected."""
+
+    def test_blocks_llm_on_safe_area_issue(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test",
+            script=[{"scene": 1, "text": "Hi"}],
+            caption="Ok #tag",
+            diagnostics={
+                "visual_coverage": {"status": "pass", "issues": []},
+                "safe_area": [
+                    {"type": "FACE_TEXT_OVERLAP", "severity": "hard_fail", "detail": "test"},
+                ],
+            },
+        )
+        assert result["status"] == "fail"
+        mock_chat.assert_not_called()
