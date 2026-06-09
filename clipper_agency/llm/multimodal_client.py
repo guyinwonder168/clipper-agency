@@ -14,7 +14,10 @@ import base64
 import json
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from clipper_agency.observability.llm_trace import LLMTraceWriter, TraceHandle
 
 logger = logging.getLogger(__name__)
 
@@ -212,10 +215,12 @@ class MultimodalInspectionClient:
         client: Any,
         model: str = "google/gemini-2.5-flash",
         max_frames: int = 4,
+        trace_writer: LLMTraceWriter | None = None,
     ) -> None:
         self._client = client
         self._model = model
         self._max_frames = max_frames
+        self._trace_writer = trace_writer
 
     def inspect_asset(
         self,
@@ -237,6 +242,10 @@ class MultimodalInspectionClient:
             job_id, beat_id, asset_id, len(frame_paths),
         )
 
+        handle: TraceHandle | None = None
+        if self._trace_writer is not None:
+            handle = self._start_trace(job_id)
+
         try:
             messages = build_visual_inspection_messages(
                 beat=beat,
@@ -245,12 +254,16 @@ class MultimodalInspectionClient:
                 source_metadata=source_metadata or {},
                 max_frames=self._max_frames,
             )
+            self._trace_request(handle, messages)
+
             raw = self._client.chat(
                 model=self._model,
                 messages=messages,
                 temperature=0.2,
             )
             parsed = parse_inspection_json(raw["content"])
+
+            self._trace_response(handle, raw, parsed)
 
             result = self._build_result(
                 asset_id=asset_id,
@@ -279,6 +292,55 @@ class MultimodalInspectionClient:
                 frame_paths=frame_paths,
                 reason=str(exc),
             )
+
+    # ------------------------------------------------------------------
+    # Trace helpers — no-op when trace_writer is None
+    # ------------------------------------------------------------------
+
+    def _start_trace(self, job_id: int) -> TraceHandle | None:
+        try:
+            return self._trace_writer.start_call(  # type: ignore[union-attr]
+                job_id=job_id,
+                agent="visual_director",
+                task="candidate_inspection",
+                provider="openrouter",
+                model=self._model,
+                prompt_template_id="visual_inspection",
+                prompt_version="1",
+            )
+        except Exception:
+            logger.warning("Trace start_call failed for job %s", job_id)
+            return None
+
+    def _trace_request(self, handle: TraceHandle | None, messages: list[dict]) -> None:
+        if handle is None:
+            return
+        try:
+            self._trace_writer.persist_request(  # type: ignore[union-attr]
+                handle, messages=messages, parameters={"temperature": 0.2},
+            )
+        except Exception:
+            logger.warning("Trace request persist failed for call %s", handle.call_id)
+
+    def _trace_response(
+        self,
+        handle: TraceHandle | None,
+        raw: dict[str, Any],
+        parsed: dict[str, Any],
+    ) -> None:
+        if handle is None:
+            return
+        try:
+            self._trace_writer.persist_response(  # type: ignore[union-attr]
+                handle,
+                raw_response={"content": raw.get("content", "")},
+                usage=raw.get("usage", {}),
+                provider_metadata={"model": raw.get("model", self._model)},
+            )
+            self._trace_writer.persist_parsed_response(handle, parsed)  # type: ignore[union-attr]
+            logger.info("Inspection trace persisted: %s", handle.trace_dir)
+        except Exception:
+            logger.warning("Trace response persist failed for call %s", handle.call_id)
 
     @staticmethod
     def _build_result(
