@@ -585,6 +585,11 @@ class SceneSemanticReview(BaseModel):
     reason: str
     score: float = Field(ge=0.0, le=1.0)
 
+    @property
+    def passed(self) -> bool:
+        """Whether this scene passed semantic review."""
+        return self.decision == "accept"
+
 
 class QualityStatus(BaseModel):
     """Separate runtime statuses for execution, quality, publication, and repair."""

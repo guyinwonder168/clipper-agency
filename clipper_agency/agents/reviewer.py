@@ -7,18 +7,26 @@ from typing import Any, TypedDict
 from clipper_agency.agents.base import BaseAgent
 from clipper_agency.agents.prompts import PROMPTS_DIR, load_prompt
 from clipper_agency.config.loader import get_agent_config
+from clipper_agency.config.schema import SceneSemanticReview
 from clipper_agency.core.package_consistency import evaluate_package_consistency
+from clipper_agency.core.reviewer_context import (
+    SceneBeatMapping,
+    map_scenes_to_beats,
+)
 from clipper_agency.llm.client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
 
 _MAX_CAPTION_LEN = 150
 _AV_DRIFT_TOLERANCE_SEC = 0.5
+_MIN_SCENE_DURATION_SEC = 0.5
+_MAX_BEATS_PER_SCENE = 3
 
 _FAIL_REASON_VISUAL_COVERAGE = "VISUAL_COVERAGE_FAILED"
 _FAIL_REASON_TEXT_COLLISION = "TEXT_COLLISION_FAILED"
 _FAIL_REASON_SAFE_AREA = "SAFE_AREA_FAILED"
 _FAIL_REASON_PACKAGE_CONSISTENCY = "PACKAGE_CONSISTENCY_FAILED"
+_FAIL_REASON_TIMESTAMP_SEMANTIC = "TIMESTAMP_SEMANTIC_FAILED"
 _FAIL_REASON_SEMANTIC_REVIEW = "SEMANTIC_REVIEW_FAILED"
 
 REVIEWER_PROMPT = """You are a content quality reviewer for a TikTok creator channel
@@ -136,6 +144,48 @@ def _format_safety_rules(rules: list[str]) -> str:
     return "\n".join(f"- {r}" for r in rules) if rules else "None"
 
 
+def _evaluate_scene_semantic(mapping: SceneBeatMapping) -> SceneSemanticReview:
+    """Programmatically evaluate a single scene's semantic quality.
+
+    Checks:
+    - Scene has at least one matched beat.
+    - Scene duration exceeds minimum threshold.
+    - Scene does not span more than MAX_BEATS_PER_SCENE beats.
+    """
+    duration = mapping.scene_end_sec - mapping.scene_start_sec
+    beat_count = len(mapping.matched_beat_ids)
+    beat_id_str = ",".join(str(b) for b in mapping.matched_beat_ids) or "none"
+    issues: list[str] = []
+    score = 1.0
+
+    if not mapping.matched_beat_ids:
+        issues.append("Scene has no matched beat")
+        score = 0.0
+    if duration < _MIN_SCENE_DURATION_SEC:
+        issues.append(f"Scene duration {duration:.2f}s below {_MIN_SCENE_DURATION_SEC}s")
+        score = min(score, 0.3)
+    if beat_count > _MAX_BEATS_PER_SCENE:
+        issues.append(f"Scene spans {beat_count} beats (max {_MAX_BEATS_PER_SCENE})")
+        score = min(score, 0.4)
+
+    passed = len(issues) == 0
+    return SceneSemanticReview(
+        beat_id=beat_id_str,
+        timestamp_start_sec=mapping.scene_start_sec,
+        timestamp_end_sec=mapping.scene_end_sec,
+        decision="accept" if passed else "reject",
+        reason="; ".join(issues) if issues else "All programmatic checks passed",
+        score=score,
+    )
+
+
+def _run_programmatic_scene_reviews(
+    mappings: list[SceneBeatMapping],
+) -> list[SceneSemanticReview]:
+    """Run programmatic semantic review for all scene-beat mappings."""
+    return [_evaluate_scene_semantic(m) for m in mappings]
+
+
 class ReviewContext(TypedDict, total=False):
     """Bundled audio-first / quality-gate parameters for ReviewerAgent.execute()."""
 
@@ -147,6 +197,9 @@ class ReviewContext(TypedDict, total=False):
     story_mode_decision: dict
     thumbnail_text: str
     main_entities: list[str]
+    story_beats: list[dict]
+    word_timestamps: list[dict]
+    rendered_scene_manifest: dict
 
 
 class ReviewerAgent(BaseAgent):
@@ -161,6 +214,8 @@ class ReviewerAgent(BaseAgent):
     _check_caption_quality = staticmethod(_check_caption_quality)
     _check_fact_safety = staticmethod(_check_fact_safety)
     _check_narrative_structure = staticmethod(_check_narrative_structure)
+    _evaluate_scene_semantic = staticmethod(_evaluate_scene_semantic)
+    _run_programmatic_scene_reviews = staticmethod(_run_programmatic_scene_reviews)
 
     def _check_hard_gates(
         self,
@@ -329,6 +384,56 @@ class ReviewerAgent(BaseAgent):
             "programmatic_checks": {},
         }
 
+    def _fail_if_timestamp_semantic_failed(
+        self,
+        scene_reviews: list[SceneSemanticReview],
+    ) -> dict[str, Any] | None:
+        """Return fail dict if any programmatic scene semantic check failed."""
+        if not scene_reviews:
+            return None
+        failed = [r for r in scene_reviews if not r.passed]
+        if not failed:
+            return None
+        issues_summary = "; ".join(
+            f"Scene {r.beat_id}: {r.reason}" for r in failed
+        )
+        return {
+            "status": "fail",
+            "reason": _FAIL_REASON_TIMESTAMP_SEMANTIC,
+            "score": 0,
+            "feedback": (
+                f"Hard gate: timestamp semantic review failed "
+                f"({len(failed)}/{len(scene_reviews)} scenes): {issues_summary}"
+            ),
+            "issues": ["timestamp_semantic_failed"],
+            "scene_semantic_reviews": [r.model_dump() for r in scene_reviews],
+            "programmatic_checks": {},
+        }
+
+    def _run_timestamp_semantic_review(
+        self,
+        rendered_scene_manifest: dict | None,
+        story_beats: list[dict] | None,
+        word_timestamps: list[dict] | None,
+        audio_duration_sec: float,
+    ) -> list[SceneSemanticReview]:
+        """Run programmatic timestamp-level semantic review using scene-beat mapping.
+
+        Returns list of SceneSemanticReview, or empty list if data is unavailable.
+        """
+        if not rendered_scene_manifest or not story_beats:
+            return []
+        scenes = rendered_scene_manifest.get("scenes", [])
+        if not scenes:
+            return []
+        mappings = map_scenes_to_beats(
+            manifest_entries=scenes,
+            story_beats=story_beats,
+            word_timestamps=word_timestamps or [],
+            audio_duration_sec=audio_duration_sec,
+        )
+        return _run_programmatic_scene_reviews(mappings)
+
     def execute(
         self,
         job_id: int,
@@ -345,6 +450,7 @@ class ReviewerAgent(BaseAgent):
             "audio_duration_sec", "visual_duration_sec", "narrative_structure",
             "unverified_claims", "visual_plan_actions", "story_mode_decision",
             "thumbnail_text", "main_entities",
+            "story_beats", "word_timestamps", "rendered_scene_manifest",
         )
         for key in _legacy_keys:
             if key in kwargs and key not in ctx:
@@ -358,6 +464,9 @@ class ReviewerAgent(BaseAgent):
         story_mode_decision: dict | None = ctx.get("story_mode_decision")
         thumbnail_text: str = ctx.get("thumbnail_text", "")
         main_entities: list[str] | None = ctx.get("main_entities")
+        story_beats: list[dict] | None = ctx.get("story_beats")
+        word_timestamps: list[dict] | None = ctx.get("word_timestamps")
+        rendered_scene_manifest: dict | None = ctx.get("rendered_scene_manifest")
 
         scenes = script or []
         logger.info("Reviewer: scenes=%d", len(scenes))
@@ -387,6 +496,13 @@ class ReviewerAgent(BaseAgent):
 
         # 2b. New deterministic quality gates (Batch 2)
         diagnostics = kwargs.get("diagnostics")
+
+        # 2c. Timestamp-level semantic review (programmatic, no LLM)
+        scene_reviews = self._run_timestamp_semantic_review(
+            rendered_scene_manifest, story_beats, word_timestamps,
+            audio_duration_sec,
+        )
+
         gate_result = (
             self._fail_if_visual_coverage_failed(diagnostics)
             or self._fail_if_text_collision_failed(diagnostics)
@@ -394,6 +510,7 @@ class ReviewerAgent(BaseAgent):
             or self._fail_if_package_consistency_failed(
                 story_mode_decision, thumbnail_text, main_entities, caption, topic, script,
             )
+            or self._fail_if_timestamp_semantic_failed(scene_reviews)
             or self._fail_if_semantic_review_failed(diagnostics)
         )
         if gate_result is not None:
@@ -437,13 +554,18 @@ class ReviewerAgent(BaseAgent):
         )
 
         # 5. Return combined output
-        return {
+        output: dict[str, Any] = {
             "status": review["verdict"],
             "score": review["score"],
             "feedback": review["feedback"],
             "issues": review["issues"],
             "programmatic_checks": checks,
         }
+        if scene_reviews:
+            output["scene_semantic_reviews"] = [
+                r.model_dump() for r in scene_reviews
+            ]
+        return output
 
     def _parse_review_response(self, content: str) -> dict[str, Any]:
         """Parse the JSON review response from the LLM."""

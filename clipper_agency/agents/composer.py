@@ -34,6 +34,12 @@ from clipper_agency.rendering.subtitle_engine import (
     build_subtitle_overlays,
     build_word_subtitle_captions,
 )
+from clipper_agency.core.media_detectors import (
+    MediaDetectionError,
+    detect_black_segments,
+    detect_freeze_segments,
+)
+from clipper_agency.config.schema import VisualCoverageResult
 from clipper_agency.core.visual_coverage import evaluate_visual_coverage
 from clipper_agency.rendering.templates import load_render_template
 
@@ -56,6 +62,12 @@ _OUTV = "[outv]"
 _BOUNDARY_TOLERANCE = 0.15       # ±15% tolerance for boundary match
 _MAX_SLOWDOWN = 0.30             # Max 30% speed reduction
 _DURATION_CLOSE_ENOUGH = 0.05    # 50ms tolerance for duration match
+
+# Visual coverage detector defaults
+_BLACK_MIN_DURATION_SEC = 0.1     # minimum black segment length to report
+_BLACK_PIXEL_THRESHOLD = 0.10     # pixel intensity threshold for blackdetect
+_FREEZE_MIN_DURATION_SEC = 0.1   # minimum freeze segment length to report
+_FREEZE_NOISE_THRESHOLD = -30.0  # dB threshold for freezedetect
 
 # Keyword caption drawtext style
 _KEYWORD_FONTSIZE = 48           # Large font for mobile readability
@@ -80,6 +92,63 @@ def _get_treatment_config():
         from clipper_agency.rendering.treatment_config import TreatmentConfig
         _treatment_config = TreatmentConfig()
     return _treatment_config
+
+
+def _safe_detect_black(
+    detect_fn: Any,
+    video_path: str,
+) -> list[tuple[float, float]]:
+    """Run black detection with graceful fallback on failure."""
+    if not video_path:
+        return []
+    try:
+        return detect_fn(
+            video_path, _BLACK_MIN_DURATION_SEC, _BLACK_PIXEL_THRESHOLD,
+        )
+    except MediaDetectionError:
+        logger.warning("Composer: black detection failed for %s", video_path)
+        return []
+
+
+def _safe_detect_freeze(
+    detect_fn: Any,
+    video_path: str,
+) -> list[tuple[float, float]]:
+    """Run freeze detection with graceful fallback on failure."""
+    if not video_path:
+        return []
+    try:
+        return detect_fn(
+            video_path, _FREEZE_MIN_DURATION_SEC, _FREEZE_NOISE_THRESHOLD,
+        )
+    except MediaDetectionError:
+        logger.warning("Composer: freeze detection failed for %s", video_path)
+        return []
+
+
+def _compute_scene_segments(
+    scene_count: int,
+    duration_sec: float,
+) -> list[tuple[float, float]]:
+    """Derive equal-length scene segments from scene count and duration."""
+    if scene_count <= 0 or duration_sec <= 0:
+        return []
+    seg_len = duration_sec / scene_count
+    return [(i * seg_len, (i + 1) * seg_len) for i in range(scene_count)]
+
+
+def _persist_visual_coverage(
+    video_path: str,
+    result: VisualCoverageResult,
+) -> None:
+    """Write visual_coverage.json alongside the rendered video."""
+    if not video_path:
+        return
+    try:
+        out_file = Path(video_path).parent / "visual_coverage.json"
+        out_file.write_text(json.dumps(result.model_dump(), indent=2))
+    except OSError:
+        logger.warning("Composer: could not persist visual_coverage.json")
 
 
 def _build_transition_chain(
@@ -459,25 +528,46 @@ class ComposerAgent(BaseAgent):
         self,
         output: dict[str, Any],
         voiceover_duration_sec: float | None,
+        *,
+        detect_black: Any = None,
+        detect_freeze: Any = None,
     ) -> dict[str, Any]:
-        """Attach visual coverage evaluation to output diagnostics."""
+        """Attach visual coverage evaluation to output diagnostics.
+
+        Runs FFmpeg-backed black/freeze detectors on the rendered video.
+        Falls back to empty lists on ``MediaDetectionError`` so the pipeline
+        never crashes due to a diagnostic check.
+
+        Detector functions are injectable for testability.
+        """
         if output.get("status") != "completed":
             return output
         output_dur = output.get("output_duration_sec", 0.0)
         if output_dur <= 0:
             return output
+
+        video_path = output.get("video_path", "")
+        black_fn = detect_black or detect_black_segments
+        freeze_fn = detect_freeze or detect_freeze_segments
+        black_segs = _safe_detect_black(black_fn, video_path)
+        freeze_segs = _safe_detect_freeze(freeze_fn, video_path)
+        scene_segs = _compute_scene_segments(
+            output.get("scene_count", 0), output_dur,
+        )
+
         result = evaluate_visual_coverage(
             output_duration_sec=output_dur,
             voiceover_duration_sec=voiceover_duration_sec or output_dur,
-            black_segments=[],
-            freeze_segments=[],
+            black_segments=black_segs,
+            freeze_segments=freeze_segs,
             empty_segments=[],
-            scene_segments=[],
+            scene_segments=scene_segs,
             thresholds={},
         )
         if "diagnostics" not in output:
             output["diagnostics"] = {}
         output["diagnostics"]["visual_coverage"] = result.model_dump()
+        _persist_visual_coverage(video_path, result)
         return output
 
     def _render_via_template(
