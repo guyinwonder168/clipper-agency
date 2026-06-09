@@ -269,3 +269,132 @@ class QualityCheckResult(BaseModel):
     check_name: str
     passed: bool
     details: dict
+
+
+# -- Job #4 Quality Gate Contracts --
+
+
+class VisualCoverageIssue(BaseModel):
+    """A single visual coverage defect detected in rendered output."""
+
+    type: str  # BLACK_FRAME, EMPTY_FRAME, FREEZE_FRAME, MISSING_SCENE, FINAL_VISUAL_GAP, DECODE_FAILURE
+    start_sec: float
+    end_sec: float
+    severity: str  # "hard_fail", "warning", "info"
+    detail: str = ""
+
+
+class VisualCoverageResult(BaseModel):
+    """Aggregated visual coverage evaluation result."""
+
+    status: str  # "pass", "fail"
+    output_duration_sec: float
+    voiceover_duration_sec: float
+    coverage_ratio: float
+    issues: list[VisualCoverageIssue]
+
+
+class DetectedTextRegion(BaseModel):
+    """A normalized OCR-detected text region in a video frame."""
+
+    text: str
+    confidence: float
+    bbox: list[int]  # [x1, y1, x2, y2]
+    frame_size: tuple[int, int] = (1080, 1920)
+    timestamp_sec: float
+    zone: str = "middle"  # "top", "middle", "bottom"
+    area_ratio: float = 0.0
+
+
+class TextCollisionIssue(BaseModel):
+    """Detected collision between source text and generated overlays."""
+
+    type: str  # SUBTITLE_SOURCE_TEXT_OVERLAP, HEADLINE_SOURCE_TEXT_OVERLAP, SOURCE_TEXT_DENSITY
+    severity: str  # "reject", "warning", "info"
+    detail: str = ""
+    overlap_ratio: float = 0.0
+
+
+class SafeAreaIssue(BaseModel):
+    """Detected safe-area or face-text overlap violation."""
+
+    type: str  # PLATFORM_UNSAFE_ZONE, FACE_TEXT_OVERLAP
+    severity: str  # "reject", "warning"
+    detail: str = ""
+    overlap_ratio: float = 0.0
+
+
+class StoryModeDecision(BaseModel):
+    """Deterministic story-mode classification for a topic."""
+
+    story_mode: str  # "roundup", "single_story", "controversy_explainer", "breaking_news"
+    confidence: float
+    reason: str
+    item_count: int = 1
+    target_duration_sec: int = 30
+    requires_intro_card: bool = False
+    thumbnail_strategy: str = "default"
+    cta_strategy: str = "default"
+
+
+class DurationBudgetSection(BaseModel):
+    """A single section allocation within the editorial duration budget."""
+
+    type: str  # "intro", "hook", "story", "context", "evidence", "reveal", "cta"
+    duration_sec: float
+    label: str = ""
+
+
+class DurationBudget(BaseModel):
+    """Full editorial duration budget allocation."""
+
+    target_duration_sec: int
+    sections: list[DurationBudgetSection]
+
+
+class EvidenceContract(BaseModel):
+    """Visual evidence guidance for a story beat."""
+
+    preferred: list[str] = Field(default_factory=list)
+    acceptable: list[str] = Field(default_factory=list)
+    forbidden: list[str] = Field(default_factory=list)
+
+
+class VisualRelevanceScore(BaseModel):
+    """Scored relevance between a visual asset and a story beat claim."""
+
+    decision: str  # "accept", "revise", "reject"
+    misleading_risk: float = 0.0
+    person_match: float = 0.0
+    event_match: float = 0.0
+    claim_support: float = 0.0
+    visual_quality: float = 0.0
+    detail: str = ""
+
+
+class PackageConsistencyResult(BaseModel):
+    """Result of package-level consistency check (thumbnail vs video scope)."""
+
+    status: str  # "pass", "fail"
+    issue: str = ""
+    detail: str = ""
+
+
+class RepairPatch(BaseModel):
+    """A single targeted repair action for a specific beat/timestamp."""
+
+    beat_id: str
+    action: str  # "replace_visual", "narrow_topic", "fix_text", etc.
+    reason: str
+    rerun_from: str  # agent name to rerun from
+    timestamp_start_sec: float = 0.0
+    timestamp_end_sec: float = 0.0
+    required_visual: str = ""
+
+
+class RepairPlan(BaseModel):
+    """Structured repair plan with cycle limit and targeted patches."""
+
+    decision: str  # "revise", "reject", "accept"
+    max_repair_cycles: int = 2
+    patches: list[RepairPatch] = Field(default_factory=list)
