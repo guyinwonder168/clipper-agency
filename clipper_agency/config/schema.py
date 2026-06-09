@@ -83,6 +83,43 @@ class ContentPlanningConfig(BaseModel):
         return self.hard_limit_sec
 
 
+class VisualCoverageConfig(BaseModel):
+    """Thresholds for visual coverage quality gates."""
+
+    black_frame_max_ms: int = 200
+    empty_frame_max_ms: int = 300
+    freeze_warning_ms: int = 1500
+    final_visual_gap_max_ms: int = 200
+
+
+class TextCollisionConfig(BaseModel):
+    """Thresholds for text collision detection."""
+
+    subtitle_overlap_max: float = 0.20
+    headline_overlap_max: float = 0.15
+
+
+class SafeAreaConfig(BaseModel):
+    """Thresholds for safe-area and face overlap checks."""
+
+    face_overlap_max: float = 0.15
+
+
+class SemanticReviewConfig(BaseModel):
+    """Settings for semantic visual review and repair."""
+
+    max_repair_cycles: int = 2
+
+
+class QualityConfig(BaseModel):
+    """Top-level quality gate configuration."""
+
+    visual_coverage: VisualCoverageConfig = Field(default_factory=VisualCoverageConfig)
+    text_collision: TextCollisionConfig = Field(default_factory=TextCollisionConfig)
+    safe_area: SafeAreaConfig = Field(default_factory=SafeAreaConfig)
+    semantic_review: SemanticReviewConfig = Field(default_factory=SemanticReviewConfig)
+
+
 class AppSettings(BaseSettings):
     """Application-level settings loaded from .env / environment.
 
@@ -130,6 +167,9 @@ class AppSettings(BaseSettings):
 
     # Content planning
     content_planning: ContentPlanningConfig = Field(default_factory=ContentPlanningConfig)
+
+    # Quality gates
+    quality: QualityConfig = Field(default_factory=QualityConfig)
 
 
 # ---------------------------------------------------------------------------

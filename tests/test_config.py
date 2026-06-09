@@ -112,3 +112,21 @@ def test_config_hierarchy_account_override_for_unknown_agent():
     hierarchy = ConfigHierarchy()
     hierarchy.set_account_override("custom_agent", "timeout", 120)
     assert hierarchy.get("custom_agent", "timeout") == 120
+
+
+# --- Task 0.2: Quality Gate Configuration Defaults ---
+
+
+def test_app_settings_include_quality_gate_defaults():
+    from clipper_agency.config.schema import AppSettings
+
+    with patch.dict("os.environ", {}, clear=True):
+        settings = AppSettings(_env_file=None)
+
+        assert settings.quality.visual_coverage.black_frame_max_ms == 200
+        assert settings.quality.visual_coverage.empty_frame_max_ms == 300
+        assert settings.quality.visual_coverage.freeze_warning_ms == 1500
+        assert settings.quality.visual_coverage.final_visual_gap_max_ms == 200
+        assert settings.quality.text_collision.subtitle_overlap_max == 0.20
+        assert settings.quality.safe_area.face_overlap_max == 0.15
+        assert settings.quality.semantic_review.max_repair_cycles == 2
