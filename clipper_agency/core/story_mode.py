@@ -30,8 +30,32 @@ _BREAKING_KEYWORDS = frozenset({
 })
 
 _ROUNDUP_BROAD_WORDS = frozenset({
-    "berbagai", "beberapa", "kumpulan",
+    "berbagai", "beberapa", "kumpulan", "gosip", "selebriti", "kabar",
+    "artis",
 })
+
+_ROUNDUP_GOSSIP_PHRASES = frozenset({
+    "gosip artis", "kabar selebriti",
+    "top gosip", "update artis", "berita hot",
+})
+
+_ROUNDUP_CATEGORY_WORDS = frozenset({
+    "entertainment", "hiburan",
+})
+
+# Variant spellings: {variant} → {canonical} (applied before keyword matching)
+_SPELLING_NORMALIZE: dict[str, str] = {
+    "artist": "artis",
+    "gossip": "gosip",
+    "latest": "terbaru",
+    "today": "hari ini",
+}
+
+# Plural suffixes/patterns stripped after normalization
+_PLURAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(\w+)-\1\b"), r"\1"),   # artis-artis → artis
+    (re.compile(r"\bartis(s|es)\b"), "artis"),  # artists/artises → artis
+]
 
 # ---------------------------------------------------------------------------
 # Helpers (pure functions)
@@ -41,6 +65,20 @@ _ROUNDUP_BROAD_WORDS = frozenset({
 def _topic_lower(topic: str) -> str:
     """Normalise topic to lowercase for keyword matching."""
     return topic.lower().strip()
+
+
+def _normalize_spelling(topic_lower: str) -> str:
+    """Expand variant spellings to canonical Indonesian forms."""
+    for variant, canonical in _SPELLING_NORMALIZE.items():
+        topic_lower = topic_lower.replace(variant, canonical)
+    return topic_lower
+
+
+def _normalize_plurals(topic_lower: str) -> str:
+    """Collapse plural-intent patterns to singular forms."""
+    for pattern, replacement in _PLURAL_PATTERNS:
+        topic_lower = pattern.sub(replacement, topic_lower)
+    return topic_lower
 
 
 def _has_keyword(topic_lower: str, keywords: frozenset[str]) -> bool:
@@ -71,9 +109,15 @@ def _is_roundup_topic(topic_lower: str, entity_count: int) -> bool:
     # "berita terbaru hari ini" pattern — broad entertainment scope
     if "terbaru hari ini" in topic_lower:
         return True
-    if "berita terbaru" in topic_lower and topic_lower.endswith("hari ini"):
+    if "berita terbaru" in topic_lower:
         return True
     if any(w in topic_lower for w in _ROUNDUP_BROAD_WORDS):
+        return True
+    # Broad gossip phrase patterns (post-normalization)
+    if any(phrase in topic_lower for phrase in _ROUNDUP_GOSSIP_PHRASES):
+        return True
+    # Category-level topics (entertainment, hiburan)
+    if any(w in topic_lower for w in _ROUNDUP_CATEGORY_WORDS):
         return True
     return False
 
@@ -103,6 +147,10 @@ def classify_story_mode(
     StoryModeDecision with all fields populated.
     """
     topic_lower = _topic_lower(topic)
+
+    # --- Normalization: variant spellings → canonical, plural → singular ---
+    topic_lower = _normalize_spelling(topic_lower)
+    topic_lower = _normalize_plurals(topic_lower)
 
     # --- Rule 1: hard duration constraint (overrides everything) ---
     if target_duration_sec < _MIN_ROUNDUP_DURATION:

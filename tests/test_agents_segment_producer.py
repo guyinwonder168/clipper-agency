@@ -598,16 +598,18 @@ class TestSegmentProducerStoryModeAndBudget:
 
     def test_segment_producer_output_includes_duration_budget(self, mocker, tmp_path):
         """Segment Producer should allocate duration budget and include it in output."""
-        from clipper_agency.config.schema import DurationBudget, DurationBudgetSection
+        from clipper_agency.config.schema import DurationBudget, DurationBudgetSection, StoryModeDecision
 
         self._setup_base_mocks(mocker, tmp_path)
 
         mocker.patch(
             "clipper_agency.agents.segment_producer.classify_story_mode",
-            return_value=mocker.MagicMock(
+            return_value=StoryModeDecision(
                 story_mode="single_story",
+                confidence=0.6,
+                reason="Default",
                 item_count=1,
-                model_dump=lambda: {},
+                target_duration_sec=55,
             ),
         )
 
@@ -673,8 +675,12 @@ class TestSegmentProducerStoryModeAndBudget:
         # target_duration_sec should come from settings (default 55)
         assert call_kwargs[1]["target_duration_sec"] == 55
 
-    def test_duration_budget_receives_story_mode_output(self, mocker, tmp_path):
-        """Duration budget allocation should receive story_mode and item_count from story mode decision."""
+    def test_duration_budget_receives_reconciled_story_mode(self, mocker, tmp_path):
+        """Duration budget should receive the RECONCILED story mode, not raw classifier.
+
+        When classifier says controversy_explainer with item_count=2, reconciliation
+        Rule 2 forces roundup (multiple entities). Budget gets reconciled mode.
+        """
         from clipper_agency.config.schema import StoryModeDecision
 
         self._setup_base_mocks(mocker, tmp_path)
@@ -704,7 +710,8 @@ class TestSegmentProducerStoryModeAndBudget:
 
         mock_budget.assert_called_once()
         call_kwargs = mock_budget.call_args
-        assert call_kwargs[1]["story_mode"] == "controversy_explainer"
+        # Reconciliation Rule 2: item_count=2 → roundup
+        assert call_kwargs[1]["story_mode"] == "roundup"
         assert call_kwargs[1]["item_count"] == 2
         assert call_kwargs[1]["target_duration_sec"] == 55
 
@@ -972,3 +979,254 @@ class TestStoryBeatEvidenceContract:
         assert len(beat2["evidence_contract"]["preferred"]) == 1
         assert beat2["evidence_contract"]["preferred"][0] == "dramatic reaction clip"
         assert len(beat2["evidence_contract"]["forbidden"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Story-mode reconciliation + contract integration tests (Batch 3)
+# ---------------------------------------------------------------------------
+
+
+class TestStoryModeReconciliationIntegration:
+    """Integration: classifier → reconciliation → contract → budget pipeline."""
+
+    @staticmethod
+    def _setup_base_mocks(mocker, tmp_path):
+        """Set up common mocks for all sub-tests."""
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.ScrapeCreatorsService",
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.FirecrawlService",
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.OpenRouterClient",
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.load_settings",
+            return_value=mocker.MagicMock(
+                content_planning=mocker.MagicMock(
+                    target_duration_sec=55,
+                    hard_limit_sec=60,
+                    estimated_words_per_second=2.0,
+                    max_stories_per_video=3,
+                ),
+            ),
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.SegmentProducerAgent._get_scrapecreators",
+            return_value=[],
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.SegmentProducerAgent._get_firecrawl",
+            return_value=[],
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.SegmentProducerAgent._get_research_brief",
+            return_value={
+                "research_brief": "Test brief",
+                "story_beats": [],
+                "format_decision": None,
+                "asset_candidates": [],
+                "do_not_use": [],
+                "verified_facts": [],
+                "unverified_claims": [],
+                "reference_style": None,
+            },
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.get_agent_config",
+            return_value={"model": "test-model", "temperature": 0.7},
+        )
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.ensure_research_cache_dir",
+        )
+
+    def test_output_includes_reconciled_story_mode_decision(self, mocker, tmp_path):
+        """story_mode_decision in output should be the reconciled+contract version."""
+        from clipper_agency.config.schema import StoryModeDecision
+
+        self._setup_base_mocks(mocker, tmp_path)
+
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.classify_story_mode",
+            return_value=StoryModeDecision(
+                story_mode="single_story",
+                confidence=0.6,
+                reason="Default",
+                item_count=1,
+                target_duration_sec=55,
+            ),
+        )
+
+        agent = SegmentProducerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="single artist gossip",
+            output_dir=str(tmp_path),
+        )
+
+        smd = result["story_mode_decision"]
+        assert isinstance(smd, dict)
+        # Contract fields must be present
+        assert "duration_structure" in smd
+        assert "thumbnail_strategy" in smd
+        assert "cta_strategy" in smd
+        assert "requires_intro_card" in smd
+        # Reconciliation reason must be present
+        assert "reason" in smd
+
+    def test_legacy_roundup_overrides_classifier_single_story(self, mocker, tmp_path):
+        """When LLM says three_story_roundup but classifier says single_story, roundup wins."""
+        from clipper_agency.config.schema import StoryModeDecision
+
+        self._setup_base_mocks(mocker, tmp_path)
+
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.classify_story_mode",
+            return_value=StoryModeDecision(
+                story_mode="single_story",
+                confidence=0.6,
+                reason="Default",
+                item_count=1,
+                target_duration_sec=55,
+            ),
+        )
+        # Simulate LLM returning a roundup format_decision
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.SegmentProducerAgent._get_research_brief",
+            return_value={
+                "research_brief": "Test brief",
+                "story_beats": [{"beat_id": 1}, {"beat_id": 2}],
+                "format_decision": {
+                    "format": "three_story_roundup",
+                    "story_count": 3,
+                    "rationale": "Multiple trending stories",
+                    "video_asset_ratio": 0.5,
+                },
+                "asset_candidates": [],
+                "do_not_use": [],
+                "verified_facts": [],
+                "unverified_claims": [],
+                "reference_style": None,
+            },
+        )
+
+        agent = SegmentProducerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="some gossip topic",
+            output_dir=str(tmp_path),
+        )
+
+        smd = result["story_mode_decision"]
+        # Rule 2 or Rule 3 should force roundup
+        assert smd["story_mode"] == "roundup"
+        # Contract must include roundup-specific fields
+        assert smd["requires_intro_card"] is True
+        assert smd["thumbnail_strategy"] == "multi_entity_roundup"
+
+    def test_explicit_classifier_mode_preserved(self, mocker, tmp_path):
+        """High-confidence classifier decision survives reconciliation (Rule 1)."""
+        from clipper_agency.config.schema import StoryModeDecision
+
+        self._setup_base_mocks(mocker, tmp_path)
+
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.classify_story_mode",
+            return_value=StoryModeDecision(
+                story_mode="breaking_news",
+                confidence=0.95,
+                reason="Breaking keyword detected",
+                item_count=1,
+                target_duration_sec=55,
+            ),
+        )
+
+        agent = SegmentProducerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="breaking news today",
+            output_dir=str(tmp_path),
+        )
+
+        smd = result["story_mode_decision"]
+        # Rule 1: explicit (confidence >= 0.9) preserves classifier mode
+        assert smd["story_mode"] == "breaking_news"
+        # Contract must have breaking_news-specific fields
+        assert smd["duration_structure"] == "hook_context_evidence_reveal_cta"
+        assert smd["thumbnail_strategy"] == "breaking_visual"
+
+    def test_format_decision_preserved_as_legacy(self, mocker, tmp_path):
+        """format_decision in output preserves the original LLM value."""
+        from clipper_agency.config.schema import StoryModeDecision
+
+        self._setup_base_mocks(mocker, tmp_path)
+
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.classify_story_mode",
+            return_value=StoryModeDecision(
+                story_mode="single_story",
+                confidence=0.6,
+                reason="Default",
+                item_count=1,
+                target_duration_sec=55,
+            ),
+        )
+        legacy_fd = {
+            "format": "single_story_deep_dive",
+            "story_count": 1,
+            "rationale": "One compelling story",
+            "video_asset_ratio": 0.8,
+        }
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.SegmentProducerAgent._get_research_brief",
+            return_value={
+                "research_brief": "Test brief",
+                "story_beats": [],
+                "format_decision": legacy_fd,
+                "asset_candidates": [],
+                "do_not_use": [],
+                "verified_facts": [],
+                "unverified_claims": [],
+                "reference_style": None,
+            },
+        )
+
+        agent = SegmentProducerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="single story topic",
+            output_dir=str(tmp_path),
+        )
+
+        # Legacy format_decision preserved as-is
+        assert result["format_decision"] == legacy_fd
+        # story_mode_decision is separate (reconciled + contract)
+        assert result["story_mode_decision"]["story_mode"] == "single_story"
+
+    def test_contract_duration_structure_populated(self, mocker, tmp_path):
+        """duration_structure field from contract is always present."""
+        from clipper_agency.config.schema import StoryModeDecision
+
+        self._setup_base_mocks(mocker, tmp_path)
+
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.classify_story_mode",
+            return_value=StoryModeDecision(
+                story_mode="roundup",
+                confidence=0.85,
+                reason="Multiple entities",
+                item_count=3,
+                target_duration_sec=55,
+            ),
+        )
+
+        agent = SegmentProducerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="berbagai artis terbaru",
+            output_dir=str(tmp_path),
+        )
+
+        smd = result["story_mode_decision"]
+        assert smd["duration_structure"] == "intro_story_items_cta"

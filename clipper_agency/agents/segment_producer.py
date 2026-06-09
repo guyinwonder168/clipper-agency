@@ -33,7 +33,9 @@ from clipper_agency.services.firecrawl_service import FirecrawlService
 from clipper_agency.services.scrapecreators import ScrapeCreatorsService
 
 from clipper_agency.core.duration_budget import allocate_duration_budget
+from clipper_agency.core.story_decision_reconciliation import reconcile_story_decisions
 from clipper_agency.core.story_mode import classify_story_mode
+from clipper_agency.core.story_mode_contract import derive_story_mode_contract
 
 logger = logging.getLogger(__name__)
 
@@ -198,11 +200,23 @@ class SegmentProducerAgent(BaseAgent):
             channel_description, language, tone, content_angle,
         )
 
-        # ── 3. Classify story mode and allocate budget ─────────────────
-        story_mode_decision = classify_story_mode(topic, target_duration_sec=target_dur)
+        # ── 3. Classify story mode (early, deterministic) ─────────────
+        classifier_decision = classify_story_mode(topic, target_duration_sec=target_dur)
+
+        # ── 4. Reconcile classifier + legacy format_decision ───────────
+        legacy_format = synthesis.get("format_decision")
+        story_beats_raw = synthesis.get("story_beats", [])
+        reconciled = reconcile_story_decisions(
+            classifier_decision, legacy_format, story_beats_raw,
+        )
+
+        # ── 5. Derive production contract from canonical decision ──────
+        contract = derive_story_mode_contract(reconciled)
+
+        # ── 6. Allocate budget from reconciled mode ────────────────────
         duration_budget = allocate_duration_budget(
-            story_mode=story_mode_decision.story_mode,
-            item_count=story_mode_decision.item_count,
+            story_mode=reconciled.story_mode,
+            item_count=reconciled.item_count,
             target_duration_sec=target_dur,
         )
 
@@ -211,8 +225,8 @@ class SegmentProducerAgent(BaseAgent):
             "research_brief": synthesis["research_brief"],
             "sources": aggregated,
             "risk_flags": [],
-            "story_beats": synthesis.get("story_beats", []),
-            "format_decision": synthesis.get("format_decision"),
+            "story_beats": story_beats_raw,
+            "format_decision": legacy_format,
             "asset_candidates": self._merge_asset_candidates(
                 synthesis.get("asset_candidates", []),
                 discovered_candidates,
@@ -221,7 +235,7 @@ class SegmentProducerAgent(BaseAgent):
             "verified_facts": synthesis.get("verified_facts", []),
             "unverified_claims": synthesis.get("unverified_claims", []),
             "reference_style": synthesis.get("reference_style"),
-            "story_mode_decision": story_mode_decision.model_dump(),
+            "story_mode_decision": contract,
             "duration_budget": duration_budget.model_dump(),
         }
         if assets_cache:
