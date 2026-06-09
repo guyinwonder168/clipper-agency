@@ -295,14 +295,16 @@ class TestReviewerExecute:
             script=[{"scene": 1, "text": "Voiceover text", "duration": 5}],
             caption="Hot news! #kpop",
             safety_rules=[],
-            audio_duration_sec=30.0,
-            visual_duration_sec=30.1,
-            narrative_structure=[
-                {"beat_id": "hook", "section": "intro", "word_range": [0, 50]},
-            ],
-            unverified_claims=[
-                {"claim": "dating rumor", "safe_wording": "Reportedly dating"},
-            ],
+            context={
+                "audio_duration_sec": 30.0,
+                "visual_duration_sec": 30.1,
+                "narrative_structure": [
+                    {"beat_id": "hook", "section": "intro", "word_range": [0, 50]},
+                ],
+                "unverified_claims": [
+                    {"claim": "dating rumor", "safe_wording": "Reportedly dating"},
+                ],
+            },
         )
         assert result["status"] == "pass"
         checks = result["programmatic_checks"]
@@ -343,8 +345,10 @@ class TestReviewerExecute:
             script=[{"scene": 1, "text": "Test", "duration": 3}],
             caption="Short #ok",
             safety_rules=[],
-            audio_duration_sec=10.0,
-            visual_duration_sec=12.0,
+            context={
+                "audio_duration_sec": 10.0,
+                "visual_duration_sec": 12.0,
+            },
         )
         assert "programmatic_checks" in result
         checks = result["programmatic_checks"]
@@ -366,8 +370,10 @@ class TestReviewerExecute:
             script=[{"scene": 1, "text": "Test", "duration": 3}],
             caption="Caption #tag",
             safety_rules=[],
-            audio_duration_sec=10.0,
-            visual_duration_sec=10.0,
+            context={
+                "audio_duration_sec": 10.0,
+                "visual_duration_sec": 10.0,
+            },
         )
         system_content = mock_chat.call_args.kwargs["messages"][0]["content"]
         assert "av_sync: pass" in system_content
@@ -405,8 +411,10 @@ class TestReviewerHardGates:
             topic="Test topic",
             script=[{"scene": 1, "text": "Hello"}],
             caption="Great video #test",
-            audio_duration_sec=23.25,
-            visual_duration_sec=21.21,
+            context={
+                "audio_duration_sec": 23.25,
+                "visual_duration_sec": 21.21,
+            },
         )
         # The LLM returned pass/90 but the hard gate should override to fail
         assert result["status"] == "fail", (
@@ -436,10 +444,12 @@ class TestReviewerHardGates:
             topic="Test topic",
             script=[{"scene": 1, "text": "Hello"}],
             caption="Nice #viral",
-            visual_plan_actions=[
-                {"type": "tiktok_clip"},  # broken: no source_url
-                {"type": "text_card", "headline": "Story 2"},
-            ],
+            context={
+                "visual_plan_actions": [
+                    {"type": "tiktok_clip"},  # broken: no source_url
+                    {"type": "text_card", "headline": "Story 2"},
+                ],
+            },
         )
         assert result["status"] == "fail", (
             "Reviewer should fail when visual plan has broken tiktok_clip action, "
@@ -472,8 +482,10 @@ class TestReviewerVisualCoverageGate:
             topic="Test topic",
             script=[{"scene": 1, "text": "Hello"}],
             caption="Nice #test",
-            audio_duration_sec=21.0,
-            visual_duration_sec=21.0,
+            context={
+                "audio_duration_sec": 21.0,
+                "visual_duration_sec": 21.0,
+            },
             diagnostics={
                 "visual_coverage": {
                     "status": "fail",
@@ -504,8 +516,10 @@ class TestReviewerVisualCoverageGate:
             topic="Test topic",
             script=[{"scene": 1, "text": "Hello"}],
             caption="Nice #test",
-            audio_duration_sec=21.0,
-            visual_duration_sec=21.0,
+            context={
+                "audio_duration_sec": 21.0,
+                "visual_duration_sec": 21.0,
+            },
             diagnostics={
                 "visual_coverage": {
                     "status": "pass",
@@ -595,11 +609,13 @@ class TestReviewerPackageConsistencyGate:
             job_id=1,
             topic="berita artis terbaru",
             caption="test caption #viral",
-            audio_duration_sec=30.0,
-            visual_duration_sec=30.0,
-            story_mode_decision={"story_mode": "roundup", "item_count": 3},
-            thumbnail_text="Ruben Akhirnya Jujur",
-            main_entities=["Ruben", "A", "B"],
+            context={
+                "audio_duration_sec": 30.0,
+                "visual_duration_sec": 30.0,
+                "story_mode_decision": {"story_mode": "roundup", "item_count": 3},
+                "thumbnail_text": "Ruben Akhirnya Jujur",
+                "main_entities": ["Ruben", "A", "B"],
+            },
         )
 
         assert result["status"] == "fail"
@@ -628,11 +644,13 @@ class TestReviewerPackageConsistencyGate:
             job_id=1,
             topic="berita artis terbaru",
             caption="test caption #viral",
-            audio_duration_sec=30.0,
-            visual_duration_sec=30.0,
-            story_mode_decision={"story_mode": "roundup", "item_count": 3},
-            thumbnail_text="3 Kabar Artis Viral!",
-            main_entities=["Ruben", "A", "B"],
+            context={
+                "audio_duration_sec": 30.0,
+                "visual_duration_sec": 30.0,
+                "story_mode_decision": {"story_mode": "roundup", "item_count": 3},
+                "thumbnail_text": "3 Kabar Artis Viral!",
+                "main_entities": ["Ruben", "A", "B"],
+            },
         )
 
         assert result["status"] == "pass"
@@ -654,8 +672,10 @@ class TestReviewerPackageConsistencyGate:
             job_id=1,
             topic="berita artis terbaru",
             caption="test caption #viral",
-            audio_duration_sec=30.0,
-            visual_duration_sec=30.0,
+            context={
+                "audio_duration_sec": 30.0,
+                "visual_duration_sec": 30.0,
+            },
         )
 
         assert result["status"] == "pass"
@@ -676,8 +696,10 @@ class TestReviewerSemanticReviewGate:
         result = agent.execute(
             job_id=1,
             topic="test topic",
-            audio_duration_sec=20.0,
-            visual_duration_sec=20.0,
+            context={
+                "audio_duration_sec": 20.0,
+                "visual_duration_sec": 20.0,
+            },
             diagnostics={
                 "semantic_review": {
                     "decision": "revise",
@@ -711,8 +733,10 @@ class TestReviewerSemanticReviewGate:
         result = agent.execute(
             job_id=1,
             topic="test topic",
-            audio_duration_sec=20.0,
-            visual_duration_sec=20.0,
+            context={
+                "audio_duration_sec": 20.0,
+                "visual_duration_sec": 20.0,
+            },
             diagnostics={
                 "semantic_review": {
                     "decision": "reject",
@@ -740,8 +764,10 @@ class TestReviewerSemanticReviewGate:
         result = agent.execute(
             job_id=1,
             topic="test topic",
-            audio_duration_sec=20.0,
-            visual_duration_sec=20.0,
+            context={
+                "audio_duration_sec": 20.0,
+                "visual_duration_sec": 20.0,
+            },
             diagnostics={
                 "semantic_review": {
                     "decision": "accept",
@@ -767,8 +793,10 @@ class TestReviewerSemanticReviewGate:
         result = agent.execute(
             job_id=1,
             topic="test topic",
-            audio_duration_sec=20.0,
-            visual_duration_sec=20.0,
+            context={
+                "audio_duration_sec": 20.0,
+                "visual_duration_sec": 20.0,
+            },
         )
 
         assert result["status"] == "pass"

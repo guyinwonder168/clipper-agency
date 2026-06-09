@@ -33,9 +33,6 @@ _ROUNDUP_BROAD_WORDS = frozenset({
     "berbagai", "beberapa", "kumpulan",
 })
 
-# Pattern: at least 2 comma-separated tokens (entity names)
-_COMMA_ENTITIES_RE = re.compile(r",\s*|\s+dan\s+", flags=re.IGNORECASE)
-
 # ---------------------------------------------------------------------------
 # Helpers (pure functions)
 # ---------------------------------------------------------------------------
@@ -52,10 +49,19 @@ def _has_keyword(topic_lower: str, keywords: frozenset[str]) -> bool:
 
 
 def _count_comma_entities(topic: str) -> int:
-    """Estimate entity count from comma / 'dan' separated names."""
-    parts = _COMMA_ENTITIES_RE.split(topic)
+    """Estimate entity count from comma / 'dan' separated names.
+
+    Uses plain string splitting to avoid regex backtracking (S5852).
+    """
+    parts = topic.split(",")
+    expanded: list[str] = []
+    for part in parts:
+        expanded.extend(part.split(" dan "))
     # Keep parts that look like names (alphabetic, length > 1)
-    return sum(1 for p in parts if p.strip() and re.search(r"[A-Za-z]{2,}", p.strip()))
+    return sum(
+        1 for p in expanded
+        if p.strip() and re.search(r"[A-Za-z]{2,}", p.strip())
+    )
 
 
 def _is_roundup_topic(topic_lower: str, entity_count: int) -> bool:

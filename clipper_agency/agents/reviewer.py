@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any
+from typing import Any, TypedDict
 
 from clipper_agency.agents.base import BaseAgent
 from clipper_agency.agents.prompts import PROMPTS_DIR, load_prompt
@@ -134,6 +134,19 @@ def _format_programmatic_results(results: list[dict[str, Any]]) -> str:
 def _format_safety_rules(rules: list[str]) -> str:
     """Format safety rules for prompt inclusion."""
     return "\n".join(f"- {r}" for r in rules) if rules else "None"
+
+
+class ReviewContext(TypedDict, total=False):
+    """Bundled audio-first / quality-gate parameters for ReviewerAgent.execute()."""
+
+    audio_duration_sec: float
+    visual_duration_sec: float
+    narrative_structure: list[dict]
+    unverified_claims: list[dict]
+    visual_plan_actions: list[dict]
+    story_mode_decision: dict
+    thumbnail_text: str
+    main_entities: list[str]
 
 
 class ReviewerAgent(BaseAgent):
@@ -323,16 +336,29 @@ class ReviewerAgent(BaseAgent):
         script: list[dict] | None = None,
         caption: str = "",
         safety_rules: list[str] | None = None,
-        audio_duration_sec: float = 0.0,
-        visual_duration_sec: float = 0.0,
-        narrative_structure: list[dict] | None = None,
-        unverified_claims: list[dict] | None = None,
-        visual_plan_actions: list[dict] | None = None,
-        story_mode_decision: dict | None = None,
-        thumbnail_text: str = "",
-        main_entities: list[str] | None = None,
+        context: ReviewContext | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        # Merge context dict with legacy kwargs for backward compat
+        ctx: dict[str, Any] = dict(context or {})
+        _legacy_keys = (
+            "audio_duration_sec", "visual_duration_sec", "narrative_structure",
+            "unverified_claims", "visual_plan_actions", "story_mode_decision",
+            "thumbnail_text", "main_entities",
+        )
+        for key in _legacy_keys:
+            if key in kwargs and key not in ctx:
+                ctx[key] = kwargs.pop(key)
+
+        audio_duration_sec: float = ctx.get("audio_duration_sec", 0.0)
+        visual_duration_sec: float = ctx.get("visual_duration_sec", 0.0)
+        narrative_structure: list[dict] | None = ctx.get("narrative_structure")
+        unverified_claims: list[dict] | None = ctx.get("unverified_claims")
+        visual_plan_actions: list[dict] | None = ctx.get("visual_plan_actions")
+        story_mode_decision: dict | None = ctx.get("story_mode_decision")
+        thumbnail_text: str = ctx.get("thumbnail_text", "")
+        main_entities: list[str] | None = ctx.get("main_entities")
+
         scenes = script or []
         logger.info("Reviewer: scenes=%d", len(scenes))
 

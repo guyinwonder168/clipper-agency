@@ -70,7 +70,7 @@ def evaluate_package_consistency(
 
 def _check_roundup(
     thumbnail_text: str,
-    caption: str,
+    _caption: str,
     main_entities: list[str],
 ) -> PackageConsistencyResult:
     """Roundup video: thumbnail should cover multiple entities, not just one."""
@@ -95,9 +95,9 @@ def _check_roundup(
 
 
 def _check_single_story(
-    thumbnail_text: str,
+    _thumbnail_text: str,
     caption: str,
-    main_entities: list[str],
+    _main_entities: list[str],
 ) -> PackageConsistencyResult:
     """Single story video: caption should not imply multiple stories."""
     if _caption_mentions_multiple(caption):

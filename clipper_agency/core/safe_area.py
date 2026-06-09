@@ -59,6 +59,53 @@ _PLATFORM_ZONE_FN = {
 }
 
 
+def _check_zone_overlaps(
+    rbox: Bbox,
+    rarea: float,
+    region: dict,
+    unsafe_zones: list[dict],
+) -> list[SafeAreaIssue]:
+    """Return platform-unsafe-zone issues for a single region (max one)."""
+    for zone in unsafe_zones:
+        inter = _intersection_area(rbox, zone["bbox"])
+        ratio = inter / rarea
+        if ratio > 0.15:
+            return [SafeAreaIssue(
+                type="PLATFORM_UNSAFE_ZONE",
+                severity="reject",
+                detail=f"{region.get('layer', 'unknown')} overlaps {zone['label']}",
+                overlap_ratio=round(ratio, 4),
+            )]
+    return []
+
+
+def _check_face_overlaps(
+    rbox: Bbox,
+    region: dict,
+    face_regions: list[dict],
+    face_overlap_max: float,
+) -> list[SafeAreaIssue]:
+    """Return face-text overlap issues for a single region."""
+    issues: list[SafeAreaIssue] = []
+    for face in face_regions:
+        fbox: Bbox = face["bbox"]
+        inter = _intersection_area(rbox, fbox)
+        if inter == 0:
+            continue
+        face_area = _area(fbox)
+        if face_area == 0:
+            continue
+        ratio = inter / face_area
+        if ratio > face_overlap_max:
+            issues.append(SafeAreaIssue(
+                type="FACE_TEXT_OVERLAP",
+                severity="reject",
+                detail=f"{region.get('layer', 'unknown')} overlaps face",
+                overlap_ratio=round(ratio, 4),
+            ))
+    return issues
+
+
 def detect_safe_area_issues(
     generated_regions: list[dict],
     face_regions: list[dict],
@@ -71,47 +118,15 @@ def detect_safe_area_issues(
     Returns a list of :class:`SafeAreaIssue` instances (empty when everything
     is within safe bounds).
     """
-    issues: list[SafeAreaIssue] = []
-
-    # Resolve platform unsafe zones once
     zone_fn = _PLATFORM_ZONE_FN.get(platform)
     unsafe_zones: list[dict] = zone_fn(frame_size) if zone_fn else []
 
+    issues: list[SafeAreaIssue] = []
     for region in generated_regions:
         rbox: Bbox = region["bbox"]
         rarea = _area(rbox)
         if rarea == 0:
             continue
-
-        # 1. Platform unsafe-zone overlap
-        for zone in unsafe_zones:
-            inter = _intersection_area(rbox, zone["bbox"])
-            ratio = inter / rarea
-            if ratio > 0.15:
-                issues.append(SafeAreaIssue(
-                    type="PLATFORM_UNSAFE_ZONE",
-                    severity="reject",
-                    detail=f"{region.get('layer', 'unknown')} overlaps {zone['label']}",
-                    overlap_ratio=round(ratio, 4),
-                ))
-                break  # one zone issue per region is enough
-
-        # 2. Face-text overlap
-        for face in face_regions:
-            fbox: Bbox = face["bbox"]
-            inter = _intersection_area(rbox, fbox)
-            if inter == 0:
-                continue
-            face_area = _area(fbox)
-            if face_area == 0:
-                continue
-            ratio = inter / face_area
-            if ratio > face_overlap_max:
-                issues.append(SafeAreaIssue(
-                    type="FACE_TEXT_OVERLAP",
-                    severity="reject",
-                    detail=f"{region.get('layer', 'unknown')} overlaps face",
-                    overlap_ratio=round(ratio, 4),
-                ))
-
+        issues.extend(_check_zone_overlaps(rbox, rarea, region, unsafe_zones))
+        issues.extend(_check_face_overlaps(rbox, region, face_regions, face_overlap_max))
     return issues
