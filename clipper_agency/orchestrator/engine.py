@@ -247,6 +247,180 @@ class Orchestrator:
         repair_dir.mkdir(parents=True, exist_ok=True)
         write_json(str(repair_dir / "previous_patches.json"), patches)
 
+    def _execute_single_repair_cycle(
+        self,
+        cycle: int,
+        max_cycles: int,
+        target_agent: str,
+        patches: list[dict],
+        before_review: dict[str, Any],
+        job_id: int,
+        assets_cache: str,
+        output_dir: str,
+        topic: str,
+        conn,
+    ) -> dict[str, Any]:
+        """Execute one iteration of the repair cycle.
+
+        Returns a dict with a ``_action`` key:
+        - ``"return"`` — caller should return the dict immediately.
+        - ``"continue"`` — caller should update state and continue looping.
+          The dict also carries ``target_agent``, ``patches``, ``before_review``.
+        """
+        logger.info(
+            "Repair cycle %d/%d: target=%s job=%d",
+            cycle, max_cycles, target_agent, job_id,
+        )
+
+        # Check for repeated identical patches
+        prev_patches = self._load_previous_patches(assets_cache, job_id)
+        if prev_patches and self._are_patches_identical(prev_patches, patches):
+            logger.warning(
+                "Identical repair patch repeated at cycle %d for job %d",
+                cycle, job_id,
+            )
+            update_job_repair_status(conn, job_id, "exhausted")
+            update_job_artifact_status(conn, job_id, "manual_review_required")
+            update_job_quality_status(conn, job_id, "repair_exhausted")
+            append_audit_log(
+                conn, action="repair_exhausted", actor="engine",
+                resource_type="job", resource_id=job_id,
+                details=json.dumps({
+                    "cycle": cycle, "reason": _SAME_PATCH_REPEATED,
+                }),
+            )
+            return {
+                "_action": "return",
+                "status": "exhausted",
+                "job_id": job_id,
+                "reason": _SAME_PATCH_REPEATED,
+                "cycle": cycle,
+            }
+
+        # Save current patches for next cycle's comparison
+        self._save_previous_patches(assets_cache, job_id, patches)
+
+        # Determine which agent to rerun based on routing
+        target_idx = PIPELINE_ORDER.index(target_agent)
+        reset_agents_from(conn, job_id, target_agent)
+
+        # Reconstruct upstream outputs
+        (research_output, script_output,
+         voice_output, visual_output) = self._reconstruct_upstream_outputs(
+            target_idx, assets_cache, job_id,
+        )
+
+        # Load niche context
+        job = get_job(conn, job_id)
+        snapshot = json.loads(
+            (job.get("config_snapshot") or "{}") if job else "{}")
+        niche_ctx = snapshot.get("niche_ctx", {})
+
+        # Re-run agents from target onward
+        compose_output = {}
+        abort = None
+
+        if target_agent in ("visual_director",):
+            visual_output = self._run_visual_director_phase(
+                conn, job_id, topic, research_output, script_output,
+                output_dir, assets_cache, voice_output=voice_output,
+            )
+            if visual_output.get("status") == "failed":
+                abort = self._fail_agent(
+                    conn, job_id, "visual_director",
+                    visual_output, _ASSET_SOURCING_FAILED)
+
+        if not abort and target_agent in (
+            "visual_director", "composer",
+        ):
+            compose_output, abort = self._retry_composer_stage(
+                conn, job_id, visual_output, voice_output,
+                output_dir, assets_cache, cycle=cycle,
+            )
+
+        if abort:
+            abort["_action"] = "return"
+            return abort
+
+        # Re-run reviewer
+        mark_agent_running(conn, job_id, "reviewer")
+        after_review = self._run_reviewer(
+            job_id=job_id, topic=topic,
+            script=script_output.get("script", []),
+            caption=script_output.get("caption", ""),
+            safety_rules=niche_ctx.get("safety_rules", []),
+            audio_duration_sec=voice_output.get("voiceover_duration_sec", 0.0),
+            visual_duration_sec=compose_output.get("duration_sec", 0.0),
+            narrative_structure=script_output.get("narrative_structure", []),
+            unverified_claims=script_output.get("unverified_claims", []),
+        )
+
+        # Persist repair cycle metrics
+        record = compute_repair_cycle_record(
+            cycle=cycle,
+            source_agent="reviewer",
+            target_agent=target_agent,
+            before_review=before_review,
+            after_review=after_review,
+        )
+        persist_repair_cycle(assets_cache, job_id, record)
+        logger.info(
+            "Repair cycle %d: review score %s→%s improved=%s",
+            cycle,
+            extract_quality_snapshot(before_review).get("reviewer_score", 0),
+            extract_quality_snapshot(after_review).get("reviewer_score", 0),
+            is_repair_improved(
+                extract_quality_snapshot(before_review),
+                extract_quality_snapshot(after_review),
+            ),
+        )
+
+        # Check reviewer outcome
+        if after_review.get("status") == "pass":
+            self._complete_agent(conn, assets_cache, job_id, "reviewer")
+            update_job_repair_status(conn, job_id, "completed")
+            update_job_quality_status(conn, job_id, "passed")
+            update_job_artifact_status(conn, job_id, "approved")
+            update_job_publication_status(conn, job_id, "ready")
+            logger.info(
+                "Repair PASSED at cycle %d for job %d", cycle, job_id)
+            return {
+                "_action": "return",
+                "status": "completed",
+                "job_id": job_id,
+                "cycle": cycle,
+            }
+
+        # Reviewer failed — check for new repair plan
+        new_plan = after_review.get("repair_plan")
+        if new_plan and new_plan.get("patches"):
+            new_patches = new_plan["patches"]
+            self._complete_agent(conn, assets_cache, job_id, "reviewer")
+            update_job_quality_status(conn, job_id, "failed")
+            return {
+                "_action": "continue",
+                "target_agent": route_repair(new_patches[0]),
+                "patches": new_patches,
+                "before_review": after_review,
+            }
+
+        # Reviewer failed with no repair plan — manual review
+        self._complete_agent(conn, assets_cache, job_id, "reviewer")
+        update_job_repair_status(conn, job_id, "exhausted")
+        update_job_artifact_status(conn, job_id, "manual_review_required")
+        update_job_quality_status(conn, job_id, "repair_exhausted")
+        logger.warning(
+            "Repair cycle %d: no repair plan, job %d needs manual review",
+            cycle, job_id,
+        )
+        return {
+            "_action": "return",
+            "status": "manual_review_required",
+            "job_id": job_id,
+            "reason": _MANUAL_REVIEW_REQUIRED,
+            "cycle": cycle,
+        }
+
     def _execute_repair_cycle(
         self,
         repair_plan: dict[str, Any],
@@ -281,155 +455,20 @@ class Orchestrator:
             assets_cache, job_id, "reviewer")
 
         for cycle in range(1, max_cycles + 1):
-            logger.info(
-                "Repair cycle %d/%d: target=%s job=%d",
-                cycle, max_cycles, target_agent, job_id,
+            result = self._execute_single_repair_cycle(
+                cycle, max_cycles, target_agent, patches,
+                before_review, job_id, assets_cache,
+                output_dir, topic, conn,
             )
 
-            # Check for repeated identical patches
-            prev_patches = self._load_previous_patches(assets_cache, job_id)
-            if prev_patches and self._are_patches_identical(prev_patches, patches):
-                logger.warning(
-                    "Identical repair patch repeated at cycle %d for job %d",
-                    cycle, job_id,
-                )
-                update_job_repair_status(conn, job_id, "exhausted")
-                update_job_artifact_status(conn, job_id, "manual_review_required")
-                update_job_quality_status(conn, job_id, "repair_exhausted")
-                append_audit_log(
-                    conn, action="repair_exhausted", actor="engine",
-                    resource_type="job", resource_id=job_id,
-                    details=json.dumps({
-                        "cycle": cycle, "reason": _SAME_PATCH_REPEATED,
-                    }),
-                )
-                return {
-                    "status": "exhausted",
-                    "job_id": job_id,
-                    "reason": _SAME_PATCH_REPEATED,
-                    "cycle": cycle,
-                }
+            if result["_action"] == "return":
+                result.pop("_action")
+                return result
 
-            # Save current patches for next cycle's comparison
-            self._save_previous_patches(assets_cache, job_id, patches)
-
-            # Determine which agent to rerun based on routing
-            target_idx = PIPELINE_ORDER.index(target_agent)
-            reset_agents_from(conn, job_id, target_agent)
-
-            # Reconstruct upstream outputs
-            (research_output, script_output,
-             voice_output, visual_output) = self._reconstruct_upstream_outputs(
-                target_idx, assets_cache, job_id,
-            )
-
-            # Load niche context
-            job = get_job(conn, job_id)
-            snapshot = json.loads(
-                (job.get("config_snapshot") or "{}") if job else "{}")
-            niche_ctx = snapshot.get("niche_ctx", {})
-
-            # Re-run agents from target onward
-            compose_output = {}
-            abort = None
-
-            if target_agent in ("visual_director",):
-                visual_output = self._run_visual_director_phase(
-                    conn, job_id, topic, research_output, script_output,
-                    output_dir, assets_cache, voice_output=voice_output,
-                )
-                if visual_output.get("status") == "failed":
-                    abort = self._fail_agent(
-                        conn, job_id, "visual_director",
-                        visual_output, _ASSET_SOURCING_FAILED)
-
-            if not abort and target_agent in (
-                "visual_director", "composer",
-            ):
-                compose_output, abort = self._retry_composer_stage(
-                    conn, job_id, visual_output, voice_output,
-                    output_dir, assets_cache, cycle=cycle,
-                )
-
-            if abort:
-                return abort
-
-            # Re-run reviewer
-            mark_agent_running(conn, job_id, "reviewer")
-            after_review = self._run_reviewer(
-                job_id=job_id, topic=topic,
-                script=script_output.get("script", []),
-                caption=script_output.get("caption", ""),
-                safety_rules=niche_ctx.get("safety_rules", []),
-                audio_duration_sec=voice_output.get("voiceover_duration_sec", 0.0),
-                visual_duration_sec=compose_output.get("duration_sec", 0.0),
-                narrative_structure=script_output.get("narrative_structure", []),
-                unverified_claims=script_output.get("unverified_claims", []),
-            )
-
-            # Persist repair cycle metrics
-            record = compute_repair_cycle_record(
-                cycle=cycle,
-                source_agent="reviewer",
-                target_agent=target_agent,
-                before_review=before_review,
-                after_review=after_review,
-            )
-            persist_repair_cycle(assets_cache, job_id, record)
-            logger.info(
-                "Repair cycle %d: review score %s→%s improved=%s",
-                cycle,
-                extract_quality_snapshot(before_review).get("reviewer_score", 0),
-                extract_quality_snapshot(after_review).get("reviewer_score", 0),
-                is_repair_improved(
-                    extract_quality_snapshot(before_review),
-                    extract_quality_snapshot(after_review),
-                ),
-            )
-
-            # Check reviewer outcome
-            if after_review.get("status") == "pass":
-                self._complete_agent(conn, assets_cache, job_id, "reviewer")
-                update_job_repair_status(conn, job_id, "completed")
-                update_job_quality_status(conn, job_id, "passed")
-                update_job_artifact_status(conn, job_id, "approved")
-                update_job_publication_status(conn, job_id, "ready")
-                logger.info(
-                    "Repair PASSED at cycle %d for job %d", cycle, job_id)
-                return {
-                    "status": "completed",
-                    "job_id": job_id,
-                    "cycle": cycle,
-                }
-
-            # Reviewer failed — check for new repair plan
-            new_plan = after_review.get("repair_plan")
-            if new_plan and new_plan.get("patches"):
-                new_patches = new_plan["patches"]
-                # Update target routing based on new patches
-                target_agent = route_repair(new_patches[0])
-                patches = new_patches
-                update_job_quality_status(conn, job_id, "failed")
-                # before_review for next cycle = this cycle's after_review
-                before_review = after_review
-                self._complete_agent(conn, assets_cache, job_id, "reviewer")
-                continue  # next cycle
-
-            # Reviewer failed with no repair plan — manual review
-            self._complete_agent(conn, assets_cache, job_id, "reviewer")
-            update_job_repair_status(conn, job_id, "exhausted")
-            update_job_artifact_status(conn, job_id, "manual_review_required")
-            update_job_quality_status(conn, job_id, "repair_exhausted")
-            logger.warning(
-                "Repair cycle %d: no repair plan, job %d needs manual review",
-                cycle, job_id,
-            )
-            return {
-                "status": "manual_review_required",
-                "job_id": job_id,
-                "reason": _MANUAL_REVIEW_REQUIRED,
-                "cycle": cycle,
-            }
+            # _action == "continue" — update state for next cycle
+            target_agent = result["target_agent"]
+            patches = result["patches"]
+            before_review = result["before_review"]
 
         # Exhausted all cycles
         update_job_repair_status(conn, job_id, "exhausted")
@@ -681,6 +720,86 @@ class Orchestrator:
 
         return compose_output
 
+    def _handle_repair_routing(
+        self,
+        conn: Any,
+        job_id: int,
+        review_output: dict[str, Any] | None,
+        script_output: dict[str, Any],
+        compose_output: dict[str, Any],
+        cost_result: Any,
+        assets_cache: str,
+        output_dir: str,
+        topic: str,
+        niche: str,
+    ) -> dict[str, Any] | None:
+        """Handle repair routing from reviewer, returning result or None."""
+        if not review_output or not review_output.get("repair_routing"):
+            return None
+
+        routing = review_output["repair_routing"]
+        logger.info(
+            "Starting repair loop: job #%d → %s",
+            job_id, routing["target_agent"],
+        )
+        repair_result = self._execute_repair_cycle(
+            repair_plan=routing,
+            job_id=job_id,
+            assets_cache=assets_cache,
+            output_dir=output_dir,
+            topic=topic,
+            niche=niche,
+        )
+        if repair_result.get("status") == "completed":
+            # Repair passed — package and promote to final/
+            repair_cycle = repair_result.get("cycle", 0)
+            compose_output = self._load_agent_output(
+                assets_cache, job_id, "composer")
+            pkg_output = self._package_output(
+                job_id=job_id,
+                video_path=compose_output.get("video_path", ""),
+                caption=script_output.get("caption", ""),
+                topic=topic, niche=niche,
+                output_dir=output_dir,
+                template_name=compose_output.get("template_name"),
+            )
+            # Promote cycle artifacts to final/
+            if pkg_output.get("status") != "failed":
+                self._promote_to_final(
+                    output_dir=output_dir, job_id=job_id,
+                    cycle=repair_cycle,
+                )
+            update_job_status(conn, job_id, "COMPLETED")
+            logger.info(
+                "Pipeline COMPLETED after repair: job #%d", job_id)
+            remove_job_file_handler()
+            return {
+                "status": "completed",
+                "job_id": job_id,
+                "output": pkg_output,
+                "cost_estimate": {
+                    "estimate_cents": cost_result.data.get(
+                        "estimate_cents", 0.0),
+                },
+                "review": {
+                    "score": review_output.get("score", 0),
+                    "verdict": "pass",
+                },
+                "repair_cycles": repair_result.get("cycle", 0),
+            }
+
+        # Repair exhausted or manual review needed
+        update_job_status(
+            conn, job_id, "FAILED",
+            repair_result.get("reason", _REPAIR_EXHAUSTED))
+        remove_job_file_handler()
+        return {
+            "status": "failed",
+            "job_id": job_id,
+            "reason": repair_result.get("reason", _REPAIR_EXHAUSTED),
+            "repair_status": repair_result["status"],
+        }
+
     def run_pipeline(
         self,
         topic: str,
@@ -774,69 +893,13 @@ class Orchestrator:
                 return abort
 
             # Handle repair routing from reviewer
-            if review_output and review_output.get("repair_routing"):
-                routing = review_output["repair_routing"]
-                logger.info(
-                    "Starting repair loop: job #%d → %s",
-                    job_id, routing["target_agent"],
-                )
-                repair_result = self._execute_repair_cycle(
-                    repair_plan=routing,
-                    job_id=job_id,
-                    assets_cache=assets_cache,
-                    output_dir=output_dir,
-                    topic=topic,
-                    niche=niche,
-                )
-                if repair_result.get("status") == "completed":
-                    # Repair passed — package and promote to final/
-                    repair_cycle = repair_result.get("cycle", 0)
-                    compose_output = self._load_agent_output(
-                        assets_cache, job_id, "composer")
-                    pkg_output = self._package_output(
-                        job_id=job_id,
-                        video_path=compose_output.get("video_path", ""),
-                        caption=script_output.get("caption", ""),
-                        topic=topic, niche=niche,
-                        output_dir=output_dir,
-                        template_name=compose_output.get("template_name"),
-                    )
-                    # Promote cycle artifacts to final/
-                    if pkg_output.get("status") != "failed":
-                        self._promote_to_final(
-                            output_dir=output_dir, job_id=job_id,
-                            cycle=repair_cycle,
-                        )
-                    update_job_status(conn, job_id, "COMPLETED")
-                    logger.info(
-                        "Pipeline COMPLETED after repair: job #%d", job_id)
-                    remove_job_file_handler()
-                    return {
-                        "status": "completed",
-                        "job_id": job_id,
-                        "output": pkg_output,
-                        "cost_estimate": {
-                            "estimate_cents": cost_result.data.get(
-                                "estimate_cents", 0.0),
-                        },
-                        "review": {
-                            "score": review_output.get("score", 0),
-                            "verdict": "pass",
-                        },
-                        "repair_cycles": repair_result.get("cycle", 0),
-                    }
-
-                # Repair exhausted or manual review needed
-                update_job_status(
-                    conn, job_id, "FAILED",
-                    repair_result.get("reason", _REPAIR_EXHAUSTED))
-                remove_job_file_handler()
-                return {
-                    "status": "failed",
-                    "job_id": job_id,
-                    "reason": repair_result.get("reason", _REPAIR_EXHAUSTED),
-                    "repair_status": repair_result["status"],
-                }
+            repair_result = self._handle_repair_routing(
+                conn, job_id, review_output, script_output,
+                compose_output, cost_result,
+                assets_cache, output_dir, topic, niche,
+            )
+            if repair_result is not None:
+                return repair_result
 
             update_job_status(conn, job_id, "COMPLETED")
             logger.info("Pipeline COMPLETED: job #%d", job_id)
@@ -1596,9 +1659,9 @@ class Orchestrator:
             try:
                 if tmp_dir.exists():
                     shutil.rmtree(tmp_dir, ignore_errors=True)
-            except (PermissionError, OSError):
+            except OSError:
                 pass
-            logger.error("Promotion FAILED for job #%d: %s", job_id, e)
+            logger.exception("Promotion FAILED for job #%d: %s", job_id, e)
             return {
                 "status": "failed",
                 "error": str(e),
