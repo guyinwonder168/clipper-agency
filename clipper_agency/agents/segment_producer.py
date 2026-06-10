@@ -584,6 +584,8 @@ class SegmentProducerAgent(BaseAgent):
         """Derive search queries from topic + entity names."""
         queries = [topic]
         entity_list = entities.get("entities", []) if isinstance(entities, dict) else []
+        if not isinstance(entity_list, list):
+            entity_list = []
         for entity in entity_list[:2]:
             name = entity.get("name", "") if isinstance(entity, dict) else str(entity)
             if name:

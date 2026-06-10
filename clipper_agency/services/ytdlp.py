@@ -6,7 +6,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib import request
 from urllib.parse import urlparse
 
@@ -94,6 +94,26 @@ class YtDlpService:
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return None
 
+    @staticmethod
+    def _parse_search_entry(entry: Any) -> dict | None:
+        """Convert a yt-dlp search entry to a result dict, or None if invalid."""
+        if not entry:
+            return None
+        video_id = entry.get("id") or entry.get("url", "")
+        if video_id and not video_id.startswith("http"):
+            url = f"https://www.youtube.com/watch?v={video_id}"
+        else:
+            url = entry.get("url", "")
+        return {
+            "source_type": "youtube_official",
+            "url": url,
+            "title": entry.get("title", ""),
+            "description": entry.get("description", ""),
+            "duration": entry.get("duration"),
+            "channel": entry.get("channel") or entry.get("uploader", ""),
+            "thumbnail_url": entry.get("thumbnail", ""),
+        }
+
     def search(
         self,
         query: str,
@@ -133,23 +153,9 @@ class YtDlpService:
 
                 results: list[dict] = []
                 for entry in info["entries"]:
-                    if not entry:
-                        continue
-                    video_id = entry.get("id") or entry.get("url", "")
-                    url = (
-                        f"https://www.youtube.com/watch?v={video_id}"
-                        if video_id and not video_id.startswith("http")
-                        else entry.get("url", "")
-                    )
-                    results.append({
-                        "source_type": "youtube_official",
-                        "url": url,
-                        "title": entry.get("title", ""),
-                        "description": entry.get("description", ""),
-                        "duration": entry.get("duration"),
-                        "channel": entry.get("channel") or entry.get("uploader", ""),
-                        "thumbnail_url": entry.get("thumbnail", ""),
-                    })
+                    parsed = self._parse_search_entry(entry)
+                    if parsed:
+                        results.append(parsed)
                 return results
             except Exception:
                 logger.debug("yt-dlp search attempt %d failed", attempt + 1)
