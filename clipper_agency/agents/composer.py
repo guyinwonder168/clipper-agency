@@ -42,6 +42,7 @@ from clipper_agency.core.media_detectors import (
 from clipper_agency.config.schema import VisualCoverageResult
 from clipper_agency.core.visual_coverage import evaluate_visual_coverage
 from clipper_agency.core.generated_text_manifest import build_generated_text_regions
+from clipper_agency.core.rendered_scene_manifest import build_rendered_scene_manifest
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,39 @@ def _compute_scene_segments(
         return []
     seg_len = duration_sec / scene_count
     return [(i * seg_len, (i + 1) * seg_len) for i in range(scene_count)]
+
+
+def _build_scene_manifest(
+    scenes: list[dict],
+    text_regions: list[dict],
+    output_dur: float,
+    video_path: str,
+    assets: list[dict] | None = None,
+) -> Any:
+    """Build a ``RenderedSceneManifest`` from scene data and text regions.
+
+    Enriches *scenes* with ``beat_id`` and ``selected_asset_id`` from
+    *assets* when available (used in the audio-first path where assets
+    are passed alongside the enriched scene list).
+    """
+    if not scenes:
+        return build_rendered_scene_manifest([], [], output_dur, video_path)
+
+    if assets:
+        scene_list = [
+            {**s, **{
+                "beat_id": assets[i].get("beat_id", s.get("beat_id", i + 1)),
+                "selected_asset_id": assets[i].get("asset_id", ""),
+            }}
+            if i < len(assets) else dict(s)
+            for i, s in enumerate(scenes)
+        ]
+    else:
+        scene_list = [dict(s) for s in scenes]
+
+    return build_rendered_scene_manifest(
+        scene_list, text_regions, output_dur, video_path,
+    )
 
 
 def _build_text_regions_from_captions(
@@ -573,6 +607,12 @@ class ComposerAgent(BaseAgent):
         output = self._attach_visual_coverage_diagnostics(
             output, voiceover_duration_sec,
         )
+
+        # Build rendered scene manifest from video_assets
+        output["rendered_scene_manifest"] = _build_scene_manifest(
+            video_assets, [], output_dur, video_path,
+        )
+
         return output
 
     def _handle_ffmpeg_error(
@@ -1618,5 +1658,10 @@ class ComposerAgent(BaseAgent):
         if "diagnostics" not in output:
             output["diagnostics"] = {}
         output["diagnostics"]["generated_text_regions"] = text_regions
+
+        # Build rendered scene manifest from enriched assets
+        output["rendered_scene_manifest"] = _build_scene_manifest(
+            enriched, text_regions, output_dur, video_path, assets,
+        )
 
         return output

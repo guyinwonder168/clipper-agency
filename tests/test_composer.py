@@ -1993,6 +1993,102 @@ class TestGeneratedTextManifest:
         assert result["diagnostics"]["generated_text_regions"] == []
 
 
+class TestRenderedSceneManifest:
+    """Composer must include rendered_scene_manifest in output."""
+
+    def test_audio_first_render_includes_rendered_scene_manifest(self, mocker, tmp_path):
+        """Audio-first render must call build_rendered_scene_manifest and persist."""
+        mock_manifest = mocker.patch(
+            "clipper_agency.agents.composer.build_rendered_scene_manifest",
+            return_value=MockRenderedSceneManifest.make(),
+        )
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
+        mocker.patch.object(ComposerAgent, "_generate_thumbnail")
+        mocker.patch.object(ComposerAgent, "_probe_output_duration", return_value=30.0)
+        mocker.patch.object(ComposerAgent, "_persist_diagnostics")
+        mocker.patch("clipper_agency.agents.composer._persist_visual_coverage")
+        mocker.patch("clipper_agency.agents.composer.evaluate_visual_coverage",
+                       return_value=MockVisualCoverageResult.pass_result())
+        mocker.patch("clipper_agency.agents.composer.detect_black_segments", return_value=[])
+        mocker.patch("clipper_agency.agents.composer.detect_freeze_segments", return_value=[])
+        mocker.patch("clipper_agency.agents.composer.build_generated_text_regions", return_value=[])
+        mocker.patch("clipper_agency.agents.composer.write_json")
+
+        agent = ComposerAgent()
+        result = agent._run_audio_first_render(
+            job_id=1,
+            voiceover_path=str(tmp_path / "voice.mp3"),
+            timestamps=[],
+            assets=[{"beat_id": 1, "asset_id": "abc123"}],
+            beat_durations=[5.0],
+            trimmed_clips=[str(tmp_path / "clip0.mp4")],
+            card_fallback_scenes=[],
+            video_path=str(tmp_path / "video.mp4"),
+            thumbnail_path=str(tmp_path / "thumb.png"),
+            assets_cache=str(tmp_path),
+            agent_dir=str(tmp_path),
+        )
+
+        mock_manifest.assert_called_once()
+        assert "rendered_scene_manifest" in result
+        assert result["rendered_scene_manifest"] is not None
+
+    def test_rendered_scene_manifest_flows_via_try_assemble(self, mocker, tmp_path):
+        """Try-assemble (legacy) path must also include rendered_scene_manifest."""
+        mock_manifest = mocker.patch(
+            "clipper_agency.agents.composer.build_rendered_scene_manifest",
+            return_value=MockRenderedSceneManifest.make(),
+        )
+        mocker.patch.object(ComposerAgent, "_assemble_video",
+                             return_value={"cmd": ["ffmpeg", "-y"], "card_fallback_scenes": []})
+        mocker.patch.object(ComposerAgent, "_generate_thumbnail")
+        mocker.patch.object(ComposerAgent, "_probe_output_duration", return_value=30.0)
+        mocker.patch.object(ComposerAgent, "_persist_diagnostics")
+        mocker.patch("clipper_agency.agents.composer._persist_visual_coverage")
+        mocker.patch("clipper_agency.agents.composer.evaluate_visual_coverage",
+                       return_value=MockVisualCoverageResult.pass_result())
+        mocker.patch("clipper_agency.agents.composer.detect_black_segments", return_value=[])
+        mocker.patch("clipper_agency.agents.composer.detect_freeze_segments", return_value=[])
+        mocker.patch("clipper_agency.agents.composer.write_json")
+
+        agent = ComposerAgent()
+        result = agent._try_assemble(
+            video_assets=[{"scene": 1, "path": str(tmp_path / "clip0.mp4"),
+                            "beat_id": 1, "type": "photo"}],
+            voice_files=[],
+            video_path=str(tmp_path / "video.mp4"),
+            thumbnail_path=str(tmp_path / "thumb.png"),
+            assets_cache=str(tmp_path),
+            job_id=1,
+            agent_dir=str(tmp_path),
+            voiceover_duration_sec=30.0,
+        )
+
+        mock_manifest.assert_called_once()
+        assert "rendered_scene_manifest" in result
+        assert result["rendered_scene_manifest"] is not None
+
+
+class MockRenderedSceneManifest:
+    """Factory for mock RenderedSceneManifest objects used in tests."""
+
+    @staticmethod
+    def make():
+        from clipper_agency.core.rendered_scene_manifest import (
+            RenderedSceneEntry,
+            RenderedSceneManifest,
+        )
+        return RenderedSceneManifest(
+            entries=[RenderedSceneEntry(
+                scene="1", beat_id="1", start_sec=0.0, end_sec=5.0,
+                source_path="/tmp/clip.mp4", source_type="photo",
+                selected_asset_id="abc123",
+            )],
+            video_duration_sec=30.0,
+            video_path="/tmp/video.mp4",
+        )
+
+
 class MockVisualCoverageResult:
     """Factory for mock VisualCoverageResult objects used in tests."""
 
