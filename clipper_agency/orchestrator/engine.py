@@ -419,6 +419,9 @@ class Orchestrator:
             visual_duration_sec=compose_output.get("duration_sec", 0.0),
             narrative_structure=script_output.get("narrative_structure", []),
             unverified_claims=script_output.get("unverified_claims", []),
+            story_beats=research_output.get("story_beats", []),
+            word_timestamps=voice_output.get("timestamps", []),
+            rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
         )
 
         # Persist repair cycle metrics
@@ -931,6 +934,7 @@ class Orchestrator:
                 conn, job_id, topic, script_output, compose_output,
                 safety_rules, niche, output_dir, assets_cache,
                 voice_output=voice_output,
+                research_output=research_output,
             )
             if abort:
                 return abort
@@ -1060,12 +1064,13 @@ class Orchestrator:
         # Load script scenes from completed scriptwriter for subtitles
         script_output = self._load_agent_output(assets_cache, job_id, "scriptwriter")
 
-        # For repair cycles, use a cycle-specific subdirectory
+        # For repair cycles, prepare a cycle-specific subdirectory
+        # but composer always writes to the standard contract path.
+        # After compose succeeds, output is copied to the cycle dir.
         composer_output_dir = output_dir
         if cycle > 0:
             cycle_dir = Path(output_dir) / f"job_{job_id}" / f"cycle_{cycle}"
             cycle_dir.mkdir(parents=True, exist_ok=True)
-            composer_output_dir = str(cycle_dir)
 
         compose_output = self._run_composer(
             job_id=job_id,
@@ -1078,10 +1083,19 @@ class Orchestrator:
             narrative_structure=script_output.get("narrative_structure", []),
         )
 
-        # Tag output with cycle info for downstream promotion
+        # After compose succeeds, copy output to cycle dir for _promote_to_final
         if cycle > 0 and compose_output.get("status") != "failed":
             compose_output["cycle"] = cycle
-            compose_output["cycle_video_path"] = compose_output.get("video_path", "")
+            try:
+                job_dir = Path(output_dir) / f"job_{job_id}"
+                for fname in ("video.mp4", "thumbnail.png", "caption.txt"):
+                    src_file = job_dir / fname
+                    if src_file.exists():
+                        shutil.copy2(str(src_file), str(cycle_dir / fname))
+                compose_output["cycle_video_path"] = str(cycle_dir / "video.mp4")
+            except OSError as e:
+                logger.warning("Failed to copy cycle %d output to %s: %s", cycle, cycle_dir, e)
+                compose_output["cycle_video_path"] = compose_output.get("video_path", "")
 
         if compose_output.get("status") == "failed":
             return compose_output, self._fail_agent(
@@ -1109,10 +1123,12 @@ class Orchestrator:
         safety_rules: list[str], niche: str,
         output_dir: str, assets_cache: str,
         voice_output: dict[str, Any] | None = None,
+        research_output: dict[str, Any] | None = None,
     ) -> tuple[dict | None, dict | None, dict | None]:
         """Run review and packaging stages. Returns (abort, review_output, pkg_output)."""
         vo = voice_output or {}
         mark_agent_running(conn, job_id, "reviewer")
+        rp = research_output or {}
         review_output = self._run_reviewer(
             job_id=job_id, topic=topic,
             script=script_output.get("script", []),
@@ -1122,6 +1138,9 @@ class Orchestrator:
             visual_duration_sec=compose_output.get("duration_sec", 0.0),
             narrative_structure=script_output.get("narrative_structure", []),
             unverified_claims=script_output.get("unverified_claims", []),
+            story_beats=rp.get("story_beats", []),
+            word_timestamps=vo.get("timestamps", []),
+            rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
         )
         # Route repair plan if reviewer requested revisions
         repair_routing = self._handle_repair_plan(
@@ -1320,6 +1339,7 @@ class Orchestrator:
                 conn, job_id, topic, script_output, compose_output,
                 safety_rules, niche, output_dir, assets_cache,
                 voice_output=voice_output,
+                research_output=research_output,
             )
             if abort:
                 return abort
