@@ -583,14 +583,18 @@ class SegmentProducerAgent(BaseAgent):
     def _build_search_queries(self, topic: str, entities: dict) -> list[str]:
         """Derive search queries from topic + entity names."""
         queries = [topic]
-        entity_list = entities.get("entities", []) if isinstance(entities, dict) else []
+        if not isinstance(entities, dict):
+            return queries
+        entity_list = entities.get("entities", [])
         if not isinstance(entity_list, list):
-            entity_list = []
-        for entity in entity_list[:2]:
+            return queries
+        for entity in entity_list:
+            if len(queries) >= 3:
+                break
             name = entity.get("name", "") if isinstance(entity, dict) else str(entity)
             if name:
                 queries.append(f"{name} {topic}")
-        return queries[:3]
+        return queries
 
     def _discover_multi_source_assets(
         self,
