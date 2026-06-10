@@ -247,6 +247,91 @@ class Orchestrator:
         repair_dir.mkdir(parents=True, exist_ok=True)
         write_json(str(repair_dir / "previous_patches.json"), patches)
 
+    def _handle_review_outcome(
+        self, cycle: int, job_id: int,
+        before_review: dict[str, Any], after_review: dict[str, Any],
+        conn, assets_cache: str,
+    ) -> dict[str, Any]:
+        """Handle reviewer outcome: pass, continue with patches, or manual review.
+
+        Returns an action dict with ``_action`` key (``"return"`` or ``"continue"``).
+        """
+        if after_review.get("status") == "pass":
+            self._complete_agent(conn, assets_cache, job_id, "reviewer")
+            update_job_repair_status(conn, job_id, "completed")
+            update_job_quality_status(conn, job_id, "passed")
+            update_job_artifact_status(conn, job_id, "approved")
+            update_job_publication_status(conn, job_id, "ready")
+            logger.info(
+                "Repair PASSED at cycle %d for job %d", cycle, job_id)
+            return {
+                "_action": "return",
+                "status": "completed",
+                "job_id": job_id,
+                "cycle": cycle,
+            }
+
+        # Reviewer failed — check for new repair plan
+        new_plan = after_review.get("repair_plan")
+        if new_plan and new_plan.get("patches"):
+            new_patches = new_plan["patches"]
+            self._complete_agent(conn, assets_cache, job_id, "reviewer")
+            update_job_quality_status(conn, job_id, "failed")
+            return {
+                "_action": "continue",
+                "target_agent": route_repair(new_patches[0]),
+                "patches": new_patches,
+                "before_review": after_review,
+            }
+
+        # Reviewer failed with no repair plan — manual review
+        self._complete_agent(conn, assets_cache, job_id, "reviewer")
+        update_job_repair_status(conn, job_id, "exhausted")
+        update_job_artifact_status(conn, job_id, "manual_review_required")
+        update_job_quality_status(conn, job_id, "repair_exhausted")
+        logger.warning(
+            "Repair cycle %d: no repair plan, job %d needs manual review",
+            cycle, job_id,
+        )
+        return {
+            "_action": "return",
+            "status": "manual_review_required",
+            "job_id": job_id,
+            "reason": _MANUAL_REVIEW_REQUIRED,
+            "cycle": cycle,
+        }
+
+    def _check_duplicate_patches(
+        self, cycle: int, job_id: int, patches: list[dict],
+        assets_cache: str, conn,
+    ) -> dict[str, Any] | None:
+        """Return exhaustion dict if patches are identical to previous cycle, else None."""
+        prev_patches = self._load_previous_patches(assets_cache, job_id)
+        if not prev_patches or not self._are_patches_identical(prev_patches, patches):
+            return None
+
+        logger.warning(
+            "Identical repair patch repeated at cycle %d for job %d",
+            cycle, job_id,
+        )
+        update_job_repair_status(conn, job_id, "exhausted")
+        update_job_artifact_status(conn, job_id, "manual_review_required")
+        update_job_quality_status(conn, job_id, "repair_exhausted")
+        append_audit_log(
+            conn, action="repair_exhausted", actor="engine",
+            resource_type="job", resource_id=job_id,
+            details=json.dumps({
+                "cycle": cycle, "reason": _SAME_PATCH_REPEATED,
+            }),
+        )
+        return {
+            "_action": "return",
+            "status": "exhausted",
+            "job_id": job_id,
+            "reason": _SAME_PATCH_REPEATED,
+            "cycle": cycle,
+        }
+
     def _execute_single_repair_cycle(
         self,
         cycle: int,
@@ -273,29 +358,10 @@ class Orchestrator:
         )
 
         # Check for repeated identical patches
-        prev_patches = self._load_previous_patches(assets_cache, job_id)
-        if prev_patches and self._are_patches_identical(prev_patches, patches):
-            logger.warning(
-                "Identical repair patch repeated at cycle %d for job %d",
-                cycle, job_id,
-            )
-            update_job_repair_status(conn, job_id, "exhausted")
-            update_job_artifact_status(conn, job_id, "manual_review_required")
-            update_job_quality_status(conn, job_id, "repair_exhausted")
-            append_audit_log(
-                conn, action="repair_exhausted", actor="engine",
-                resource_type="job", resource_id=job_id,
-                details=json.dumps({
-                    "cycle": cycle, "reason": _SAME_PATCH_REPEATED,
-                }),
-            )
-            return {
-                "_action": "return",
-                "status": "exhausted",
-                "job_id": job_id,
-                "reason": _SAME_PATCH_REPEATED,
-                "cycle": cycle,
-            }
+        exhausted = self._check_duplicate_patches(
+            cycle, job_id, patches, assets_cache, conn)
+        if exhausted:
+            return exhausted
 
         # Save current patches for next cycle's comparison
         self._save_previous_patches(assets_cache, job_id, patches)
@@ -376,50 +442,10 @@ class Orchestrator:
         )
 
         # Check reviewer outcome
-        if after_review.get("status") == "pass":
-            self._complete_agent(conn, assets_cache, job_id, "reviewer")
-            update_job_repair_status(conn, job_id, "completed")
-            update_job_quality_status(conn, job_id, "passed")
-            update_job_artifact_status(conn, job_id, "approved")
-            update_job_publication_status(conn, job_id, "ready")
-            logger.info(
-                "Repair PASSED at cycle %d for job %d", cycle, job_id)
-            return {
-                "_action": "return",
-                "status": "completed",
-                "job_id": job_id,
-                "cycle": cycle,
-            }
-
-        # Reviewer failed — check for new repair plan
-        new_plan = after_review.get("repair_plan")
-        if new_plan and new_plan.get("patches"):
-            new_patches = new_plan["patches"]
-            self._complete_agent(conn, assets_cache, job_id, "reviewer")
-            update_job_quality_status(conn, job_id, "failed")
-            return {
-                "_action": "continue",
-                "target_agent": route_repair(new_patches[0]),
-                "patches": new_patches,
-                "before_review": after_review,
-            }
-
-        # Reviewer failed with no repair plan — manual review
-        self._complete_agent(conn, assets_cache, job_id, "reviewer")
-        update_job_repair_status(conn, job_id, "exhausted")
-        update_job_artifact_status(conn, job_id, "manual_review_required")
-        update_job_quality_status(conn, job_id, "repair_exhausted")
-        logger.warning(
-            "Repair cycle %d: no repair plan, job %d needs manual review",
-            cycle, job_id,
+        return self._handle_review_outcome(
+            cycle, job_id, before_review, after_review,
+            conn, assets_cache,
         )
-        return {
-            "_action": "return",
-            "status": "manual_review_required",
-            "job_id": job_id,
-            "reason": _MANUAL_REVIEW_REQUIRED,
-            "cycle": cycle,
-        }
 
     def _execute_repair_cycle(
         self,
@@ -498,6 +524,18 @@ class Orchestrator:
                 "job_id": job_id,
             }
         return None
+
+    def _evaluate_and_enforce_gate(
+        self, conn, job_id: int, assets_cache: str,
+        gate_label: str, gate_record_key: str,
+        gate_instance, failed_at: str,
+        **evaluate_kwargs: Any,
+    ) -> dict[str, Any] | None:
+        """Run gate.evaluate(), record result, enforce. Return abort dict or None."""
+        g_result = gate_instance.evaluate(**evaluate_kwargs)
+        self._record_gate(assets_cache, job_id, gate_record_key, g_result)
+        return self._enforce_gate(
+            conn, job_id, gate_label, g_result, failed_at=failed_at)
 
     def _stage_safety(
         self, conn: Any, topic: str, niche: str,
@@ -681,13 +719,16 @@ class Orchestrator:
             return self._fail_agent(conn, job_id, "visual_director",
                                     visual_output, _ASSET_SOURCING_FAILED)
 
-        g9 = GateAssetValidation()
-        visual_assets = visual_output.get("assets", [])
-        asset_paths = [a.get("path", "") for a in visual_assets]
-        g9_result = g9.evaluate(asset_paths=asset_paths, assets=visual_assets)
-        self._record_gate(assets_cache, job_id, "G9_asset_validation", g9_result)
-        if abort := self._enforce_gate(conn, job_id, "G9", g9_result,
-                                        failed_at="asset_validation"):
+        # G9: Asset validation
+        abort = self._evaluate_and_enforce_gate(
+            conn, job_id, assets_cache,
+            gate_label="G9", gate_record_key="G9_asset_validation",
+            gate_instance=GateAssetValidation(),
+            failed_at="asset_validation",
+            asset_paths=[a.get("path", "") for a in visual_output.get("assets", [])],
+            assets=visual_output.get("assets", []),
+        )
+        if abort:
             return abort
 
         logger.info("G9: running Composer agent")
@@ -707,14 +748,18 @@ class Orchestrator:
                                     compose_output, _COMPOSER_FAILED)
         self._complete_agent(conn, assets_cache, job_id, "composer")
 
+        # G10: Video validation
         cp_config = load_settings().content_planning
-        hard_limit = cp_config.hard_limit_sec if cp_config else 60
-        g10 = GateVideoValidation()
-        g10_result = g10.evaluate(video_path=compose_output.get("video_path"),
-                                  hard_limit_sec=hard_limit)
-        self._record_gate(assets_cache, job_id, "G10_video_validation", g10_result)
-        if abort := self._enforce_gate(conn, job_id, "G10", g10_result,
-                                        failed_at="video_validation"):
+        hard_limit = getattr(cp_config, "hard_limit_sec", 60)
+        abort = self._evaluate_and_enforce_gate(
+            conn, job_id, assets_cache,
+            gate_label="G10", gate_record_key="G10_video_validation",
+            gate_instance=GateVideoValidation(),
+            failed_at="video_validation",
+            video_path=compose_output.get("video_path"),
+            hard_limit_sec=hard_limit,
+        )
+        if abort:
             return abort
 
         return compose_output
