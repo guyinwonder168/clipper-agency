@@ -88,6 +88,9 @@ Then fill in your API keys. Required:
 # Run the full pipeline
 python3 -m clipper_agency run --topic "Berita terbaru artis Indonesia"
 
+# Debug mode with verbose logging
+python3 -m clipper_agency run --topic "..." --log-level DEBUG
+
 # Dry run (validate input without execution)
 python3 -m clipper_agency run --topic "..." --dry-run
 
@@ -99,6 +102,14 @@ python3 -m clipper_agency jobs
 
 # Run with a different niche
 python3 -m clipper_agency run --topic "..." --niche indonesian_artists
+
+# Test an individual agent (bypasses orchestrator DB tracking)
+python3 -m clipper_agency test-agent safety --topic "..."
+python3 -m clipper_agency test-agent segment_producer --topic "..."
+
+# Retry/resume a failed job from a specific agent
+python3 -m clipper_agency job-retry 125 --from composer
+python3 -m clipper_agency job-resume 125
 ```
 
 ### Docker
@@ -134,11 +145,27 @@ clipper_agency/
 ├── __init__.py
 ├── __main__.py              # Entry point: python3 -m clipper_agency
 ├── config/                  # Pydantic config loader & hierarchy
-├── core/                    # Shared utilities, logging, safe paths
+├── core/                    # Quality gates, inspection, repair, shared utils
+│   ├── visual_coverage.py, frame_sampler.py, media_detectors.py
+│   ├── text_detection.py, text_collision.py, safe_area.py
+│   ├── story_mode.py, story_mode_contract.py, story_decision_reconciliation.py
+│   ├── duration_budget.py, package_consistency.py, semantic_visual_review.py
+│   ├── rendered_scene_manifest.py, reviewer_context.py
+│   ├── frame_extractor.py, frame_hash.py, frame_inspection_pipeline.py
+│   ├── multimodal_provider.py, inspection_cache.py, candidate_semantic_ranker.py
+│   ├── ocr_adapter.py, face_adapter.py, source_cleanliness.py
+│   ├── final_layout_inspection.py, generated_text_manifest.py
+│   ├── repair_router.py, repair_metrics.py
+│   └── logging.py, paths.py, safe_paths.py, inspection_paths.py
+├── observability/           # LLM trace artifacts & redaction
+│   ├── llm_trace.py
+│   └── redaction.py
 ├── db/                      # SQLite schema, queries, connection
 ├── orchestrator/            # Gated state machine
 │   ├── engine.py
 │   ├── gates.py
+│   ├── state_machine.py
+│   ├── timeline.py
 │   ├── validator.py          # Content direction format validator
 │   └── duration_gate.py      # Script duration gate (pre-TTS)
 ├── agents/                  # 7 pipeline agents
@@ -150,7 +177,9 @@ clipper_agency/
 │   ├── visual_director.py
 │   ├── composer.py
 │   └── reviewer.py
-├── llm/                     # OpenRouter client & model routing
+├── llm/                     # OpenRouter client, model routing, multimodal
+│   ├── client.py
+│   └── multimodal_client.py
 ├── services/                # External API integrations
 │   ├── elevenlabs.py
 │   ├── pexels.py
@@ -185,9 +214,10 @@ python3 -m clipper_agency dashboard
 # http://localhost:5000
 ```
 
-Default credentials in `.env`:
+Required `.env` config for dashboard auth:
 - `DASHBOARD_USERNAME=admin`
 - `DASHBOARD_PASSWORD=changeme`
+- `DASHBOARD_SECRET_KEY=<random-secret>` (required for state-changing operations: retry, resume, delete)
 
 ---
 
