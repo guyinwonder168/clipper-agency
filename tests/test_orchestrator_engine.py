@@ -2318,7 +2318,6 @@ class TestBoundedRepairLoop:
                 assets_cache=ac,
                 output_dir=str(tmp_path / "outputs"),
                 topic="Repair test",
-                niche="test_niche",
             )
 
         assert result["status"] == "completed"
@@ -2369,7 +2368,6 @@ class TestBoundedRepairLoop:
                 assets_cache=ac,
                 output_dir=str(tmp_path / "outputs"),
                 topic="Repair test",
-                niche="test_niche",
             )
 
         assert result["status"] == "exhausted"
@@ -2437,7 +2435,6 @@ class TestBoundedRepairLoop:
                 assets_cache=ac,
                 output_dir=str(tmp_path / "outputs"),
                 topic="Repair test",
-                niche="test_niche",
             )
 
         assert result["status"] == "exhausted"
@@ -2492,7 +2489,6 @@ class TestBoundedRepairLoop:
                 assets_cache=ac,
                 output_dir=str(tmp_path / "outputs"),
                 topic="Repair test",
-                niche="test_niche",
             )
 
         # cycle_0 sentinel must be untouched
@@ -2531,7 +2527,6 @@ class TestBoundedRepairLoop:
                 assets_cache=ac,
                 output_dir=str(tmp_path / "outputs"),
                 topic="Repair test",
-                niche="test_niche",
             )
 
         assert result["status"] == "manual_review_required"
@@ -2578,7 +2573,6 @@ class TestBoundedRepairLoop:
                 assets_cache=ac,
                 output_dir=str(tmp_path / "outputs"),
                 topic="Repair test",
-                niche="test_niche",
             )
 
         assert result["status"] == "completed"

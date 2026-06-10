@@ -428,7 +428,6 @@ class Orchestrator:
         assets_cache: str,
         output_dir: str,
         topic: str,
-        niche: str,
     ) -> dict[str, Any]:
         """Execute the bounded repair loop.
 
@@ -726,7 +725,7 @@ class Orchestrator:
         job_id: int,
         review_output: dict[str, Any] | None,
         script_output: dict[str, Any],
-        compose_output: dict[str, Any],
+        _initial_compose_output: dict[str, Any],
         cost_result: Any,
         assets_cache: str,
         output_dir: str,
@@ -748,7 +747,6 @@ class Orchestrator:
             assets_cache=assets_cache,
             output_dir=output_dir,
             topic=topic,
-            niche=niche,
         )
         if repair_result.get("status") == "completed":
             # Repair passed — package and promote to final/
