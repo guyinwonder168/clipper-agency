@@ -1912,3 +1912,97 @@ class TestVisualCoverageDiagnostics:
         )
         assert result["diagnostics"]["visual_coverage"]["status"] == "pass"
         mock_vc.assert_called_once()
+
+
+class TestGeneratedTextManifest:
+    """Composer must persist generated text regions in output diagnostics."""
+
+    def test_audio_first_render_includes_generated_text_regions(self, mocker, tmp_path):
+        """Audio-first render must call build_generated_text_regions and persist."""
+        mock_regions = mocker.patch(
+            "clipper_agency.agents.composer.build_generated_text_regions",
+            return_value=[
+                {"timestamp_start_sec": 1.0, "timestamp_end_sec": 2.5,
+                 "layer": "subtitle", "bbox": [120, 1480, 960, 1740],
+                 "text": "hello world"},
+            ],
+        )
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
+        mocker.patch.object(ComposerAgent, "_generate_thumbnail")
+        mocker.patch.object(ComposerAgent, "_probe_output_duration", return_value=30.0)
+        mocker.patch.object(ComposerAgent, "_persist_diagnostics")
+        mocker.patch("clipper_agency.agents.composer._persist_visual_coverage")
+        mocker.patch("clipper_agency.agents.composer.evaluate_visual_coverage",
+                       return_value=MockVisualCoverageResult.pass_result())
+        mocker.patch("clipper_agency.agents.composer.detect_black_segments", return_value=[])
+        mocker.patch("clipper_agency.agents.composer.detect_freeze_segments", return_value=[])
+        mocker.patch("clipper_agency.agents.composer.write_json")
+
+        agent = ComposerAgent()
+        result = agent._run_audio_first_render(
+            job_id=1,
+            voiceover_path=str(tmp_path / "voice.mp3"),
+            timestamps=[{"word": "hello", "start": 0.0, "end": 1.0},
+                         {"word": "world", "start": 1.0, "end": 2.0}],
+            assets=[],
+            beat_durations=[0.0],
+            trimmed_clips=[str(tmp_path / "clip0.mp4")],
+            card_fallback_scenes=[],
+            video_path=str(tmp_path / "video.mp4"),
+            thumbnail_path=str(tmp_path / "thumb.png"),
+            assets_cache=str(tmp_path),
+            agent_dir=str(tmp_path),
+        )
+
+        mock_regions.assert_called_once()
+        assert "diagnostics" in result
+        assert "generated_text_regions" in result["diagnostics"]
+
+    def test_generated_text_regions_absent_when_no_captions(self, mocker, tmp_path):
+        """When there are no captions, generated_text_regions should be empty list."""
+        mock_regions = mocker.patch(
+            "clipper_agency.agents.composer.build_generated_text_regions",
+            return_value=[],
+        )
+        mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
+        mocker.patch.object(ComposerAgent, "_generate_thumbnail")
+        mocker.patch.object(ComposerAgent, "_probe_output_duration", return_value=30.0)
+        mocker.patch.object(ComposerAgent, "_persist_diagnostics")
+        mocker.patch("clipper_agency.agents.composer._persist_visual_coverage")
+        mocker.patch("clipper_agency.agents.composer.evaluate_visual_coverage",
+                       return_value=MockVisualCoverageResult.pass_result())
+        mocker.patch("clipper_agency.agents.composer.detect_black_segments", return_value=[])
+        mocker.patch("clipper_agency.agents.composer.detect_freeze_segments", return_value=[])
+        mocker.patch("clipper_agency.agents.composer.write_json")
+
+        agent = ComposerAgent()
+        result = agent._run_audio_first_render(
+            job_id=1,
+            voiceover_path=str(tmp_path / "voice.mp3"),
+            timestamps=[],
+            assets=[],
+            beat_durations=[],
+            trimmed_clips=[str(tmp_path / "clip0.mp4")],
+            card_fallback_scenes=[],
+            video_path=str(tmp_path / "video.mp4"),
+            thumbnail_path=str(tmp_path / "thumb.png"),
+            assets_cache=str(tmp_path),
+            agent_dir=str(tmp_path),
+        )
+
+        assert result["diagnostics"]["generated_text_regions"] == []
+
+
+class MockVisualCoverageResult:
+    """Factory for mock VisualCoverageResult objects used in tests."""
+
+    @staticmethod
+    def pass_result(output_duration_sec=30.0):
+        from clipper_agency.config.schema import VisualCoverageResult
+        return VisualCoverageResult(
+            status="pass",
+            output_duration_sec=output_duration_sec,
+            voiceover_duration_sec=output_duration_sec,
+            coverage_ratio=1.0,
+            issues=[],
+        )

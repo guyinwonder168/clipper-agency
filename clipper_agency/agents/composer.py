@@ -41,6 +41,7 @@ from clipper_agency.core.media_detectors import (
 )
 from clipper_agency.config.schema import VisualCoverageResult
 from clipper_agency.core.visual_coverage import evaluate_visual_coverage
+from clipper_agency.core.generated_text_manifest import build_generated_text_regions
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
@@ -186,6 +187,26 @@ def _compute_scene_segments(
         return []
     seg_len = duration_sec / scene_count
     return [(i * seg_len, (i + 1) * seg_len) for i in range(scene_count)]
+
+
+def _build_text_regions_from_captions(
+    captions: list[Any],
+    frame_size: tuple[int, int] = (1080, 1920),
+) -> list[dict]:
+    """Convert caption overlays to generated text region entries.
+
+    Wraps *captions* into a minimal render-plan dict expected by
+    ``build_generated_text_regions``.
+    """
+    if not captions:
+        return []
+    # Convert pydantic CaptionOverlay objects to plain dicts
+    caption_dicts = [
+        c.model_dump() if hasattr(c, "model_dump") else dict(c)
+        for c in captions
+    ]
+    render_plan = {"scenes": [{"captions": caption_dicts}]}
+    return build_generated_text_regions(render_plan, frame_size)
 
 
 def _persist_visual_coverage(
@@ -682,6 +703,10 @@ class ComposerAgent(BaseAgent):
             "template_name": template_name,
             "diagnostics_dir": str(diagnostics_dir),
         }
+
+        # Build generated text region manifest from render plan
+        text_regions = build_generated_text_regions(plan.model_dump(), (1080, 1920))
+        output.setdefault("diagnostics", {})["generated_text_regions"] = text_regions
 
         if agent_dir:
             write_json(agent_output_file(assets_cache, job_id, "composer"), output)
@@ -1587,4 +1612,11 @@ class ComposerAgent(BaseAgent):
                 agent_output_file(assets_cache, job_id, "composer"), output,
             )
         output = self._attach_visual_coverage_diagnostics(output, None)
+
+        # Build generated text region manifest from captions
+        text_regions = _build_text_regions_from_captions(keyword_captions)
+        if "diagnostics" not in output:
+            output["diagnostics"] = {}
+        output["diagnostics"]["generated_text_regions"] = text_regions
+
         return output
