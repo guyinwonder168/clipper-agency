@@ -1,8 +1,8 @@
 # Clipper Agency — Software Requirements Specification
 
-**Version:** 3.2
-**Date:** 2026-06-10
-**Status:** Phase 22 Complete — Runtime Quality Enforcement + Multi-Source Asset Sourcing
+**Version:** 3.3
+**Date:** 2026-06-11
+**Status:** Phase 23 Complete — Reviewer Context + Diagnostics Enforcement Contract
 **Related:** `docs/PRD.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
@@ -36,7 +36,7 @@
 | FR-06 | Voice Producer generates continuous voiceover via single TTS call (1 call instead of 8 per-scene = 87.5% cost reduction) with word-level timestamps. Primary: ElevenLabs `/with-timestamps` endpoint (character-level alignment grouped into words). Fallback: Gemini TTS (silence detection for approximate timing) → Fish Audio → fail clearly. Voice files and metadata saved under `ASSETS_CACHE/job_{id}/agents/voice_producer/` | P0 | MVP |
 | FR-07 | Visual Director uses LLM to plan beat-driven visual strategy from story_beats + word-level timestamps. Each beat carries visual_must_show/visual_must_not_show rules, asset_candidates, and exact audio durations. Visual hierarchy: direct source clip → official screenshot → subject portrait with Ken Burns → text card → generic stock (abstract topics only). 3-tier image fallback for text cards: Pexels photo search → Firecrawl article image → gradient card. Falls back to legacy sequential planning when LLM unavailable. Sequential execution: Voice Producer must complete before Visual Director starts | P0 | MVP |
 | FR-08 | Composer assembles video with single audio timeline (voiceover.mp3 as immutable anchor). Smart scene trimming: ffprobe keyframe boundary detection with ±15% tolerance, speed adjustment up to ±20% (imperceptible). Keyword captions (max 6 words, beat-aligned, bottom-positioned) replace full-sentence subtitles. Never trims or speeds up audio. Template-driven rendering via `clipper_agency/rendering/` engine with per-template adapters | P0 | MVP |
-| FR-09 | Reviewer Agent performs 4 programmatic quality checks: (1) AV sync validation (audio vs visual duration drift < 0.5s), (2) caption quality (short keywords, max 6 words, not full sentences), (3) fact safety (unverified claims use safe wording, no definitive accusations), (4) narrative structure (beat completeness). Plus multimodal quality + safety + duplicate check. Max 2 retries by Admin/Creative Lead | P0 | MVP |
+| FR-09 | Reviewer Agent performs hard gates and deterministic quality gates before LLM multimodal review: AV sync validation, caption quality, fact safety, narrative structure, visual coverage, text collision, safe-area, package consistency, timestamp-level semantic review, and semantic visual relevance. Consumes Composer diagnostics, `rendered_scene_manifest`, `story_beats`, and `word_timestamps` from the engine; rejects with repairable issue details. Max 2 retries by Admin/Creative Lead | P0 | MVP |
 | FR-10 | Output packager produces `video.mp4` + `caption.txt` + `thumbnail.png` + `metadata.json` | P0 | MVP |
 | FR-11 | Research cache with Time To Live (TTL): fresh <60min, stale 60-240min, expired >240min or new Asia/Jakarta day | P0 | MVP |
 | FR-12 | Creative memory: pre-generation check prevents repetition; post-generation update records usage | P0 | MVP |
@@ -84,6 +84,7 @@
 | FR-65 | Repair quality metrics: `compute_repair_cycle_record()`, `extract_quality_snapshot()`, `is_repair_improved()`, `persist_repair_cycle()` in `clipper_agency/core/repair_metrics.py` | P0 | MVP |
 | FR-66 | Publication blocking: rejected artifacts retained under `outputs/job_{id}/`. `_promote_to_final()` requires quality=passed AND artifact=approved. Atomic promotion via temp dir + rename | P0 | MVP |
 | FR-67 | Timestamp-level semantic review integrated into reviewer gate chain: `map_scenes_to_beats()` maps rendered scenes to story beats, `_run_timestamp_semantic_review()` emits SceneSemanticReview with evidence contracts | P0 | MVP |
+| FR-68 | Reviewer diagnostics passthrough and manifest serialization: Orchestrator engine passes Composer diagnostics and rendered scene manifest to Reviewer in `_retry_review_and_package()` and repair rerun path; `RenderedSceneManifest` is serialized to dict before Reviewer gate code consumes `entries` | P0 | MVP |
 
 ### 2.2 User Interfaces
 

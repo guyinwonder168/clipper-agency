@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-06-11
+
+### Phase 23: Reviewer Context + Diagnostics Enforcement Contract
+
+Reviewer deterministic gates now receive the Composer diagnostics and rendered scene manifest produced by the engine. This closes the runtime enforcement gap where visual coverage, text collision, safe-area, package consistency, and timestamp-level semantic review could skip evidence in production pipeline runs.
+
+#### Reviewer Context Contract
+- `_retry_review_and_package()` and the repair rerun `_run_reviewer()` call site pass `story_beats`, `word_timestamps`, `rendered_scene_manifest`, and `diagnostics` from Composer output.
+- `RenderedSceneManifest` is serialized before reviewer consumption so gate code can safely read `rendered_scene_manifest.get("entries")`.
+- Reviewer gate chain now enforces `visual_coverage → text_collision → safe_area → package_consistency → timestamp_semantic → semantic_review → LLM`.
+
+#### Bug Fixes (Codex Review)
+- P1 — `_build_scene_manifest()` serializes `RenderedSceneManifest` via `.model_dump()` before `.get("entries")`.
+- P1 — engine forwards `compose_output["diagnostics"]` to Reviewer in both normal and repair rerun paths.
+
+#### Tests
+- Reviewer + engine regression tests: 125 passed.
+- Offline suite: 1837 passed, 18 deselected.
+
+#### Documentation
+- PRD v3.3, SRS v3.3, technical_design v5.3, requirements_traceability v4.3.
+- ADR 0024 — Reviewer Context and Diagnostics Enforcement Contract.
+
 ## [2.1.0] — 2026-06-09
 
 ### Phase 21: Deterministic Quality Gates + Repair Routing

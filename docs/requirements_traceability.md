@@ -1,8 +1,8 @@
 # Clipper Agency — Requirements Traceability Matrix
 
-**Version:** 4.2
-**Date:** 2026-06-10
-**Status:** Phase 22 Complete — Runtime Quality Enforcement + Multi-Source Asset Sourcing
+**Version:** 4.3
+**Date:** 2026-06-11
+**Status:** Phase 23 Complete — Reviewer Context + Diagnostics Enforcement Contract
 
 ---
 
@@ -269,6 +269,13 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 182 | Publication blocking: atomic promotion via temp+rename, requires quality=passed AND artifact=approved | SRS §2 FR-66, Design §15 |
 | 183 | Timestamp-semantic review in reviewer gate chain: scene-to-beat mapping with evidence contracts | SRS §2 FR-67, Design §15 |
 
+### From Phase 23 Reviewer Context + Diagnostics Enforcement Contract
+
+| # | Fact | New Location |
+|---|------|-------------|
+| 184 | Rendered scene manifest + reviewer context: engine passes serialized `rendered_scene_manifest`, `story_beats`, and `word_timestamps` to Reviewer for timestamp-level semantic review | SRS §2 FR-67/FR-68, Design §16 |
+| 185 | Composer diagnostics passthrough: engine forwards diagnostics to Reviewer in normal and repair rerun paths so visual_coverage, text_collision, and safe_area gates enforce Composer evidence | SRS §2 FR-68, Design §16, ADR 0024 |
+
 ---
 
 ## Requirements Traceability Matrix
@@ -293,7 +300,8 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | PR-27 | FR-33 | §7 Scene Normalization | G9 | Mixed framerates, non-1:1 SAR, static images, flash frames | Scene normalizer in Composer pipeline: framerate→30fps, SAR→1:1, zoompan for images, reject <1s clips |
 | PR-28 | FR-34, FR-35, FR-36 | §7 Audio/Subtitle/Transition, §4 Composer | G9, G10 | Audio silence padding, missing script text, xfade on short clips, special chars in drawtext | Audio sequencer + subtitle engine + xfade chain + production flags |
 | PR-29 | FR-37, FR-38, FR-39, FR-40, FR-41, FR-42 | §7 Audio-First Architecture, §3 G7/G8/G10, §4 Agent Contracts | G7, G8, G9, G10 | TTS too long/short (atempo ±15%), single TTS failure, word timestamp inaccuracy, clip longer than beat (smart trim), clip shorter (slow 30%), downloaded clip watermarks, no video clips (text_only), fewer clips than stories (deep dive), generic stock for named-person (visual rules), unverified claim as fact (reviewer catch) | Story beats with visual rules, continuous voiceover contract, word-level timestamps, beat-driven visual planning, smart scene trimming, keyword captions, 4 reviewer quality checks, shared schema.py contract |
-| PR-30 | FR-43, FR-44, FR-45, FR-46, FR-47, FR-48, FR-49, FR-50 | §13 Deterministic Quality Gates, §3 G10, §4 Agent Roles | G10 (extended) | Black/freeze frames undetected, text collisions from overlapping overlays, safe-area violations, story mode vs actual composition mismatch, claim-to-visual irrelevance, repair routing to wrong agent | Deterministic gate chain (visual_coverage→text_collision→safe_area→package_consistency→semantic_review→LLM), evidence contracts on StoryBeat, repair routing table, 10 pure-function core modules |
+| PR-30 | FR-43, FR-44, FR-45, FR-46, FR-47, FR-48, FR-49, FR-50 | §13 Deterministic Quality Gates, §3 G10, §4 Agent Roles | G10 (extended) | Black/freeze frames undetected, text collisions from overlapping overlays, safe-area violations, story mode vs actual composition mismatch, claim-to-visual irrelevance, repair routing to wrong agent | Deterministic gate chain (visual_coverage→text_collision→safe_area→package_consistency→timestamp_semantic→semantic_review→LLM), evidence contracts on StoryBeat, repair routing table, 10 pure-function core modules |
+| PR-36 | FR-67, FR-68 | §16 Reviewer Context + Diagnostics Enforcement | G10 (extended) | Engine omits diagnostics/manifest; Pydantic manifest not dict; timestamp semantic review skips | Reviewer receives serialized manifest + diagnostics in normal and repair rerun paths; gate chain includes timestamp_semantic before semantic_review |
 
 ### MVP P1 Requirements
 
@@ -576,4 +584,5 @@ Use this checklist to verify the documentation set is airtight. Any reviewer (hu
 | **Semantic Visual Review** | Claim-to-visual alignment scoring using keyword overlap between narration goals and actual visual content with evidence contracts (`clipper_agency/core/semantic_visual_review.py`) |
 | **Repair Router** | Quality failure → agent mapping service that produces targeted repair plans for specific agents without full pipeline re-runs (`clipper_agency/core/repair_router.py`) |
 | **Evidence Contract** | Mapping on StoryBeat that links each claim to required visual evidence and tracks actual alignment score |
-| **Reviewer Gate Chain** | Ordered deterministic quality checks run before LLM multimodal review: visual_coverage → text_collision → safe_area → package_consistency → semantic_review → LLM |
+| **Reviewer Gate Chain** | Ordered deterministic quality checks run before LLM multimodal review: visual_coverage → text_collision → safe_area → package_consistency → timestamp_semantic → semantic_review → LLM |
+| **Reviewer Context Bundle** | Engine-provided Reviewer kwargs: `story_beats`, `word_timestamps`, `rendered_scene_manifest`, and Composer `diagnostics` |
