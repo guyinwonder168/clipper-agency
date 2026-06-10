@@ -145,6 +145,9 @@ def _write_output_artifacts(
 class ScriptwriterAgent(BaseAgent):
     """Generates continuous voiceover narration from an edit blueprint."""
 
+    def __init__(self, trace_writer: Any | None = None) -> None:
+        self._trace_writer = trace_writer
+
     @property
     def agent_name(self) -> str:
         return "scriptwriter"
@@ -177,16 +180,29 @@ class ScriptwriterAgent(BaseAgent):
         user_content = f"Topic: {topic}\n\nResearch Brief: {research_brief}"
 
         agent_cfg = get_agent_config("scriptwriter")
-        llm = OpenRouterClient()
-        response = llm.chat(
-            model=agent_cfg["model"],
-            messages=[
+        llm = OpenRouterClient(trace_writer=self._trace_writer)
+        messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
-            ],
+            ]
+        if self._trace_writer:
+            response = llm.chat_traced(
+                model=agent_cfg["model"],
+                messages=messages,
+                job_id=job_id,
+                agent=self.agent_name,
+                task="write_script",
+                temperature=agent_cfg["temperature"],
+                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                prompt_template_id="scriptwriter.md",
+            )
+        else:
+            response = llm.chat(
+                model=agent_cfg["model"],
+                messages=messages,
             temperature=agent_cfg["temperature"],
             max_completion_tokens=agent_cfg.get("max_completion_tokens"),
-        )
+            )
 
         parsed = self._parse_script_response(response["content"])
         # Dynamic word bounds from ContentPlanningConfig

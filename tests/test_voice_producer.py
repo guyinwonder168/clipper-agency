@@ -51,6 +51,12 @@ def _mock_service(succeed: bool):
 class TestVoiceProducerFallback:
     """TTS provider priority and fallback behaviour."""
 
+    def test_accepts_trace_writer_for_engine_injection(self):
+        writer = object()
+        agent = VoiceProducerAgent(trace_writer=writer)
+
+        assert agent._trace_writer is writer
+
     def test_elevenlabs_succeeds_with_timestamps(self, tmp_path, monkeypatch):
         """When ElevenLabs key is present and service succeeds,
         single audio with timestamps should be returned."""

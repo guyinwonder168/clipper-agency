@@ -112,6 +112,44 @@ class TestScriptwriterExecute:
         assert result["caption"] == "Check this out! #viral"
         assert result["hashtags"] == ["#viral", "#trending"]
 
+    def test_execute_uses_traced_chat_when_writer_configured(self, mocker):
+        writer = object()
+        mock_traced = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat_traced",
+            return_value=self._mock_chat(MOCK_VOICEOVER_RESPONSE),
+        )
+
+        result = ScriptwriterAgent(trace_writer=writer).execute(
+            job_id=9,
+            topic="Trace topic",
+            research_brief="Brief",
+        )
+
+        assert result["status"] == "completed"
+        mock_traced.assert_called_once()
+        assert mock_traced.call_args.kwargs["job_id"] == 9
+        assert mock_traced.call_args.kwargs["agent"] == "scriptwriter"
+        assert mock_traced.call_args.kwargs["task"] == "write_script"
+
+    def test_execute_uses_plain_chat_when_writer_is_none(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value=self._mock_chat(MOCK_VOICEOVER_RESPONSE),
+        )
+        mock_traced = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat_traced",
+        )
+
+        result = ScriptwriterAgent(trace_writer=None).execute(
+            job_id=10,
+            topic="No trace",
+            research_brief="Brief",
+        )
+
+        assert result["status"] == "completed"
+        mock_chat.assert_called_once()
+        mock_traced.assert_not_called()
+
     def test_execute_includes_research_brief_in_prompt(self, mocker):
         mock_chat = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",

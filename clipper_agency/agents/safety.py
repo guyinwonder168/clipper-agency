@@ -30,6 +30,9 @@ Respond ONLY with valid JSON: {"verdict": "...", "reason": "..."}
 class SafetyAgent(BaseAgent):
     """Analyzes a topic for content safety before pipeline execution."""
 
+    def __init__(self, trace_writer: Any | None = None) -> None:
+        self._trace_writer = trace_writer
+
     @property
     def agent_name(self) -> str:
         return "safety"
@@ -50,20 +53,33 @@ class SafetyAgent(BaseAgent):
             write_json(agent_input_file(assets_cache, job_id, self.agent_name), input_data)
 
         settings_cfg = get_agent_config("safety")
-        llm = OpenRouterClient()
+        llm = OpenRouterClient(trace_writer=self._trace_writer)
         prompt = load_prompt("safety", SAFETY_PROMPT, PROMPTS_DIR)
-        response = llm.chat(
-            model=settings_cfg["model"],
-            messages=[
+        messages = [
                 {"role": "system", "content": prompt},
                 {
                     "role": "user",
                     "content": f"Topic: {topic}\nRules: {rules}",
                 },
-            ],
+            ]
+        if self._trace_writer:
+            response = llm.chat_traced(
+                model=settings_cfg["model"],
+                messages=messages,
+                job_id=job_id,
+                agent=self.agent_name,
+                task="safety_check",
+                temperature=settings_cfg["temperature"],
+                max_completion_tokens=settings_cfg.get("max_completion_tokens"),
+                prompt_template_id="safety.md",
+            )
+        else:
+            response = llm.chat(
+                model=settings_cfg["model"],
+                messages=messages,
             temperature=settings_cfg["temperature"],
             max_completion_tokens=settings_cfg.get("max_completion_tokens"),
-        )
+            )
         result = self._parse_response(response["content"])
         if assets_cache:
             write_json(agent_output_file(assets_cache, job_id, self.agent_name), result)

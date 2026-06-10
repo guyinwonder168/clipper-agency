@@ -33,6 +33,12 @@ def _mock_preflight_ok(mocker):
 class TestComposerArtifacts:
     """Composer writes input/output, FFmpeg diagnostics to agent dir."""
 
+    def test_accepts_trace_writer_for_engine_injection(self):
+        writer = object()
+        agent = ComposerAgent(trace_writer=writer)
+
+        assert agent._trace_writer is writer
+
     def test_output_video_named_video_mp4(self, tmp_path, mocker):
         """Output video should be video.mp4, not final.mp4."""
         _mock_preflight_ok(mocker)

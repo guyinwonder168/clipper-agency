@@ -85,6 +85,9 @@ class VoiceProducerAgent(BaseAgent):
     voiceover for backward compatibility.
     """
 
+    def __init__(self, trace_writer: Any | None = None) -> None:
+        self._trace_writer = trace_writer
+
     @property
     def agent_name(self) -> str:
         return "voice_producer"

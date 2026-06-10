@@ -188,6 +188,48 @@ class TestReviewerExecute:
         assert result["status"] == "pass"
         assert result["score"] == 85
 
+    def test_execute_uses_traced_chat_when_writer_configured(self, mocker):
+        writer = object()
+        mock_traced = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat_traced",
+            return_value=self._mock_chat(MOCK_REVIEW_PASS),
+        )
+
+        result = ReviewerAgent(trace_writer=writer).execute(
+            job_id=13,
+            topic="Trace topic",
+            script=[{"scene": 1, "text": "Hey!", "duration": 3}],
+            caption="Caption",
+            safety_rules=[],
+        )
+
+        assert result["status"] == "pass"
+        mock_traced.assert_called_once()
+        assert mock_traced.call_args.kwargs["job_id"] == 13
+        assert mock_traced.call_args.kwargs["agent"] == "reviewer"
+        assert mock_traced.call_args.kwargs["task"] == "final_review"
+
+    def test_execute_uses_plain_chat_when_writer_is_none(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value=self._mock_chat(MOCK_REVIEW_PASS),
+        )
+        mock_traced = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat_traced",
+        )
+
+        result = ReviewerAgent(trace_writer=None).execute(
+            job_id=14,
+            topic="No trace",
+            script=[{"scene": 1, "text": "Hey!", "duration": 3}],
+            caption="Caption",
+            safety_rules=[],
+        )
+
+        assert result["status"] == "pass"
+        mock_chat.assert_called_once()
+        mock_traced.assert_not_called()
+
     def test_execute_returns_fail(self, mocker):
         mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",

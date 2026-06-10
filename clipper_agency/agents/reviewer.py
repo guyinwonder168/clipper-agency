@@ -227,6 +227,9 @@ class ReviewContext(TypedDict, total=False):
 class ReviewerAgent(BaseAgent):
     """Reviews final content for quality, safety, and originality."""
 
+    def __init__(self, trace_writer: Any | None = None) -> None:
+        self._trace_writer = trace_writer
+
     @property
     def agent_name(self) -> str:
         return "reviewer"
@@ -591,11 +594,9 @@ class ReviewerAgent(BaseAgent):
 
         # 4. LLM review
         agent_cfg = get_agent_config("reviewer")
-        llm = OpenRouterClient()
+        llm = OpenRouterClient(trace_writer=self._trace_writer)
         prompt = load_prompt("reviewer", REVIEWER_PROMPT, PROMPTS_DIR)
-        response = llm.chat(
-            model=agent_cfg["model"],
-            messages=[
+        messages = [
                 {
                     "role": "system",
                     "content": prompt.format(
@@ -611,10 +612,25 @@ class ReviewerAgent(BaseAgent):
                         f"Caption: {caption}"
                     ),
                 },
-            ],
+            ]
+        if self._trace_writer:
+            response = llm.chat_traced(
+                model=agent_cfg["model"],
+                messages=messages,
+                job_id=job_id,
+                agent=self.agent_name,
+                task="final_review",
+                temperature=agent_cfg["temperature"],
+                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                prompt_template_id="reviewer.md",
+            )
+        else:
+            response = llm.chat(
+                model=agent_cfg["model"],
+                messages=messages,
             temperature=agent_cfg["temperature"],
             max_completion_tokens=agent_cfg.get("max_completion_tokens"),
-        )
+            )
         review = self._parse_review_response(response["content"])
         logger.info(
             "Reviewer: verdict=%s score=%d issues=%d",

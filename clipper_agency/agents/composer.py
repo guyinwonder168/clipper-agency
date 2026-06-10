@@ -398,6 +398,9 @@ def _build_keyword_chain(video_filter: str, captions: list) -> str:
 class ComposerAgent(BaseAgent):
     """Assembles final video from assets and audio using FFmpeg."""
 
+    def __init__(self, trace_writer: Any | None = None) -> None:
+        self._trace_writer = trace_writer
+
     _ADAPTERS = {
         "news_card": build_news_card_plan,
         "b_roll_narration": build_b_roll_narration_plan,

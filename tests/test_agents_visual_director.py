@@ -204,6 +204,48 @@ class TestSourceCleanlinessWiring:
         assert result["cleanliness_score"] == 0.42
 
 
+class TestVisualDirectorLLMTracing:
+    """Batch 4 — LLM trace wiring for VisualDirectorAgent planning calls."""
+
+    def test_plan_with_llm_uses_traced_chat_when_writer_configured(self, mocker):
+        writer = object()
+        mock_traced = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat_traced",
+            return_value={"content": '{"scenes": []}', "model": "test", "usage": {}},
+        )
+
+        result = VisualDirectorAgent(trace_writer=writer)._plan_with_llm(
+            scenes=[],
+            compact_data={},
+            job_id=15,
+        )
+
+        assert result == []
+        mock_traced.assert_called_once()
+        assert mock_traced.call_args.kwargs["job_id"] == 15
+        assert mock_traced.call_args.kwargs["agent"] == "visual_director"
+        assert mock_traced.call_args.kwargs["task"] == "plan_scenes"
+
+    def test_plan_with_llm_uses_plain_chat_when_writer_is_none(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={"content": '{"scenes": []}', "model": "test", "usage": {}},
+        )
+        mock_traced = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat_traced",
+        )
+
+        result = VisualDirectorAgent(trace_writer=None)._plan_with_llm(
+            scenes=[],
+            compact_data={},
+            job_id=16,
+        )
+
+        assert result == []
+        mock_chat.assert_called_once()
+        mock_traced.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Worker B — OCR and face detection wiring
 # ---------------------------------------------------------------------------

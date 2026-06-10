@@ -326,6 +326,28 @@ class TestPaddleOCRAdapterLazyImport:
             # The PaddleOCR constructor should have been called
             mock_paddleocr.PaddleOCR.assert_called_once()
 
+    def test_paddleocr_constructor_uses_current_orientation_parameter(self):
+        """PaddleOCR should use the non-deprecated textline orientation parameter."""
+        mock_model = MagicMock()
+        mock_model.ocr.return_value = [[]]
+
+        with patch.dict(sys.modules):
+            sys.modules.pop("paddleocr", None)
+            mock_paddleocr = MagicMock()
+            mock_paddleocr.PaddleOCR.return_value = mock_model
+
+            with patch.dict(sys.modules, {"paddleocr": mock_paddleocr}):
+                from clipper_agency.core.ocr_adapter import PaddleOCRAdapter  # noqa: F811
+
+                PaddleOCRAdapter._reset_model()
+                adapter = PaddleOCRAdapter(frame_size=_FRAME_SIZE)
+                adapter.inspect("/fake/img.png", timestamp_sec=0.0)
+
+            mock_paddleocr.PaddleOCR.assert_called_once_with(
+                use_textline_orientation=True,
+                lang="en",
+            )
+
 
 class TestPaddleOCRAdapterSingleton:
     """Test 8: Model is reused across calls (singleton behavior)."""

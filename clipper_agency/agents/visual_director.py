@@ -65,8 +65,8 @@ class VisualDirectorAgent(BaseAgent):
     _IMAGE_SOURCES = frozenset({"pexels_image"})
     _VIDEO_SOURCES = frozenset({"tiktok_clip", "pexels_video", "tiktok", "pexels"})
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, trace_writer: Any | None = None) -> None:
+        self._trace_writer = trace_writer
         self._candidate_inspections: list[dict] = []
         self._inspection_metrics: dict[str, dict] = {}
         self._face_data: dict[str, list] = {}
@@ -236,6 +236,7 @@ class VisualDirectorAgent(BaseAgent):
             do_not_use=do_not_use,
             voiceover_duration_sec=voiceover_duration_sec,
             topic=topic,
+            job_id=job_id,
         )
 
         if llm_plan is not None:
@@ -333,6 +334,7 @@ class VisualDirectorAgent(BaseAgent):
         do_not_use: list[str],
         voiceover_duration_sec: float,
         topic: str,
+        job_id: int = 0,
     ) -> list[dict] | None:
         """LLM plans per-beat visual strategy using beat-driven instructions."""
         try:
@@ -341,7 +343,7 @@ class VisualDirectorAgent(BaseAgent):
             from clipper_agency.llm.client import OpenRouterClient
 
             agent_cfg = get_agent_config("visual_director")
-            llm = OpenRouterClient()
+            llm = OpenRouterClient(trace_writer=self._trace_writer)
             prompt_text = load_prompt("visual_director", "", PROMPTS_DIR)
             safety_rules_text = "None"
 
@@ -383,9 +385,7 @@ class VisualDirectorAgent(BaseAgent):
                 ensure_ascii=False,
             )
 
-            response = llm.chat(
-                model=agent_cfg["model"],
-                messages=[
+            messages = [
                     {
                         "role": "system",
                         "content": prompt_text.format(
@@ -395,10 +395,25 @@ class VisualDirectorAgent(BaseAgent):
                         ),
                     },
                     {"role": "user", "content": user_content},
-                ],
+                ]
+            if self._trace_writer:
+                response = llm.chat_traced(
+                    model=agent_cfg["model"],
+                    messages=messages,
+                    job_id=job_id,
+                    agent=self.agent_name,
+                    task="plan_beats",
+                    temperature=agent_cfg["temperature"],
+                    max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                    prompt_template_id="visual_director.md",
+                )
+            else:
+                response = llm.chat(
+                    model=agent_cfg["model"],
+                    messages=messages,
                 temperature=agent_cfg["temperature"],
                 max_completion_tokens=agent_cfg.get("max_completion_tokens"),
-            )
+                )
 
             parsed = json.loads(
                 response["content"]
@@ -821,8 +836,11 @@ class VisualDirectorAgent(BaseAgent):
                 self._face_data[candidate.url] = face_data
             # --- END OCR + face ---
 
-            client = OpenRouterClient()
-            inspector = MultimodalInspectionClient(client=client)
+            client = OpenRouterClient(trace_writer=self._trace_writer)
+            inspector = MultimodalInspectionClient(
+                client=client,
+                trace_writer=self._trace_writer,
+            )
             result = inspector.inspect_asset(
                 job_id=job_id,
                 beat_id=str(beat.beat_id),
@@ -1155,7 +1173,7 @@ class VisualDirectorAgent(BaseAgent):
         )
         Path(scenes_dir).mkdir(parents=True, exist_ok=True)
 
-        llm_plan = self._plan_with_llm(scenes, compact_data)
+        llm_plan = self._plan_with_llm(scenes, compact_data, job_id=job_id)
 
         if llm_plan is not None:
             plan = llm_plan
@@ -1270,7 +1288,7 @@ class VisualDirectorAgent(BaseAgent):
         return result
 
     def _plan_with_llm(
-        self, scenes: list[dict], compact_data: dict,
+        self, scenes: list[dict], compact_data: dict, job_id: int = 0,
     ) -> list[dict] | None:
         """LLM plans per-scene visual strategy. Returns None on failure."""
         try:
@@ -1279,7 +1297,7 @@ class VisualDirectorAgent(BaseAgent):
             from clipper_agency.llm.client import OpenRouterClient
 
             agent_cfg = get_agent_config("visual_director")
-            llm = OpenRouterClient()
+            llm = OpenRouterClient(trace_writer=self._trace_writer)
             prompt_text = load_prompt("visual_director", "", PROMPTS_DIR)
             safety_rules_text = "None"
 
@@ -1288,9 +1306,7 @@ class VisualDirectorAgent(BaseAgent):
                 "research": compact_data,
             }, ensure_ascii=False)
 
-            response = llm.chat(
-                model=agent_cfg["model"],
-                messages=[
+            messages = [
                     {
                         "role": "system",
                         "content": prompt_text.format(
@@ -1300,10 +1316,25 @@ class VisualDirectorAgent(BaseAgent):
                         ),
                     },
                     {"role": "user", "content": user_content},
-                ],
+                ]
+            if self._trace_writer:
+                response = llm.chat_traced(
+                    model=agent_cfg["model"],
+                    messages=messages,
+                    job_id=job_id,
+                    agent=self.agent_name,
+                    task="plan_scenes",
+                    temperature=agent_cfg["temperature"],
+                    max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                    prompt_template_id="visual_director.md",
+                )
+            else:
+                response = llm.chat(
+                    model=agent_cfg["model"],
+                    messages=messages,
                 temperature=agent_cfg["temperature"],
                 max_completion_tokens=agent_cfg.get("max_completion_tokens"),
-            )
+                )
 
             parsed = json.loads(
                 response["content"].strip().strip("```json").strip("```").strip()

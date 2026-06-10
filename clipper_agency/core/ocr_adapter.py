@@ -144,5 +144,5 @@ class PaddleOCRAdapter:
         if cls._ocr is None:
             from paddleocr import PaddleOCR  # type: ignore[import-untyped]
 
-            cls._ocr = PaddleOCR(use_angle_cls=True, lang="en")
+            cls._ocr = PaddleOCR(use_textline_orientation=True, lang="en")
         return cls._ocr

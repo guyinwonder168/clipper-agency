@@ -171,6 +171,9 @@ class SegmentProducerAgent(BaseAgent):
     expensive API calls are only made once per topic/job run.
     """
 
+    def __init__(self, trace_writer: Any | None = None) -> None:
+        self._trace_writer = trace_writer
+
     @property
     def agent_name(self) -> str:
         return "segment_producer"
@@ -364,8 +367,11 @@ class SegmentProducerAgent(BaseAgent):
                 return cached
 
         logger.info("Segment Producer: research_brief cache MISS — calling LLM")
-        result = self._synthesize_research(aggregated, topic, safety_rules,
-                                           channel_description, language, tone, content_angle)
+        result = self._synthesize_research(
+            aggregated, topic, safety_rules,
+            channel_description, language, tone, content_angle,
+            job_id=job_id,
+        )
 
         with open(cache_path, "w") as fh:
             json.dump(result, fh, indent=2)
@@ -746,6 +752,7 @@ class SegmentProducerAgent(BaseAgent):
         language: str = "",
         tone: str = "",
         content_angle: str = "",
+        job_id: int = 0,
     ) -> dict[str, Any]:
         sources = aggregated.get("sources", [])
 
@@ -779,10 +786,8 @@ class SegmentProducerAgent(BaseAgent):
         settings = load_settings()
         cp_config = settings.content_planning
         agent_cfg = get_agent_config("segment_producer")
-        llm = OpenRouterClient()
-        response = llm.chat(
-            model=agent_cfg["model"],
-            messages=[
+        llm = OpenRouterClient(trace_writer=self._trace_writer)
+        messages = [
                 {
                     "role": "system",
                     "content": SEGMENT_PRODUCER_PROMPT.format(
@@ -802,10 +807,25 @@ class SegmentProducerAgent(BaseAgent):
                     "role": "user",
                     "content": f"Research topic: {topic}",
                 },
-            ],
+            ]
+        if self._trace_writer:
+            response = llm.chat_traced(
+                model=agent_cfg["model"],
+                messages=messages,
+                job_id=job_id,
+                agent=self.agent_name,
+                task="synthesize_research",
+                temperature=agent_cfg["temperature"],
+                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                prompt_template_id="segment_producer.md",
+            )
+        else:
+            response = llm.chat(
+                model=agent_cfg["model"],
+                messages=messages,
             temperature=agent_cfg["temperature"],
             max_completion_tokens=agent_cfg.get("max_completion_tokens"),
-        )
+            )
         parsed = self._parse_synthesis_response(response["content"])
         return {
             "research_brief": parsed["research_brief"],
