@@ -436,6 +436,7 @@ class Orchestrator:
             story_beats=research_output.get("story_beats", []),
             word_timestamps=voice_output.get("timestamps", []),
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
+            diagnostics=compose_output.get("diagnostics", {}),
         )
 
         # Persist repair cycle metrics
@@ -1155,6 +1156,7 @@ class Orchestrator:
             story_beats=rp.get("story_beats", []),
             word_timestamps=vo.get("timestamps", []),
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
+            diagnostics=compose_output.get("diagnostics", {}),
         )
         # Route repair plan if reviewer requested revisions
         repair_routing = self._handle_repair_plan(
