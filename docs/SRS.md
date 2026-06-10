@@ -1,8 +1,8 @@
 # Clipper Agency — Software Requirements Specification
 
-**Version:** 3.1
-**Date:** 2026-06-09
-**Status:** Phase 21 Complete — Deterministic Quality Gates + Repair Routing
+**Version:** 3.2
+**Date:** 2026-06-10
+**Status:** Phase 22 Complete — Runtime Quality Enforcement + Multi-Source Asset Sourcing
 **Related:** `docs/PRD.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
@@ -67,6 +67,23 @@
 | FR-48 | Package consistency validation: `evaluate_package_consistency()` in `clipper_agency/core/package_consistency.py` validates that story mode, scene count, clip types, and visual hierarchy match the declared format_decision. Flags scope mismatches between declared and actual composition | P0 | MVP |
 | FR-49 | Semantic visual relevance scoring: `score_visual_relevance()` in `clipper_agency/core/semantic_visual_review.py` scores claim-to-visual alignment using keyword overlap between story_beat narration goals and actual visual content. Uses evidence contracts on StoryBeat to verify each claim has supporting visuals | P0 | MVP |
 | FR-50 | Structured repair routing: `route_repair()` + `build_repair_plan()` in `clipper_agency/core/repair_router.py` map quality gate failures to the correct existing agent for targeted repair. Routes visual coverage failures to Composer, text collision/safe-area failures to Visual Director, consistency/relevance failures to Segment Producer. Engine executes repair plan without creating new pipeline branches | P0 | MVP |
+| FR-51 | Multi-provider asset source services: YouTube (yt-dlp search), Tavily (web news API), Brave (video/web search) with graceful per-provider fallback, entity-aware search queries, and source quality tier scoring (youtube_official=0.95, web_video=0.85, tiktok_clip=0.50, image=0.70, article=0.40, firecrawl=0.30) | P0 | MVP |
+| FR-52 | YouTube thumbnail fallback: extract maxresdefault→hqdefault thumbnail as image asset candidate (0.70 quality tier) when no video clips available | P1 | MVP |
+| FR-53 | Runtime FFmpeg black/freeze segment detection: `detect_black_segments()` + `detect_freeze_segments()` in `clipper_agency/core/media_detectors.py` with graceful `MediaDetectionError` fallback | P0 | MVP |
+| FR-54 | Runtime frame extraction: `extract_frames()` with perceptual hashing (`perceptual_hash()`, `hash_distance()`) for deduplication in `clipper_agency/core/frame_extraction.py` and `frame_hashing.py` | P0 | MVP |
+| FR-55 | PaddleOCR runtime text detection adapter: `PaddleOCRRuntimeAdapter` with model auto-download, confidence thresholding, and region normalization | P1 | MVP |
+| FR-56 | MediaPipe face detection runtime adapter: `FaceDetectionRuntimeAdapter` using mp.solutions.face_detection with image array input | P1 | MVP |
+| FR-57 | Source cleanliness scoring: `score_candidate()` in `clipper_agency/core/source_cleanliness.py` evaluates source type, resolution confidence, aspect ratio, and file size consistency | P0 | MVP |
+| FR-58 | Final layout inspection pipeline: `inspect_final_layout()` pipelines FFmpeg black/freeze detection, text detection, face detection into structured `LayoutInspectionResult` | P0 | MVP |
+| FR-59 | Story-mode reconciliation: 4-rule priority system in `story_decision_reconciliation.py`: (1) explicit niche override → (2) multi-entity roundup heuristic → (3) legacy format_decision contradiction → (4) fallback to single_story. Story-mode contract derivation: `derive_story_contract()` produces thumbnail_text, cta_text, duration_structure | P0 | MVP |
+| FR-60 | Rendered scene manifest: `build_rendered_scene_manifest()` in `clipper_agency/core/rendered_scene_manifest.py` — RenderedSceneEntry/Manifest models, scene-to-beat temporal mapping via midpoint containment + range overlap | P0 | MVP |
+| FR-61 | Reviewer context builder: `build_review_context_bundle()` in `clipper_agency/core/reviewer_context.py` — SceneBeatMapping, get_semantic_review_context() for timestamp-level scene review | P0 | MVP |
+| FR-62 | Multimodal candidate inspection: `MultimodalInspectionClient` + `OpenRouterMultimodalProvider` with base64 image encoding, retry, structured JSON parsing, and SHA-256 inspection cache. `candidate_semantic_ranker.py` combines inspection + relevance + cleanliness + credibility with rejection rules | P1 | MVP |
+| FR-63 | LLM trace artifacts: `chat_traced()` in `OpenRouterClient` for structured trace persistence; `TraceWriter` protocol for pluggable trace backends | P1 | MVP |
+| FR-64 | Bounded automated repair loop: `_execute_repair_cycle()` in engine with max N cycles, identical-patch exhaustion detection (`_are_patches_identical()`), cycle output retention (`cycle_{n}` subdirs), promotion on approval | P0 | MVP |
+| FR-65 | Repair quality metrics: `compute_repair_cycle_record()`, `extract_quality_snapshot()`, `is_repair_improved()`, `persist_repair_cycle()` in `clipper_agency/core/repair_metrics.py` | P0 | MVP |
+| FR-66 | Publication blocking: rejected artifacts retained under `outputs/job_{id}/`. `_promote_to_final()` requires quality=passed AND artifact=approved. Atomic promotion via temp dir + rename | P0 | MVP |
+| FR-67 | Timestamp-level semantic review integrated into reviewer gate chain: `map_scenes_to_beats()` maps rendered scenes to story beats, `_run_timestamp_semantic_review()` emits SceneSemanticReview with evidence contracts | P0 | MVP |
 
 ### 2.2 User Interfaces
 

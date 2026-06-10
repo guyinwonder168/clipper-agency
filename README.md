@@ -21,7 +21,7 @@
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue?logo=python">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-1222%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-1793%20passing-brightgreen">
   <img alt="Coverage" src="https://img.shields.io/badge/coverage-93%25-brightgreen">
   <img alt="FFmpeg" src="https://img.shields.io/badge/FFmpeg-5.0%2B-orange?logo=ffmpeg">
   <img alt="SonarCloud" src="https://img.shields.io/badge/SonarCloud-passing-brightgreen?logo=sonarcloud">
@@ -221,7 +221,7 @@ python3 -m pytest -m "not integration and not external"
 python3 -m pytest -m integration
 ```
 
-Tests live in `tests/` mirroring the package structure. Currently **1222 tests** at **93%+ line coverage**.
+Tests live in `tests/` mirroring the package structure. Currently **1793 tests** at **93%+ line coverage**.
 
 ---
 
@@ -240,6 +240,6 @@ Tests live in `tests/` mirroring the package structure. Currently **1222 tests**
 
 ## Status
 
-**✅ MVP Complete** — Phases 0-21 implemented + Audio-First Continuous Voiceover (v2.0.0 architecture redesign). Segment Producer with edit blueprint, continuous voiceover with word timestamps, beat-driven visual planning, smart scene trimming, keyword captions, 10 deterministic reviewer quality gates, evidence contracts, repair routing.
+**✅ MVP Complete** — Phases 0-22 implemented. Runtime quality enforcement with black/freeze frame detection, text/face detection, story-mode reconciliation, multimodal candidate inspection, multi-provider asset sourcing (YouTube/Tavily/Brave), bounded automated repair loop, and timestamp-semantic review. All 1793 offline tests passing.
 
-1222 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing
+1793 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing

@@ -1,8 +1,8 @@
 # Clipper Agency — Product Requirements Document
 
-**Version:** 3.1
-**Date:** 2026-06-09
-**Status:** Phase 21 Complete — Deterministic Quality Gates + Repair Routing
+**Version:** 3.2
+**Date:** 2026-06-10
+**Status:** Phase 22 Complete — Runtime Quality Enforcement + Multi-Source Asset Sourcing
 **Related:** `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`
 
 ---
@@ -77,7 +77,7 @@ Intermediate execution material is not part of the final upload package. Each jo
 | ID | Requirement | Priority | Stage |
 |----|-------------|----------|-------|
 | PR-01 | Automated video generation from trending topics via gated agent pipeline | P0 | MVP |
-| PR-02 | Agent pipeline: Safety → Segment Producer (story_beats + edit blueprint + verified facts + visual instructions) → Scriptwriter (continuous voiceover from story beats, 75-110 words, no emojis) → Voice Producer (single TTS call with word-level timestamps) → Visual Director (beat-driven, audio-aware, visual_must_show rules) → Composer (smart scene trimming at keyframe boundaries, keyword captions aligned to audio timeline) → Reviewer (AV sync + caption quality + fact safety + narrative structure checks). Sequential voice→visual. Each step gated with pass/soft-fail/hard-fail rules. See `docs/technical_design.md` §3 for full gate definitions. See `docs/adr/0021-audio-first-continuous-voiceover.md` for architecture rationale. | P0 | MVP |
+| PR-02 | Agent pipeline: Safety → Segment Producer (story_beats + edit blueprint + verified facts + visual instructions) → Scriptwriter (continuous voiceover from story beats, 75-110 words, no emojis) → Voice Producer (single TTS call with word-level timestamps) → Visual Director (beat-driven, audio-aware, visual_must_show rules, multimodal candidate inspection for asset relevance/readability/face quality) → Composer (smart scene trimming at keyframe boundaries, keyword captions aligned to audio timeline, runtime visual inspection: FFmpeg black/freeze detection, perceptual frame hashing, PaddleOCR text detection, MediaPipe face detection) → Reviewer (AV sync + caption quality + fact safety + narrative structure checks + story-mode reconciliation + bounded automated repair loop with max N cycles). Sequential voice→visual. Each step gated with pass/soft-fail/hard-fail rules. See `docs/technical_design.md` §3 for full gate definitions. See `docs/adr/0021-audio-first-continuous-voiceover.md` for architecture rationale. | P0 | MVP |
 | PR-03 | Web dashboard for job management and agent configuration | P0 | MVP |
 | PR-04 | CLI for direct pipeline execution | P0 | MVP |
 | PR-05 | Ready-to-upload output package (video + caption + thumbnail + metadata) | P0 | MVP |
@@ -106,6 +106,11 @@ Intermediate execution material is not part of the final upload package. Each jo
 | PR-28 | Per-scene audio sequencing with silence padding, timed subtitle overlays from script text via drawtext, xfade/concat mixed transition chain with duration clamping and safety margins, and TikTok-ready production output flags (yuv420p, faststart, H.264/AAC) | P0 | MVP |
 | PR-29 | Audio-first continuous voiceover architecture: Segment Producer outputs story_beats (visual_must_show/must_not_show, asset_candidates, edit blueprint), Scriptwriter writes continuous narration (75-110 words, no emojis, spoken-word style), Voice Producer generates single voiceover.mp3 with word-level timestamps via ElevenLabs `/with-timestamps` (87.5% TTS cost reduction vs per-scene), Visual Director plans beat-driven visuals against audio timeline with visual rules, Composer smart-trims at keyframe boundaries and overlays keyword captions (max 6 words, beat-aligned), Reviewer validates AV sync + caption quality + fact safety + narrative structure. See `docs/adr/0021-audio-first-continuous-voiceover.md` | P0 | MVP |
 | PR-30 | Deterministic visual quality gates, package consistency, semantic visual relevance, and structured repair routing: Reviewer runs deterministic gate chain (visual coverage → text collision → safe area → package consistency → semantic relevance) before LLM multimodal review. Story-mode classification validates narrative structure matches actual scene composition. Evidence contracts on StoryBeat ensure claim-to-visual alignment. Repair router maps quality failures to the correct existing agent for targeted fix. 10 new core modules, 0 new top-level agents. See `docs/adr/0023-job4-quality-gates-and-repair-routing.md` | P0 | MVP |
+| PR-31 | Multi-provider asset sourcing: YouTube (yt-dlp search), Tavily (web news), Brave (video/web) with graceful per-provider fallback and source quality tier scoring | P0 | MVP |
+| PR-32 | Runtime visual inspection: FFmpeg black/freeze segment detection, perceptual frame hashing, PaddleOCR text detection, MediaPipe face detection — deterministic checks before packaging | P1 | MVP |
+| PR-33 | Story-mode reconciliation: 4-rule priority system (explicit override → multi-entity → legacy contradiction → fallback) for consistent narrative structure | P0 | MVP |
+| PR-34 | Bounded automated repair loop: max N cycles, identical-patch exhaustion detection, cycle output retention, atomic promotion on approval | P1 | MVP |
+| PR-35 | Multimodal candidate inspection: multimodal LLM evaluates candidate assets for relevance, caption readability, face quality; semantic ranking with rejection rules and image fallback | P1 | MVP |
 
 ---
 

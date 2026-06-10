@@ -1,8 +1,8 @@
 # Clipper Agency — Requirements Traceability Matrix
 
-**Version:** 4.1
-**Date:** 2026-06-09
-**Status:** Phase 21 Complete — Deterministic Quality Gates + Repair Routing
+**Version:** 4.2
+**Date:** 2026-06-10
+**Status:** Phase 22 Complete — Runtime Quality Enforcement + Multi-Source Asset Sourcing
 
 ---
 
@@ -246,6 +246,28 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 164 | 10 new core modules, 0 new top-level agents; all modules are pure functions with injected dependencies | Design §13, ADR 0023 |
 | 165 | Evidence contracts on StoryBeat: each claim maps to required visual evidence and actual alignment score | SRS §2 FR-49, Design §13 |
 | 166 | Repair routing table: visual_coverage→Composer, text_collision→Visual Director, safe_area→Visual Director, package_consistency→Segment Producer, semantic_review→Segment Producer | SRS §2 FR-50, Design §13 |
+
+### From Phase 22 Runtime Quality Enforcement + Multi-Source Asset Sourcing
+
+| # | Fact | New Location |
+|---|------|-------------|
+| 167 | Multi-provider asset sourcing: YouTube (yt-dlp search), Tavily (web news), Brave (video/web) with graceful per-provider fallback and SOURCE_QUALITY_TIERS scoring | PRD §5 PR-31, SRS §2 FR-51, Design §15 |
+| 168 | YouTube thumbnail fallback: maxresdefault→hqdefault as image candidates (0.70 tier) | PRD §5 PR-31, SRS §2 FR-52, Design §15 |
+| 169 | Runtime FFmpeg black/freeze detection: detect_black_segments() + detect_freeze_segments() with MediaDetectionError fallback | PRD §5 PR-32, SRS §2 FR-53, Design §15 |
+| 170 | Runtime frame extraction + perceptual hashing: extract_frames(), perceptual_hash(), hash_distance() for deduplication | SRS §2 FR-54, Design §15 |
+| 171 | PaddleOCR runtime text detection adapter with model auto-download | SRS §2 FR-55, Design §15 |
+| 172 | MediaPipe face detection runtime adapter using image array input | SRS §2 FR-56, Design §15 |
+| 173 | Source cleanliness scoring: 4-dimension score (resolution, aspect ratio, source type, file size) | SRS §2 FR-57, Design §15 |
+| 174 | Final layout inspection pipeline: pipelines FFmpeg + text + face detection | SRS §2 FR-58, Design §15 |
+| 175 | Story-mode reconciliation: 4-rule priority system (explicit override → multi-entity → legacy → fallback) | PRD §5 PR-33, SRS §2 FR-59, Design §15 |
+| 176 | Rendered scene manifest: build_rendered_scene_manifest() with scene-to-beat temporal mapping | SRS §2 FR-60, Design §15 |
+| 177 | Reviewer context builder: SceneBeatMapping, get_semantic_review_context() | SRS §2 FR-61, Design §15 |
+| 178 | Multimodal candidate inspection: OpenRouterMultimodalProvider, MultimodalInspectionClient, semantic ranking with rejection | PRD §5 PR-35, SRS §2 FR-62, Design §15 |
+| 179 | LLM trace artifacts: chat_traced() + TraceWriter protocol | SRS §2 FR-63, Design §15 |
+| 180 | Bounded automated repair loop: max N cycles, identical-patch exhaustion detection, cycle retention | PRD §5 PR-34, SRS §2 FR-64, Design §15 |
+| 181 | Repair quality metrics: before/after snapshots, improvement detection, cycle persistence | SRS §2 FR-65, Design §15 |
+| 182 | Publication blocking: atomic promotion via temp+rename, requires quality=passed AND artifact=approved | SRS §2 FR-66, Design §15 |
+| 183 | Timestamp-semantic review in reviewer gate chain: scene-to-beat mapping with evidence contracts | SRS §2 FR-67, Design §15 |
 
 ---
 

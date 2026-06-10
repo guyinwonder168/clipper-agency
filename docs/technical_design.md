@@ -1,8 +1,8 @@
 # Clipper Agency — Technical Design Document
 
-**Version:** 5.1
-**Date:** 2026-06-09
-**Status:** Phase 21 Complete — Deterministic Quality Gates + Repair Routing
+**Version:** 5.2
+**Date:** 2026-06-10
+**Status:** Phase 22 Complete — Runtime Quality Enforcement + Multi-Source Asset Sourcing
 **Related:** `docs/PRD.md`, `docs/SRS.md`, `docs/requirements_traceability.md`
 
 ---
@@ -963,3 +963,144 @@ The engine's `route_repair()` maps each failure to a `RepairPlan` containing ord
 8. **Deterministic Quality Gates + Repair Routing** — 10 core modules (visual_coverage, frame_sampler, text_detection, text_collision, safe_area, story_mode, duration_budget, package_consistency, semantic_visual_review, repair_router) extending existing agents with deterministic checks before LLM review
 9. **Config System** — Agent → Niche → Account → Job hierarchy with versioning
 10. **Output Packager** — `video.mp4` + `caption.txt` + `thumbnail.png` + `metadata.json`
+11. **Multi-Source Asset Sourcing** — YouTube, Tavily, Brave search with quality tier scoring + thumbnail fallback
+12. **Runtime Visual Inspection** — Black/freeze segment detection, frame extraction with perceptual hashing, PaddleOCR text detection, MediaPipe face detection  
+13. **Story-Mode Reconciliation** — 4-rule priority system + contract derivation
+14. **Rendered Scene Manifest + Reviewer Context** — Scene-to-beat mapping for timestamp-semantic review
+15. **Multimodal Candidate Inspection** — Image-based candidate evaluation + semantic ranking
+16. **Bounded Automated Repair Loop** — Max N cycles, exhaustion detection, cycle retention, atomic promotion
+
+---
+
+## 15. Phase 22: Runtime Quality Enforcement & Multi-Source Asset Sourcing
+
+Phase 22 extends the pipeline with runtime media inspection, multi-provider asset discovery, story-mode reconciliation, bounded automated repair, and multimodal candidate validation.
+
+### Multi-Source Asset Discovery (Batch 8)
+
+The Segment Producer now searches three additional providers beyond the existing ScrapeCreators + Firecrawl pipeline:
+
+| Provider | Service | Search Type | Use Case |
+|----------|---------|-------------|----------|
+| YouTube | `YtDlpService.search()` | Video search via yt-dlp | Primary video source discovery |
+| Tavily | `TavilyService` | Web news search via httpx | Recent news articles |
+| Brave | `BraveSearchService` | Video + web search via stdlib urllib | Broad web + video discovery |
+
+**Source quality tiers** (config/schema.py `SOURCE_QUALITY_TIERS`):
+
+| Source Type | Quality Score |
+|-------------|---------------|
+| `youtube_official` | 0.95 |
+| `web_video` | 0.85 |
+| `image` | 0.70 |
+| `tiktok_clip` | 0.50 |
+| `article` | 0.40 |
+| `firecrawl` | 0.30 |
+
+**Flow**: `_build_search_queries()` derives max 3 queries from topic + entity names. `_discover_multi_source_assets()` calls each provider with retry/backoff, aggregates results via `_merge_asset_candidates()`. YouTube thumbnail fallback extracts `maxresdefault`→`hqdefault` as image candidates.
+
+### Runtime Media Inspection (Batch 1-2, 5)
+
+**FFmpeg black/freeze detection** (`core/media_detectors.py`): `detect_black_segments()` uses `blackdetect` filter, `detect_freeze_segments()` uses `freezedetect` filter. Both return typed `MediaSegment` lists. Graceful `MediaDetectionError` fallback for environment issues.
+
+**Frame extraction** (`core/frame_extraction.py`, `core/frame_hashing.py`):
+- `extract_frames()` schedules frame sampling from video at configurable intervals
+- `perceptual_hash()` + `hash_distance()` compute pHash for frame deduplication
+
+**Text detection** (`core/text_detection.py`): `normalize_text_region()` and `filter_text_regions()` normalize bounding boxes from OCR output.
+
+**PaddleOCR runtime adapter** (`paddleocr_adapter.py`): Wraps PaddleOCR with model auto-download, confidence thresholding (default 0.5), and region normalization.
+
+**Face detection runtime adapter** (`face_adapter.py`): Wraps MediaPipe `mp.solutions.face_detection` with image array input (cv2.imread + numpy), processes model output directly.
+
+**Generated text region manifest** (`generated_text_manifest.py`): Tracks overlay text regions from captions and treatments for collision detection with source clip text.
+
+### Source Cleanliness Scoring (Batch 3)
+
+`core/source_cleanliness.py`: `score_candidate()` evaluates each asset candidate on four dimensions:
+1. Source type (direct clip > image > article)
+2. Resolution confidence (≥720p scores higher)
+3. Aspect ratio (close to 9:16 preferred)
+4. File size consistency
+Score is combined with quality tier for final candidate ranking.
+
+### Story-Mode Reconciliation (Batch 3)
+
+`core/story_decision_reconciliation.py`: 4-rule priority system for resolving story mode conflicts:
+1. **Explicit niche override**: if niche YAML declares `story_mode`, use it
+2. **Multi-entity roundup**: ≥3 distinct entity names → auto `roundup`
+3. **Legacy contradiction**: if `format_decision.format` contradicts item count → reconcile
+4. **Fallback**: `single_story`
+
+`core/story_mode_contract.py`: `derive_story_contract()` produces thumbnail_text, cta_text, duration_structure from canonical story mode.
+
+### Multimodal Candidate Inspection (Batch 4)
+
+**MultimodalInspectionClient**: wraps `OpenRouterMultimodalProvider` with inspection prompt construction and structured response parsing. Inspects asset candidates for:
+- Relevance to topic
+- Caption/overlay readability  
+- Face quality (visible, centered)
+- Overall suitability
+
+**Inspection cache**: SHA-256 keyed cache with `store()`, `lookup()`, `stats()`, `invalidate()` for reuse across pipeline runs.
+
+**Candidate semantic ranker** (`candidate_semantic_ranker.py`): Combines multimodal inspection score + relevance score + cleanliness score + credibility with rejection rules and text_card fallback.
+
+### Rendered Scene Manifest & Reviewer Context (Batch 5)
+
+`core/rendered_scene_manifest.py`:
+- `RenderedSceneEntry`: scene_id, duration_sec, has_audio, source_type, start_timecode
+- `RenderedSceneManifest`: entries, total_duration_sec, scene_count
+- `build_rendered_scene_manifest()` constructs from composer output
+- `scenes_at_timestamp()` finds scenes covering a timestamp
+- `beat_to_scenes()` maps beats to overlapping scenes
+
+`core/reviewer_context.py`:
+- `SceneBeatMapping`: scene_id, beat_id, temporal_overlap_sec, coverage_pct
+- `build_review_context_bundle()`: aggregates scene-beat mappings for reviewer
+- `get_semantic_review_context()`: produces per-beat review context with evidence
+
+**Timestamp semantic review** (reviewer.py): `_run_timestamp_semantic_review()` maps rendered scenes to story beats via midpoint containment + range overlap, emits `SceneSemanticReview` objects. Gate chain: visual_coverage → text_collision → safe_area → package_consistency → **timestamp_semantic** → LLM.
+
+### Bounded Automated Repair Loop (Batch 6)
+
+`_execute_repair_cycle()` in engine replaces manual-only repair with a bounded loop:
+
+1. **Route patches** to correct agent via `route_repair()` (Composer for visual, Visual Director for text/safe-area, Segment Producer for scope)
+2. **Re-run target agent + all downstream** (status transitions: running→completed/exhausted/manual_review)
+3. **Detect repeated identical patches** via `_are_patches_identical()` → mark as exhausted
+4. **Limit cycles** — max N cycles, then mark for manual review
+
+**Status columns** added to `jobs` table: `quality_status`, `publication_status`, `repair_status`, `artifact_status`. Migration via `ensure_status_columns()`.
+
+**Repair metrics** (`core/repair_metrics.py`):
+- `compute_repair_cycle_record()`: before/after quality snapshots
+- `extract_quality_snapshot()`: reviewer score + gate results
+- `is_repair_improved()`: true if quality improved
+- `persist_repair_cycle()`: persists record to assets_cache
+
+### Publication Workflow (Batch 6)
+
+`_promote_to_final()`: atomic promotion via temp directory + `os.rename`:
+- Only runs when `quality_status=passed` AND `artifact_status=approved`
+- Failed promotion leaves source artifacts intact
+- Cycle directories preserved under `outputs/job_{id}/cycle_{n}/`
+
+Failed outputs are retained (not deleted) for manual review. Blocked publication requires explicit approval.
+
+### Composer Real Coverage Diagnostics (Batch 5)
+
+Replace placeholder empty detector lists with real FFmpeg black/freeze calls:
+- `_attach_visual_coverage_diagnostics()` now runs `detect_black_segments()` and `detect_freeze_segments()` on the rendered video
+- Falls back gracefully to empty lists on `MediaDetectionError`
+- Results persisted as structured `VisualCoverageResult`
+
+### Repaired Composer Output Path (P1 Fix)
+
+When running repair cycles (cycle > 0), the Composer writes to the standard contract path (`output_dir/job_{id}/video.mp4`), and output files are copied post-compose to the cycle-specific directory (`cycle_{n}/`) for `_promote_to_final`. This prevents the double-nested path bug where `video.mp4` was written to `cycle_{n}/job_{id}/video.mp4`.
+
+### Wired Timestamp Semantic Review (P2 Fix)
+
+The semantic review gate was wired into both reviewer call sites:
+- `_execute_single_repair_cycle()` and `_retry_review_and_package()` now pass `story_beats`, `word_timestamps`, and `rendered_scene_manifest` to the reviewer
+- The timestamp semantic review gate actually enforces scene-to-beat alignment instead of silently skipping
