@@ -29,8 +29,11 @@ from clipper_agency.core.paths import (
     segment_producer_contract_file,
 )
 from clipper_agency.llm.client import OpenRouterClient
+from clipper_agency.services.brave import BraveSearchService
 from clipper_agency.services.firecrawl_service import FirecrawlService
 from clipper_agency.services.scrapecreators import ScrapeCreatorsService
+from clipper_agency.services.tavily import TavilyService
+from clipper_agency.services.ytdlp import YtDlpService
 
 from clipper_agency.core.duration_budget import allocate_duration_budget
 from clipper_agency.core.story_decision_reconciliation import reconcile_story_decisions
@@ -222,6 +225,19 @@ class SegmentProducerAgent(BaseAgent):
             channel_description, language, tone, content_angle,
         )
 
+        # ── 2b. Multi-provider asset discovery (uses synthesis entities) ─
+        multi_sources = self._discover_multi_source_assets(
+            topic=topic,
+            entities=synthesis.get("entities", {}),
+            config=settings,
+        )
+        multi_candidates = self._build_asset_candidates_from_sources(multi_sources)
+
+        # ── 2c. YouTube thumbnail fallback candidates ────────────────────
+        thumbnail_candidates = self._get_thumbnail_fallback_candidates(
+            multi_sources, output_dir, job_id,
+        )
+
         # ── 3. Classify story mode (early, deterministic) ─────────────
         classifier_decision = classify_story_mode(topic, target_duration_sec=target_dur)
 
@@ -252,6 +268,8 @@ class SegmentProducerAgent(BaseAgent):
             "asset_candidates": self._merge_asset_candidates(
                 synthesis.get("asset_candidates", []),
                 discovered_candidates,
+                multi_candidates,
+                thumbnail_candidates,
             ),
             "do_not_use": synthesis.get("do_not_use", []),
             "verified_facts": synthesis.get("verified_facts", []),
@@ -560,6 +578,61 @@ class SegmentProducerAgent(BaseAgent):
 
         return candidates
 
+    # ── multi-source asset discovery ──────────────────────────────────────
+
+    def _build_search_queries(self, topic: str, entities: dict) -> list[str]:
+        """Derive search queries from topic + entity names."""
+        queries = [topic]
+        entity_list = entities.get("entities", []) if isinstance(entities, dict) else []
+        for entity in entity_list[:2]:
+            name = entity.get("name", "") if isinstance(entity, dict) else str(entity)
+            if name:
+                queries.append(f"{name} {topic}")
+        return queries[:3]
+
+    def _discover_multi_source_assets(
+        self,
+        topic: str,
+        entities: dict,
+        config: Any,
+    ) -> list[dict]:
+        """Search YouTube, Tavily, Brave for additional asset candidates."""
+        sources: list[dict] = []
+        search_queries = self._build_search_queries(topic, entities)
+
+        # YouTube search (free, no API key needed)
+        try:
+            ytdlp = YtDlpService()
+            for query in search_queries:
+                results = ytdlp.search(query, max_results=3)
+                sources.extend(results)
+        except Exception:
+            logger.exception("YouTube multi-source search failed")
+
+        # Tavily search (if API key configured)
+        tavily_key = getattr(config, "tavily_api_key", "")
+        if tavily_key and isinstance(tavily_key, str):
+            try:
+                tavily = TavilyService(tavily_key)
+                for query in search_queries:
+                    results = tavily.search(query, max_results=3)
+                    sources.extend(results)
+            except Exception:
+                logger.exception("Tavily multi-source search failed")
+
+        # Brave search (if API key configured)
+        brave_key = getattr(config, "brave_api_key", "")
+        if brave_key and isinstance(brave_key, str):
+            try:
+                brave = BraveSearchService(brave_key)
+                for query in search_queries:
+                    results = brave.search_videos(query, max_results=3)
+                    sources.extend(results)
+            except Exception:
+                logger.exception("Brave multi-source search failed")
+
+        return sources
+
     @staticmethod
     def _merge_asset_candidates(*candidate_groups: list[dict]) -> list[dict]:
         """Merge asset candidate groups, deduplicating by URL."""
@@ -574,6 +647,32 @@ class SegmentProducerAgent(BaseAgent):
                 seen_urls.add(key)
                 merged.append(candidate)
         return merged
+
+    @staticmethod
+    def _get_thumbnail_fallback_candidates(
+        multi_sources: list[dict],
+        output_dir: str,
+        job_id: int,
+    ) -> list[dict]:
+        """Generate image candidates from YouTube thumbnails when video download fails."""
+        candidates: list[dict] = []
+        for source in multi_sources:
+            if source.get("source_type") != "youtube_official":
+                continue
+            thumb_url = source.get("thumbnail_url", "")
+            if not thumb_url:
+                continue
+            candidates.append({
+                "type": "photo",
+                "url": thumb_url,
+                "source": "youtube_thumbnail",
+                "reason": f"Thumbnail fallback for: {source.get('title', '')}",
+                "relevance_score": SOURCE_QUALITY_TIERS.get("image", 0.70),
+                "source_type": "image",
+                "provenance": "youtube_thumbnail_fallback",
+                "video_url": source.get("url", ""),
+            })
+        return candidates
 
     def _persist_contract_artifacts(
         self,

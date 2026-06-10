@@ -503,6 +503,10 @@ class TestSegmentProducerNewContract:
             "clipper_agency.llm.client.OpenRouterClient.chat",
             return_value={"content": "Plain text response", "model": "glm-4-9b", "usage": {}},
         )
+        mocker.patch.object(
+            SegmentProducerAgent, "_discover_multi_source_assets",
+            return_value=[],
+        )
         agent = SegmentProducerAgent()
         result = agent.execute(job_id=1, topic="Test", output_dir=str(tmp_path))
         assert result["status"] == "completed"
@@ -1230,3 +1234,243 @@ class TestStoryModeReconciliationIntegration:
 
         smd = result["story_mode_decision"]
         assert smd["duration_structure"] == "intro_story_items_cta"
+
+
+# ---------------------------------------------------------------------------
+# Multi-source asset discovery tests (Task 8.5)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSearchQueries:
+    """Tests for _build_search_queries()."""
+
+    def test_topic_only_returns_single_query(self):
+        agent = SegmentProducerAgent()
+        queries = agent._build_search_queries("K-pop drama", {})
+        assert queries == ["K-pop drama"]
+
+    def test_topic_only_with_empty_entities_list(self):
+        agent = SegmentProducerAgent()
+        queries = agent._build_search_queries("K-pop drama", {"entities": []})
+        assert queries == ["K-pop drama"]
+
+    def test_with_entities_adds_name_queries(self):
+        agent = SegmentProducerAgent()
+        entities = {
+            "entities": [
+                {"name": "Jennie Kim"},
+                {"name": "Lisa Blackpink"},
+            ],
+        }
+        queries = agent._build_search_queries("K-pop drama", entities)
+        assert len(queries) == 3
+        assert queries[0] == "K-pop drama"
+        assert queries[1] == "Jennie Kim K-pop drama"
+        assert queries[2] == "Lisa Blackpink K-pop drama"
+
+    def test_max_3_queries_even_with_many_entities(self):
+        agent = SegmentProducerAgent()
+        entities = {
+            "entities": [
+                {"name": "A"},
+                {"name": "B"},
+                {"name": "C"},
+                {"name": "D"},
+                {"name": "E"},
+            ],
+        }
+        queries = agent._build_search_queries("topic", entities)
+        assert len(queries) == 3
+
+    def test_entity_without_name_uses_str_fallback(self):
+        agent = SegmentProducerAgent()
+        entities = {"entities": ["plain_string_entity"]}
+        queries = agent._build_search_queries("topic", entities)
+        assert "plain_string_entity topic" in queries
+
+    def test_non_dict_entities_treated_as_empty(self):
+        agent = SegmentProducerAgent()
+        queries = agent._build_search_queries("topic", "not a dict")
+        assert queries == ["topic"]
+
+
+class TestMultiSourceDiscovery:
+    """Tests for _discover_multi_source_assets()."""
+
+    @staticmethod
+    def _mock_config(**overrides):
+        """Build a mock config object with optional API keys."""
+        mock = MagicMock()
+        mock.tavily_api_key = overrides.get("tavily_api_key", "")
+        mock.brave_api_key = overrides.get("brave_api_key", "")
+        return mock
+
+    def test_youtube_only_no_api_keys(self, mocker):
+        """YouTube search runs always; Tavily/Brave skipped without keys."""
+        mock_ytdlp_instance = mocker.MagicMock()
+        mock_ytdlp_instance.search.return_value = [
+            {
+                "source_type": "youtube_official",
+                "url": "https://www.youtube.com/watch?v=abc123",
+                "title": "K-pop interview",
+                "description": "Exclusive interview",
+            },
+        ]
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.YtDlpService",
+            return_value=mock_ytdlp_instance,
+        )
+        agent = SegmentProducerAgent()
+        config = self._mock_config()
+        results = agent._discover_multi_source_assets(
+            topic="K-pop", entities={}, config=config,
+        )
+        assert len(results) == 1
+        assert results[0]["source_type"] == "youtube_official"
+
+    def test_all_three_providers(self, mocker):
+        """All three providers searched when API keys are configured."""
+        mock_ytdlp = mocker.MagicMock()
+        mock_ytdlp.search.return_value = [
+            {"source_type": "youtube_official", "url": "https://youtube.com/1", "title": "Y1"},
+        ]
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.YtDlpService",
+            return_value=mock_ytdlp,
+        )
+
+        mock_tavily = mocker.MagicMock()
+        mock_tavily.search.return_value = [
+            {"source_type": "web_video", "url": "https://example.com/t1", "title": "T1"},
+        ]
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.TavilyService",
+            return_value=mock_tavily,
+        )
+
+        mock_brave = mocker.MagicMock()
+        mock_brave.search_videos.return_value = [
+            {"source_type": "web_video", "url": "https://example.com/b1", "title": "B1"},
+        ]
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.BraveSearchService",
+            return_value=mock_brave,
+        )
+
+        agent = SegmentProducerAgent()
+        config = self._mock_config(tavily_api_key="tv-key", brave_api_key="br-key")
+        results = agent._discover_multi_source_assets(
+            topic="K-pop", entities={}, config=config,
+        )
+        # 1 YouTube + 1 Tavily + 1 Brave = 3
+        assert len(results) == 3
+        source_types = {r["source_type"] for r in results}
+        assert "youtube_official" in source_types
+        assert "web_video" in source_types
+
+    def test_youtube_failure_graceful(self, mocker):
+        """YouTube failure doesn't prevent Tavily/Brave from running."""
+        mock_ytdlp = mocker.MagicMock()
+        mock_ytdlp.search.side_effect = Exception("yt-dlp crashed")
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.YtDlpService",
+            return_value=mock_ytdlp,
+        )
+
+        mock_tavily = mocker.MagicMock()
+        mock_tavily.search.return_value = [
+            {"source_type": "web_video", "url": "https://example.com/t1", "title": "T1"},
+        ]
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.TavilyService",
+            return_value=mock_tavily,
+        )
+
+        agent = SegmentProducerAgent()
+        config = self._mock_config(tavily_api_key="tv-key")
+        results = agent._discover_multi_source_assets(
+            topic="K-pop", entities={}, config=config,
+        )
+        # YouTube failed, Tavily succeeded
+        assert len(results) == 1
+        assert results[0]["source_type"] == "web_video"
+
+    def test_no_results_when_all_fail(self, mocker):
+        """When all providers fail, returns empty list (no crash)."""
+        mock_ytdlp = mocker.MagicMock()
+        mock_ytdlp.search.side_effect = Exception("boom")
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.YtDlpService",
+            return_value=mock_ytdlp,
+        )
+
+        mock_tavily = mocker.MagicMock()
+        mock_tavily.search.side_effect = Exception("boom")
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.TavilyService",
+            return_value=mock_tavily,
+        )
+
+        mock_brave = mocker.MagicMock()
+        mock_brave.search_videos.side_effect = Exception("boom")
+        mocker.patch(
+            "clipper_agency.agents.segment_producer.BraveSearchService",
+            return_value=mock_brave,
+        )
+
+        agent = SegmentProducerAgent()
+        config = self._mock_config(tavily_api_key="tv-key", brave_api_key="br-key")
+        results = agent._discover_multi_source_assets(
+            topic="K-pop", entities={}, config=config,
+        )
+        assert results == []
+
+
+class TestMultiSourceFlowThroughCandidates:
+    """Multi-source results flow through _build_asset_candidates_from_sources correctly."""
+
+    def test_youtube_official_gets_high_quality_tier(self):
+        """YouTube results should get source_type youtube_official → score 0.95."""
+        from clipper_agency.agents.segment_producer import SOURCE_QUALITY_TIERS
+
+        sources = [
+            {
+                "source_type": "youtube_official",
+                "url": "https://www.youtube.com/watch?v=abc",
+                "title": "Official interview",
+                "source": "youtube",
+            },
+        ]
+        candidates = SegmentProducerAgent._build_asset_candidates_from_sources(sources)
+        assert len(candidates) == 1
+        assert candidates[0]["relevance_score"] == SOURCE_QUALITY_TIERS["youtube_official"]
+        assert candidates[0]["source_type"] == "youtube_official"
+
+    def test_web_video_gets_correct_tier(self):
+        """Tavily/Brave video results should get source_type web_video → score 0.85."""
+        from clipper_agency.agents.segment_producer import SOURCE_QUALITY_TIERS
+
+        sources = [
+            {
+                "source_type": "web_video",
+                "url": "https://example.com/video1",
+                "title": "Web video result",
+                "source": "tavily",
+            },
+        ]
+        candidates = SegmentProducerAgent._build_asset_candidates_from_sources(sources)
+        assert len(candidates) == 1
+        assert candidates[0]["relevance_score"] == SOURCE_QUALITY_TIERS["web_video"]
+
+    def test_tiktok_still_scored_lower_than_youtube(self):
+        """ScrapeCreators TikTok clips (0.50) scored lower than YouTube (0.95)."""
+        from clipper_agency.agents.segment_producer import SOURCE_QUALITY_TIERS
+
+        sources = [
+            {"source_type": "youtube_official", "url": "https://youtube.com/1", "source": "youtube"},
+            {"source_type": "tiktok_clip", "url": "https://tiktok.com/1", "source": "scrapecreators"},
+        ]
+        candidates = SegmentProducerAgent._build_asset_candidates_from_sources(sources)
+        yt = [c for c in candidates if c["source_type"] == "youtube_official"][0]
+        tt = [c for c in candidates if c["source_type"] == "tiktok_clip"][0]
+        assert yt["relevance_score"] > tt["relevance_score"]

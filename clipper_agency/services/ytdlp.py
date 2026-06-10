@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from urllib import request
 from urllib.parse import urlparse
 
 try:
@@ -155,3 +156,39 @@ class YtDlpService:
                 if attempt < 2:
                     time.sleep(0.5 * (2 ** attempt))
         return []
+
+    _YT_VIDEO_ID_RE = re.compile(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})")
+
+    def download_thumbnail(
+        self,
+        video_url: str,
+        output_path: str,
+    ) -> Optional[str]:
+        """Download best-quality thumbnail for a YouTube video.
+
+        Args:
+            video_url: YouTube video URL (watch?v=... or youtu.be/...)
+            output_path: Where to save the thumbnail image
+
+        Returns:
+            Path to saved thumbnail, or None on failure.
+        """
+        match = self._YT_VIDEO_ID_RE.search(video_url)
+        if not match:
+            return None
+
+        video_id = match.group(1)
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        for quality in ("maxresdefault", "hqdefault"):
+            thumb_url = f"https://i.ytimg.com/vi/{video_id}/{quality}.jpg"
+            try:
+                request.urlretrieve(thumb_url, str(out))
+                return str(out)
+            except Exception:
+                logger.debug(
+                    "Thumbnail download failed for %s at %s",
+                    video_id, quality,
+                )
+        return None
