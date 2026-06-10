@@ -15,8 +15,8 @@
 ```
 
 <p align="center">
-  <strong>AI-powered TikTok content factory.</strong><br>
-  Seven autonomous agents + gated pipeline → one command → ready-to-upload video.
+  <strong>AI-powered short-form video automation.</strong><br>
+  7 agents + gated pipeline + runtime quality gates + auto-repair → one command → ready-to-upload video.
 </p>
 
 <p align="center">
@@ -284,6 +284,6 @@ Tests live in `tests/` mirroring the package structure. Currently **1793 tests**
 
 ## Status
 
-**✅ MVP Complete** — Phases 0-22 implemented. Runtime quality enforcement with black/freeze frame detection, text/face detection, story-mode reconciliation, multimodal candidate inspection, multi-provider asset sourcing (YouTube/Tavily/Brave), bounded automated repair loop, and timestamp-semantic review. All 1793 offline tests passing.
+**✅ Post-MVP (Stage 2)** — Core pipeline hardened with runtime quality gates, multi-provider asset sourcing (YouTube/Tavily/Brave), story-mode reconciliation, multimodal candidate inspection, bounded automated repair loop, and dashboard retry/resume. Single-tenant, manual topic input. Next: multi-account, scheduling, API publishing.
 
 1793 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing
