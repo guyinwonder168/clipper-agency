@@ -64,6 +64,7 @@ def _log_startup_info() -> None:
     for key in [
         "OPENROUTER_API_KEY", "ELEVENLABS_API_KEY", "FISHAUDIO_API_KEY",
         "PEXELS_API_KEY", "SCRAPECREATORS_API_KEY", "FIRECRAWL_API_KEY",
+        "GEMINI_API_KEY", "TAVILY_API_KEY", "BRAVE_API_KEY",
     ]:
         status = "CONFIGURED" if os.getenv(key) else "MISSING"
         logger.info("API key %s: %s", key, status)
