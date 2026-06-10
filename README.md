@@ -68,19 +68,21 @@ python3 -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Then fill in your API keys. Required:
+Then fill in your API keys:
 
-| Key | Purpose |
-|-----|---------|
-| `OPENROUTER_API_KEY` | LLM routing for all agents |
-| `ELEVENLABS_API_KEY` | Voice generation (primary) |
-| `GEMINI_API_KEY` | Voice generation (fallback) & multimodal inspection |
-| `FISHAUDIO_API_KEY` | Voice generation (fallback) |
-| `PEXELS_API_KEY` | Stock video/images fallback |
-| `FIRECRAWL_API_KEY` | Web research & scraping |
-| `SCRAPECREATORS_API_KEY` | TikTok data scraping |
-| `TAVILY_API_KEY` | Web news search (multi-source asset sourcing) |
-| `BRAVE_API_KEY` | Video/web search (multi-source asset sourcing) |
+| Key | Required? | Purpose |
+|-----|-----------|---------|
+| `OPENROUTER_API_KEY` | ✅ Required | LLM routing for all agents |
+| `ELEVENLABS_API_KEY` | 🟡 Optional* | Voice generation (primary, falls back without) |
+| `GEMINI_API_KEY` | 🟡 Optional | Voice fallback (Gemini TTS) & multimodal inspection |
+| `FISHAUDIO_API_KEY` | 🟡 Optional | Voice fallback (Fish Audio) |
+| `PEXELS_API_KEY` | 🟡 Optional | Stock video/images fallback |
+| `FIRECRAWL_API_KEY` | 🟡 Optional | Web research & scraping |
+| `SCRAPECREATORS_API_KEY` | 🟡 Optional | TikTok data scraping |
+| `TAVILY_API_KEY` | 🟡 Optional | Web news search (skipped if unset) |
+| `BRAVE_API_KEY` | 🟡 Optional | Video/web search (skipped if unset) |
+
+\* At least one voice provider key required (ElevenLabs, Gemini TTS, or Fish Audio). Otherwise pipeline stops at voice generation.
 
 ### Run
 
