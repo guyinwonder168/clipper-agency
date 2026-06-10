@@ -201,6 +201,8 @@ class AppSettings(BaseSettings):
     firecrawl_api_key: str = ""
     scrapecreators_api_key: str = ""
     gemini_api_key: str = ""
+    tavily_api_key: str = ""
+    brave_api_key: str = ""
 
     # Paths
     db_path: str = Field(default="data/clipper.db")

@@ -176,3 +176,18 @@ def test_app_settings_include_llm_trace_observability_defaults():
         assert settings.observability.llm_traces.redact_secrets is True
         assert settings.observability.llm_traces.retention_days == 30
         assert settings.observability.llm_traces.required is False
+
+
+def test_app_settings_include_tavily_brave_keys():
+    """Tavily and Brave API keys load from environment with empty defaults."""
+    from clipper_agency.config.schema import AppSettings
+
+    with patch.dict("os.environ", {}, clear=True):
+        settings = AppSettings(_env_file=None)
+        assert settings.tavily_api_key == ""
+        assert settings.brave_api_key == ""
+
+    with patch.dict("os.environ", {"TAVILY_API_KEY": "tvly-123", "BRAVE_API_KEY": "brv-456"}, clear=True):
+        settings = AppSettings(_env_file=None)
+        assert settings.tavily_api_key == "tvly-123"
+        assert settings.brave_api_key == "brv-456"
