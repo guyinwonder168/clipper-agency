@@ -105,10 +105,50 @@ class SafeAreaConfig(BaseModel):
     face_overlap_max: float = 0.15
 
 
+class RuntimeInspectionConfig(BaseModel):
+    """Runtime keyframe extraction and inspection controls."""
+
+    enabled: bool = True
+    persist_keyframes: bool = True
+    frame_interval_sec: float = 0.5
+    max_frames_per_asset: int = 8
+    perceptual_hash_distance: int = 6
+
+
+class OCRConfig(BaseModel):
+    """OCR runtime inspection controls."""
+
+    enabled: bool = True
+    provider: str = "paddleocr"
+    min_confidence: float = 0.55
+    large_region_area_ratio: float = 0.20
+
+
+class FaceDetectionConfig(BaseModel):
+    """Face detection runtime inspection controls."""
+
+    enabled: bool = True
+    provider: str = "mediapipe"
+    min_confidence: float = 0.60
+
+
 class SemanticReviewConfig(BaseModel):
     """Settings for semantic visual review and repair."""
 
+    enabled: bool = True
+    provider: str = "existing_multimodal_llm"
+    max_assets_per_beat: int = 3
+    max_frames_per_asset: int = 4
+    minimum_claim_support: float = 0.70
+    maximum_misleading_risk: float = 0.30
     max_repair_cycles: int = 2
+
+
+class EnforcementConfig(BaseModel):
+    """Quality enforcement controls for review and publication."""
+
+    block_on_reviewer_fail: bool = True
+    block_publication_on_quality_fail: bool = True
 
 
 class QualityConfig(BaseModel):
@@ -117,7 +157,31 @@ class QualityConfig(BaseModel):
     visual_coverage: VisualCoverageConfig = Field(default_factory=VisualCoverageConfig)
     text_collision: TextCollisionConfig = Field(default_factory=TextCollisionConfig)
     safe_area: SafeAreaConfig = Field(default_factory=SafeAreaConfig)
+    runtime_inspection: RuntimeInspectionConfig = Field(default_factory=RuntimeInspectionConfig)
+    ocr: OCRConfig = Field(default_factory=OCRConfig)
+    face_detection: FaceDetectionConfig = Field(default_factory=FaceDetectionConfig)
     semantic_review: SemanticReviewConfig = Field(default_factory=SemanticReviewConfig)
+    enforcement: EnforcementConfig = Field(default_factory=EnforcementConfig)
+
+
+class LLMTracesConfig(BaseModel):
+    """Structured LLM trace persistence settings."""
+
+    enabled: bool = True
+    persist_resolved_prompts: bool = True
+    persist_raw_responses: bool = True
+    persist_parsed_responses: bool = True
+    persist_validation_results: bool = True
+    log_full_payload_inline: bool = False
+    redact_secrets: bool = True
+    retention_days: int = 30
+    required: bool = False
+
+
+class ObservabilityConfig(BaseModel):
+    """Observability configuration for runtime diagnostics."""
+
+    llm_traces: LLMTracesConfig = Field(default_factory=LLMTracesConfig)
 
 
 class AppSettings(BaseSettings):
@@ -137,6 +201,8 @@ class AppSettings(BaseSettings):
     firecrawl_api_key: str = ""
     scrapecreators_api_key: str = ""
     gemini_api_key: str = ""
+    tavily_api_key: str = ""
+    brave_api_key: str = ""
 
     # Paths
     db_path: str = Field(default="data/clipper.db")
@@ -170,6 +236,9 @@ class AppSettings(BaseSettings):
 
     # Quality gates
     quality: QualityConfig = Field(default_factory=QualityConfig)
+
+    # Observability
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +280,7 @@ class AssetCandidate(BaseModel):
     related_beat_id: int | None = None
     story_id: str = ""
     license_status: str = "unknown"
+    source_type: str = ""  # "youtube_official", "web_video", "tiktok_clip", "image", "article", "firecrawl"
 
 
 class BeatFallback(BaseModel):
@@ -439,3 +509,105 @@ class RepairPlan(BaseModel):
     decision: str  # "revise", "reject", "accept"
     max_repair_cycles: int = 2
     patches: list[RepairPatch] = Field(default_factory=list)
+
+
+# -- Runtime Inspection Contracts --
+
+
+class ExtractedFrame(BaseModel):
+    """A persisted frame sampled from a visual asset or rendered output."""
+
+    timestamp_sec: float
+    path: str
+    perceptual_hash: str
+    width: int
+    height: int
+
+
+class FrameExtractionManifest(BaseModel):
+    """Manifest linking an inspected asset to its extracted frames."""
+
+    asset_id: str
+    beat_id: str
+    source_path: str
+    frames: list[ExtractedFrame]
+
+
+class OCRInspectionResult(BaseModel):
+    """OCR inspection output for a frame or asset."""
+
+    provider: str
+    model: str = ""
+    timestamp_sec: float = 0.0
+    regions: list[DetectedTextRegion] = Field(default_factory=list)
+
+
+class FaceRegion(BaseModel):
+    """Detected face region in pixel coordinates."""
+
+    bbox: list[int]
+    confidence: float = Field(ge=0.0, le=1.0)
+    is_primary: bool = False
+
+
+class FaceInspectionResult(BaseModel):
+    """Face detection output for a frame or asset."""
+
+    provider: str
+    model: str = ""
+    timestamp_sec: float = 0.0
+    faces: list[FaceRegion] = Field(default_factory=list)
+
+
+class AssetSemanticInspection(BaseModel):
+    """Multimodal semantic inspection of one candidate asset for one beat."""
+
+    asset_id: str
+    beat_id: str
+    person_match: float = Field(ge=0.0, le=1.0)
+    event_match: float = Field(ge=0.0, le=1.0)
+    claim_support: float = Field(ge=0.0, le=1.0)
+    visual_quality: float = Field(ge=0.0, le=1.0)
+    temporal_match: float = Field(0.0, ge=0.0, le=1.0)
+    source_credibility: float = Field(0.0, ge=0.0, le=1.0)
+    cleanliness_score: float = Field(0.0, ge=0.0, le=1.0)
+    misleading_risk: float = Field(ge=0.0, le=1.0)
+    decision: str
+    reason: str
+    frame_paths: list[str]
+    model: str
+
+
+class SceneSemanticReview(BaseModel):
+    """Semantic review result for a rendered scene or timestamp range."""
+
+    beat_id: str
+    timestamp_start_sec: float
+    timestamp_end_sec: float
+    decision: str
+    reason: str
+    score: float = Field(ge=0.0, le=1.0)
+
+    @property
+    def passed(self) -> bool:
+        """Whether this scene passed semantic review."""
+        return self.decision == "accept"
+
+
+class QualityStatus(BaseModel):
+    """Separate runtime statuses for execution, quality, publication, and repair."""
+
+    execution_status: str
+    quality_status: str
+    publication_status: str
+    repair_status: str
+
+
+class RepairCycleRecord(BaseModel):
+    """Before/after score snapshot for a bounded repair cycle."""
+
+    cycle: int
+    source_agent: str
+    target_agent: str
+    before_scores: dict[str, float]
+    after_scores: dict[str, float]

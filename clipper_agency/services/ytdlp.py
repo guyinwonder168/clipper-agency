@@ -1,11 +1,23 @@
 """yt-dlp media download service."""
 
+import logging
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+from urllib import request
 from urllib.parse import urlparse
+
+try:
+    import yt_dlp  # type: ignore[import-untyped]
+
+    _HAS_YT_DLP = True
+except ImportError:  # pragma: no cover
+    _HAS_YT_DLP = False
+
+logger = logging.getLogger(__name__)
 
 
 UNSAFE_URL_CHARS = re.compile(r"[\x00-\x20\x7f]")
@@ -81,3 +93,108 @@ class YtDlpService:
             return DownloadResult(path=str(out))
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return None
+
+    @staticmethod
+    def _parse_search_entry(entry: Any) -> dict | None:
+        """Convert a yt-dlp search entry to a result dict, or None if invalid."""
+        if not entry:
+            return None
+        video_id = entry.get("id") or entry.get("url", "")
+        if video_id and not video_id.startswith("http"):
+            url = f"https://www.youtube.com/watch?v={video_id}"
+        else:
+            url = entry.get("url", "")
+        return {
+            "source_type": "youtube_official",
+            "url": url,
+            "title": entry.get("title", ""),
+            "description": entry.get("description", ""),
+            "duration": entry.get("duration"),
+            "channel": entry.get("channel") or entry.get("uploader", ""),
+            "thumbnail_url": entry.get("thumbnail", ""),
+        }
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 5,
+    ) -> list[dict]:
+        """Search YouTube via yt-dlp ytsearchN: prefix.
+
+        Returns list of dicts:
+        {
+            "source_type": "youtube_official",
+            "url": "https://www.youtube.com/watch?v=...",
+            "title": "...",
+            "description": "...",
+            "duration": 120,
+            "channel": "...",
+            "thumbnail_url": "https://i.ytimg.com/...",
+        }
+        """
+        if not _HAS_YT_DLP:
+            logger.warning("yt_dlp library not installed; search unavailable")
+            return []
+
+        search_url = f"ytsearch{max_results}:{query}"
+        opts = {
+            "quiet": True,
+            "skip_download": True,
+            "extract_flat": "in_playlist",
+        }
+
+        for attempt in range(3):
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(search_url, download=False)
+
+                if not info or "entries" not in info:
+                    return []
+
+                results: list[dict] = []
+                for entry in info["entries"]:
+                    parsed = self._parse_search_entry(entry)
+                    if parsed:
+                        results.append(parsed)
+                return results
+            except Exception:
+                logger.debug("yt-dlp search attempt %d failed", attempt + 1)
+                if attempt < 2:
+                    time.sleep(0.5 * (2 ** attempt))
+        return []
+
+    _YT_VIDEO_ID_RE = re.compile(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})")
+
+    def download_thumbnail(
+        self,
+        video_url: str,
+        output_path: str,
+    ) -> Optional[str]:
+        """Download best-quality thumbnail for a YouTube video.
+
+        Args:
+            video_url: YouTube video URL (watch?v=... or youtu.be/...)
+            output_path: Where to save the thumbnail image
+
+        Returns:
+            Path to saved thumbnail, or None on failure.
+        """
+        match = self._YT_VIDEO_ID_RE.search(video_url)
+        if not match:
+            return None
+
+        video_id = match.group(1)
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        for quality in ("maxresdefault", "hqdefault"):
+            thumb_url = f"https://i.ytimg.com/vi/{video_id}/{quality}.jpg"
+            try:
+                request.urlretrieve(thumb_url, str(out))
+                return str(out)
+            except Exception:
+                logger.debug(
+                    "Thumbnail download failed for %s at %s",
+                    video_id, quality,
+                )
+        return None

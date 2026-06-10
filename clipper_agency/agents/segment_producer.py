@@ -29,11 +29,16 @@ from clipper_agency.core.paths import (
     segment_producer_contract_file,
 )
 from clipper_agency.llm.client import OpenRouterClient
+from clipper_agency.services.brave import BraveSearchService
 from clipper_agency.services.firecrawl_service import FirecrawlService
 from clipper_agency.services.scrapecreators import ScrapeCreatorsService
+from clipper_agency.services.tavily import TavilyService
+from clipper_agency.services.ytdlp import YtDlpService
 
 from clipper_agency.core.duration_budget import allocate_duration_budget
+from clipper_agency.core.story_decision_reconciliation import reconcile_story_decisions
 from clipper_agency.core.story_mode import classify_story_mode
+from clipper_agency.core.story_mode_contract import derive_story_mode_contract
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,29 @@ logger = logging.getLogger(__name__)
 # Prevent LLM context overflow from overly large search results.
 MAX_SOURCE_CHARS = 40_000  # ~10K tokens worth of text
 MAX_CHARS_PER_SOURCE = 500
+
+# ── source quality tiers ────────────────────────────────────────────────────
+# Base relevance scores by source type.  TikTok clips downgraded due to
+# watermarks and hardcoded subtitles; firecrawl is lowest (article text).
+SOURCE_QUALITY_TIERS: dict[str, float] = {
+    "youtube_official": 0.95,
+    "web_video": 0.85,
+    "tiktok_clip": 0.50,   # downgraded — watermark / hardcoded subs
+    "image": 0.70,
+    "article": 0.40,
+    "firecrawl": 0.30,
+}
+DEFAULT_SOURCE_QUALITY: float = 0.40
+
+# Map source_type → candidate type for _build_asset_candidates_from_sources.
+_SOURCE_TYPE_TO_CANDIDATE_TYPE: dict[str, str] = {
+    "tiktok_clip": "tiktok_clip",
+    "firecrawl": "screenshot",
+    "image": "photo",
+    "article": "screenshot",
+    "youtube_official": "tiktok_clip",
+    "web_video": "tiktok_clip",
+}
 
 
 SEGMENT_PRODUCER_PROMPT = """You are a Segment Producer for {channel_description}.
@@ -188,9 +216,8 @@ class SegmentProducerAgent(BaseAgent):
         aggregated = self._aggregate_data(firecrawl_data, scrapecreators_data)
 
         # ── 1b. Extract visual asset candidates from raw sources ────────
-        discovered_candidates = self._build_asset_candidates_from_sources(
-            firecrawl_data, scrapecreators_data,
-        )
+        all_sources = self._normalize_sources(firecrawl_data, scrapecreators_data)
+        discovered_candidates = self._build_asset_candidates_from_sources(all_sources)
 
         # ── 2. Synthesize research brief (cached or live LLM) ───────────
         synthesis = self._get_research_brief(
@@ -198,11 +225,36 @@ class SegmentProducerAgent(BaseAgent):
             channel_description, language, tone, content_angle,
         )
 
-        # ── 3. Classify story mode and allocate budget ─────────────────
-        story_mode_decision = classify_story_mode(topic, target_duration_sec=target_dur)
+        # ── 2b. Multi-provider asset discovery (uses synthesis entities) ─
+        multi_sources = self._discover_multi_source_assets(
+            topic=topic,
+            entities=synthesis.get("entities", {}),
+            config=settings,
+        )
+        multi_candidates = self._build_asset_candidates_from_sources(multi_sources)
+
+        # ── 2c. YouTube thumbnail fallback candidates ────────────────────
+        thumbnail_candidates = self._get_thumbnail_fallback_candidates(
+            multi_sources, output_dir, job_id,
+        )
+
+        # ── 3. Classify story mode (early, deterministic) ─────────────
+        classifier_decision = classify_story_mode(topic, target_duration_sec=target_dur)
+
+        # ── 4. Reconcile classifier + legacy format_decision ───────────
+        legacy_format = synthesis.get("format_decision")
+        story_beats_raw = synthesis.get("story_beats", [])
+        reconciled = reconcile_story_decisions(
+            classifier_decision, legacy_format,
+        )
+
+        # ── 5. Derive production contract from canonical decision ──────
+        contract = derive_story_mode_contract(reconciled)
+
+        # ── 6. Allocate budget from reconciled mode ────────────────────
         duration_budget = allocate_duration_budget(
-            story_mode=story_mode_decision.story_mode,
-            item_count=story_mode_decision.item_count,
+            story_mode=reconciled.story_mode,
+            item_count=reconciled.item_count,
             target_duration_sec=target_dur,
         )
 
@@ -211,17 +263,19 @@ class SegmentProducerAgent(BaseAgent):
             "research_brief": synthesis["research_brief"],
             "sources": aggregated,
             "risk_flags": [],
-            "story_beats": synthesis.get("story_beats", []),
-            "format_decision": synthesis.get("format_decision"),
+            "story_beats": story_beats_raw,
+            "format_decision": legacy_format,
             "asset_candidates": self._merge_asset_candidates(
                 synthesis.get("asset_candidates", []),
                 discovered_candidates,
+                multi_candidates,
+                thumbnail_candidates,
             ),
             "do_not_use": synthesis.get("do_not_use", []),
             "verified_facts": synthesis.get("verified_facts", []),
             "unverified_claims": synthesis.get("unverified_claims", []),
             "reference_style": synthesis.get("reference_style"),
-            "story_mode_decision": story_mode_decision.model_dump(),
+            "story_mode_decision": contract,
             "duration_budget": duration_budget.model_dump(),
         }
         if assets_cache:
@@ -332,42 +386,61 @@ class SegmentProducerAgent(BaseAgent):
         }
 
     @staticmethod
-    def _build_asset_candidates_from_sources(
+    def _normalize_sources(
         firecrawl_data: list[dict],
         scrapecreators_data: list[dict],
     ) -> list[dict]:
-        """Build visual asset candidates from raw research sources."""
-        candidates: list[dict] = []
+        """Convert legacy separate source lists into unified source_type dicts."""
+        sources: list[dict] = []
         for item in scrapecreators_data:
-            url = item.get("url", "")
-            if not url:
-                continue
-            candidates.append({
-                "type": "tiktok_clip",
-                "url": url,
-                "reason": item.get("title") or item.get("desc") or "ScrapeCreators video candidate",
-                "source": "scrapecreators",
-                "page_url": url,
-                "title": item.get("title", ""),
-                "relevance_score": 0.9,
-                "provenance": "primary_clip",
-                "license_status": "unknown",
-            })
+            sources.append({**item, "source_type": "tiktok_clip", "source": "scrapecreators"})
         for item in firecrawl_data:
+            sources.append({**item, "source_type": "firecrawl", "source": "firecrawl"})
+        return sources
+
+    @staticmethod
+    def _build_asset_candidates_from_sources(
+        sources: list[dict] | None = None,
+        firecrawl_data: list[dict] | None = None,
+        scrapecreators_data: list[dict] | None = None,
+    ) -> list[dict]:
+        """Build visual asset candidates from raw research sources.
+
+        Supports two calling conventions:
+          1. New:   _build_asset_candidates_from_sources(sources=unified_list)
+          2. Legacy: _build_asset_candidates_from_sources(firecrawl_data=..., scrapecreators_data=...)
+        """
+        if sources is None:
+            sources = SegmentProducerAgent._normalize_sources(
+                firecrawl_data or [], scrapecreators_data or [],
+            )
+
+        candidates: list[dict] = []
+        for item in sources:
             url = item.get("url", "")
             if not url:
                 continue
-            candidates.append({
-                "type": "screenshot",
+            source_type = item.get("source_type", "")
+            base_score = SOURCE_QUALITY_TIERS.get(source_type, DEFAULT_SOURCE_QUALITY)
+            candidate_type = _SOURCE_TYPE_TO_CANDIDATE_TYPE.get(source_type, "screenshot")
+            candidate = {
+                "type": candidate_type,
                 "url": url,
-                "reason": item.get("description") or item.get("title") or "Firecrawl supporting context",
-                "source": "firecrawl",
+                "reason": (
+                    item.get("description") or item.get("title") or item.get("desc")
+                    or "Candidate source"
+                ),
+                "source": item.get("source", source_type),
                 "page_url": url,
                 "title": item.get("title", ""),
-                "relevance_score": 0.7,
-                "provenance": "supporting_context",
+                "relevance_score": base_score,
+                "provenance": (
+                    "primary_clip" if source_type == "tiktok_clip" else "supporting_context"
+                ),
                 "license_status": "unknown",
-            })
+                "source_type": source_type,
+            }
+            candidates.append(candidate)
         return candidates
 
     @staticmethod
@@ -505,6 +578,67 @@ class SegmentProducerAgent(BaseAgent):
 
         return candidates
 
+    # ── multi-source asset discovery ──────────────────────────────────────
+
+    def _build_search_queries(self, topic: str, entities: dict) -> list[str]:
+        """Derive search queries from topic + entity names."""
+        queries = [topic]
+        if not isinstance(entities, dict):
+            return queries
+        entity_list = entities.get("entities", [])
+        if not isinstance(entity_list, list):
+            return queries
+        for entity in entity_list:
+            if len(queries) >= 3:
+                break
+            name = entity.get("name", "") if isinstance(entity, dict) else str(entity)
+            if name:
+                queries.append(f"{name} {topic}")
+        return queries
+
+    def _discover_multi_source_assets(
+        self,
+        topic: str,
+        entities: dict,
+        config: Any,
+    ) -> list[dict]:
+        """Search YouTube, Tavily, Brave for additional asset candidates."""
+        sources: list[dict] = []
+        search_queries = self._build_search_queries(topic, entities)
+
+        # YouTube search (free, no API key needed)
+        try:
+            ytdlp = YtDlpService()
+            for query in search_queries:
+                results = ytdlp.search(query, max_results=3)
+                sources.extend(results)
+        except Exception:
+            logger.exception("YouTube multi-source search failed")
+
+        # Tavily search (if API key configured)
+        tavily_key = getattr(config, "tavily_api_key", "")
+        if tavily_key and isinstance(tavily_key, str):
+            try:
+                tavily = TavilyService(tavily_key)
+                for query in search_queries:
+                    results = tavily.search(query, max_results=3)
+                    sources.extend(results)
+            except Exception:
+                logger.exception("Tavily multi-source search failed")
+
+        # Brave search (if API key configured)
+        brave_key = getattr(config, "brave_api_key", "")
+        if brave_key and isinstance(brave_key, str):
+            try:
+                brave = BraveSearchService(brave_key)
+                for query in search_queries:
+                    results = brave.search_videos(query, max_results=3)
+                    sources.extend(results)
+            except Exception:
+                logger.exception("Brave multi-source search failed")
+
+        return sources
+
     @staticmethod
     def _merge_asset_candidates(*candidate_groups: list[dict]) -> list[dict]:
         """Merge asset candidate groups, deduplicating by URL."""
@@ -519,6 +653,32 @@ class SegmentProducerAgent(BaseAgent):
                 seen_urls.add(key)
                 merged.append(candidate)
         return merged
+
+    @staticmethod
+    def _get_thumbnail_fallback_candidates(
+        multi_sources: list[dict],
+        output_dir: str,
+        job_id: int,
+    ) -> list[dict]:
+        """Generate image candidates from YouTube thumbnails when video download fails."""
+        candidates: list[dict] = []
+        for source in multi_sources:
+            if source.get("source_type") != "youtube_official":
+                continue
+            thumb_url = source.get("thumbnail_url", "")
+            if not thumb_url:
+                continue
+            candidates.append({
+                "type": "photo",
+                "url": thumb_url,
+                "source": "youtube_thumbnail",
+                "reason": f"Thumbnail fallback for: {source.get('title', '')}",
+                "relevance_score": SOURCE_QUALITY_TIERS.get("image", 0.70),
+                "source_type": "image",
+                "provenance": "youtube_thumbnail_fallback",
+                "video_url": source.get("url", ""),
+            })
+        return candidates
 
     def _persist_contract_artifacts(
         self,

@@ -47,3 +47,4 @@ docs/old/
 !assets/.gitkeep
 !outputs/.gitkeep
 !data/.gitkeep
+build/

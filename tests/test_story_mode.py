@@ -107,3 +107,61 @@ def test_short_duration_with_breaking_keyword_still_single_story():
     """Duration < 20 overrides all keyword matches."""
     decision = classify_story_mode("breaking news hari ini", target_duration_sec=15)
     assert decision.story_mode == "single_story"
+
+
+# ---------------------------------------------------------------------------
+# 10. Broad Indonesian gossip keyword patterns → roundup
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("topic", [
+    "berita hot gossip artist indonesia terbaru",
+    "gosip artis hari ini",
+    "kabar selebriti terbaru",
+    "top gossip hari ini",
+    "update artis terbaru",
+])
+def test_broad_gossip_patterns_classify_as_roundup(topic):
+    decision = classify_story_mode(topic, target_duration_sec=30)
+    assert decision.story_mode == "roundup", f"topic '{topic}' should be roundup"
+    assert decision.requires_intro_card is True
+
+
+# ---------------------------------------------------------------------------
+# 11. Variant spelling normalization
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("topic", [
+    "berita artist terbaru hari ini",        # artist → artis
+    "gossip selebriti terbaru",              # gossip → gosip
+    "berita artis latest hari ini",          # latest → terbaru
+    "kabar artis today",                     # today → hari ini
+])
+def test_variant_spellings_still_classify_as_roundup(topic):
+    decision = classify_story_mode(topic, target_duration_sec=30)
+    assert decision.story_mode == "roundup", f"topic '{topic}' should normalize and classify as roundup"
+
+
+# ---------------------------------------------------------------------------
+# 12. Plural intent detection → roundup
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("topic", [
+    "berita artists indonesia terbaru",
+    "artis-artis yang populer saat ini",
+])
+def test_plural_intent_classifies_as_roundup(topic):
+    decision = classify_story_mode(topic, target_duration_sec=30)
+    assert decision.story_mode == "roundup", f"topic '{topic}' should detect plural intent and classify as roundup"
+
+
+# ---------------------------------------------------------------------------
+# 13. Category-level topic classification → roundup
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("topic", [
+    "berita entertainment hari ini",
+    "kabar hiburan terbaru",
+])
+def test_category_level_topics_classify_as_roundup(topic):
+    decision = classify_story_mode(topic, target_duration_sec=30)
+    assert decision.story_mode == "roundup", f"topic '{topic}' should classify as roundup"

@@ -130,3 +130,64 @@ def test_app_settings_include_quality_gate_defaults():
         assert settings.quality.text_collision.subtitle_overlap_max == 0.20
         assert settings.quality.safe_area.face_overlap_max == 0.15
         assert settings.quality.semantic_review.max_repair_cycles == 2
+
+
+def test_app_settings_include_runtime_inspection_quality_defaults():
+    from clipper_agency.config.schema import AppSettings
+
+    with patch.dict("os.environ", {}, clear=True):
+        settings = AppSettings(_env_file=None)
+
+        assert settings.quality.runtime_inspection.enabled is True
+        assert settings.quality.runtime_inspection.persist_keyframes is True
+        assert settings.quality.runtime_inspection.frame_interval_sec == 0.5
+        assert settings.quality.runtime_inspection.max_frames_per_asset == 8
+        assert settings.quality.runtime_inspection.perceptual_hash_distance == 6
+        assert settings.quality.ocr.enabled is True
+        assert settings.quality.ocr.provider == "paddleocr"
+        assert settings.quality.ocr.min_confidence == 0.55
+        assert settings.quality.ocr.large_region_area_ratio == 0.20
+        assert settings.quality.face_detection.enabled is True
+        assert settings.quality.face_detection.provider == "mediapipe"
+        assert settings.quality.face_detection.min_confidence == 0.60
+        assert settings.quality.semantic_review.enabled is True
+        assert settings.quality.semantic_review.provider == "existing_multimodal_llm"
+        assert settings.quality.semantic_review.max_assets_per_beat == 3
+        assert settings.quality.semantic_review.max_frames_per_asset == 4
+        assert settings.quality.semantic_review.minimum_claim_support == 0.70
+        assert settings.quality.semantic_review.maximum_misleading_risk == 0.30
+        assert settings.quality.semantic_review.max_repair_cycles == 2
+        assert settings.quality.enforcement.block_on_reviewer_fail is True
+        assert settings.quality.enforcement.block_publication_on_quality_fail is True
+
+
+def test_app_settings_include_llm_trace_observability_defaults():
+    from clipper_agency.config.schema import AppSettings
+
+    with patch.dict("os.environ", {}, clear=True):
+        settings = AppSettings(_env_file=None)
+
+        assert settings.observability.llm_traces.enabled is True
+        assert settings.observability.llm_traces.persist_resolved_prompts is True
+        assert settings.observability.llm_traces.persist_raw_responses is True
+        assert settings.observability.llm_traces.persist_parsed_responses is True
+        assert settings.observability.llm_traces.persist_validation_results is True
+        assert settings.observability.llm_traces.log_full_payload_inline is False
+        assert settings.observability.llm_traces.redact_secrets is True
+        assert settings.observability.llm_traces.retention_days == 30
+        assert settings.observability.llm_traces.required is False
+
+
+def test_app_settings_include_tavily_brave_keys():
+    """Tavily and Brave API keys load from environment with empty defaults."""
+    from clipper_agency.config.schema import AppSettings
+
+    with patch.dict("os.environ", {}, clear=True):
+        settings = AppSettings(_env_file=None)
+        assert settings.tavily_api_key == ""
+        assert settings.brave_api_key == ""
+
+    with patch.dict("os.environ", {"TAVILY_API_KEY": "tvly-123", "BRAVE_API_KEY": "brv-456"}, clear=True):
+        settings = AppSettings(_env_file=None)
+        assert settings.tavily_api_key == "tvly-123"
+        assert settings.brave_api_key == "brv-456"

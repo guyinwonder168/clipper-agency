@@ -17,12 +17,15 @@ from typing import Any
 from clipper_agency.agents.base import BaseAgent
 from clipper_agency.config.schema import StoryBeat, WordTimestamp
 from clipper_agency.core.artifacts import write_json
+from clipper_agency.core.candidate_semantic_ranker import rank_candidates, select_best_candidate
+from clipper_agency.core.inspection_cache import compute_cache_key, lookup, store
 from clipper_agency.core.paths import (
     agent_input_file,
     agent_output_file,
     ensure_agent_dir,
     visual_scene_file,
 )
+from clipper_agency.core.semantic_visual_review import score_visual_relevance
 from clipper_agency.services.pexels import PexelsService
 from clipper_agency.services.ytdlp import YtDlpService
 from clipper_agency.core.media_probe import probe_video
@@ -59,6 +62,7 @@ class VisualDirectorAgent(BaseAgent):
         research_brief_path: str = "",
         **kwargs: Any,
     ) -> dict[str, Any]:
+        self._candidate_inspections: list[dict] = []
         story_beats = kwargs.get("story_beats")
         timestamps = kwargs.get("timestamps")
         do_not_use = kwargs.get("do_not_use", [])
@@ -121,7 +125,11 @@ class VisualDirectorAgent(BaseAgent):
                     scenes, job_id, topic, output_dir, source_urls, agent_dir,
                 )
 
-            output = {"status": "completed", "assets": assets}
+            output = {
+                "status": "completed",
+                "assets": assets,
+                "candidate_inspections": getattr(self, "_candidate_inspections", []),
+            }
             self._write_artifacts(
                 assets_cache, job_id, agent_dir, topic, plan, assets,
                 output, beat_driven, research_contract_path,
@@ -213,6 +221,10 @@ class VisualDirectorAgent(BaseAgent):
         allowed_beat_ids = [beat.beat_id for beat in parsed_beats]
         plan = self._normalize_beat_plan(plan, allowed_beat_ids)
         plan = self._deduplicate_llm_plan_urls(plan, do_not_use)
+
+        plan, self._candidate_inspections = self._inspect_and_select_candidates(
+            plan, parsed_beats, job_id, agent_dir,
+        )
 
         assets = self._execute_beat_plan(plan, scenes_dir)
 
@@ -556,6 +568,273 @@ class VisualDirectorAgent(BaseAgent):
             item["action"] = action
             deduped.append(item)
         return deduped
+
+    def _inspect_and_select_candidates(
+        self,
+        plan: list[dict],
+        parsed_beats: list[StoryBeat],
+        job_id: int,
+        agent_dir: str,
+    ) -> tuple[list[dict], list[dict]]:
+        """Inspect candidates semantically and update plan with best selections.
+
+        Returns (updated_plan, candidate_inspections).
+        On any error, returns the original plan unchanged.
+        """
+        try:
+            return self._do_inspect_and_select(plan, parsed_beats, job_id, agent_dir)
+        except Exception as exc:
+            logger.warning("Candidate inspection skipped (error): %s", exc)
+            return plan, []
+
+    def _do_inspect_and_select(
+        self,
+        plan: list[dict],
+        parsed_beats: list[StoryBeat],
+        job_id: int,
+        agent_dir: str,
+    ) -> tuple[list[dict], list[dict]]:
+        """Inner implementation of candidate inspection."""
+        beat_by_id = {b.beat_id: b for b in parsed_beats}
+        cache_dir = f"{agent_dir}/inspection_cache" if agent_dir else ""
+        all_inspections: list[dict] = []
+
+        for plan_item in plan:
+            beat_id = plan_item.get("beat_id")
+            beat = beat_by_id.get(beat_id)
+            if not beat or not beat.asset_candidates:
+                continue
+
+            candidates = self._collect_candidate_scores(
+                beat, plan_item, job_id, cache_dir, agent_dir, all_inspections,
+            )
+            self._apply_best_candidate(plan_item, beat, candidates)
+
+        return plan, all_inspections
+
+    def _collect_candidate_scores(
+        self,
+        beat: StoryBeat,
+        plan_item: dict,
+        job_id: int,
+        cache_dir: str,
+        agent_dir: str,
+        all_inspections: list[dict],
+    ) -> list[dict]:
+        """Build scored candidate list for a single beat."""
+        candidates: list[dict] = []
+        for candidate in beat.asset_candidates:
+            scored = self._score_one_candidate(
+                candidate, beat, plan_item, job_id, cache_dir, agent_dir,
+            )
+            if scored:
+                candidates.append(scored)
+                all_inspections.append(scored.get("inspection_diag", {}))
+        return candidates
+
+    def _score_one_candidate(
+        self,
+        candidate: Any,
+        beat: StoryBeat,
+        plan_item: dict,
+        job_id: int,
+        cache_dir: str,
+        agent_dir: str = "",
+    ) -> dict | None:
+        """Score a single candidate using cache or multimodal inspection."""
+        asset_id = f"{candidate.type}_{candidate.url[:40]}"
+        cache_key = compute_cache_key(
+            asset_path=candidate.url, asset_hash="",
+            beat_claim=beat.spoken_point, evidence_contract_hash="",
+            model="multimodal", prompt_version="1.0",
+        )
+        cached = lookup(cache_dir, cache_key) if cache_dir else None
+        inspection = cached or self._run_multimodal_inspection(
+            candidate, beat, job_id, cache_dir, cache_key,
+            agent_dir=agent_dir,
+        )
+        if inspection is None:
+            return None
+
+        rel = score_visual_relevance(
+            beat={"beat_id": beat.beat_id, "claim": beat.spoken_point},
+            asset_inspection=inspection,
+        )
+        return {
+            "asset_id": asset_id, "beat_id": str(beat.beat_id),
+            "role": beat.role, "treatment": plan_item.get("treatment", ""),
+            "inspection": inspection,
+            "visual_relevance": {
+                "person_match": rel.person_match, "event_match": rel.event_match,
+                "claim_support": rel.claim_support, "visual_quality": rel.visual_quality,
+            },
+            "cleanliness_score": inspection.get("visual_quality", 0.5),
+            "candidate": candidate,
+            "inspection_diag": {
+                "beat_id": beat.beat_id, "asset_id": asset_id,
+                "decision": inspection.get("decision", "unknown"),
+                "from_cache": cached is not None,
+            },
+        }
+
+    def _run_multimodal_inspection(
+        self,
+        candidate: Any,
+        beat: StoryBeat,
+        job_id: int,
+        cache_dir: str,
+        cache_key: str,
+        agent_dir: str = "",
+    ) -> dict | None:
+        """Attempt multimodal inspection; return inspection dict or None."""
+        try:
+            from clipper_agency.llm.multimodal_client import MultimodalInspectionClient
+            from clipper_agency.llm.client import OpenRouterClient
+
+            frame_paths = self._extract_candidate_frames(candidate, agent_dir)
+
+            client = OpenRouterClient()
+            inspector = MultimodalInspectionClient(client=client)
+            result = inspector.inspect_asset(
+                job_id=job_id,
+                beat_id=str(beat.beat_id),
+                asset_id=f"{candidate.type}_{candidate.url[:40]}",
+                beat={
+                    "beat_id": beat.beat_id,
+                    "role": beat.role,
+                    "narration_goal": beat.narration_goal,
+                    "spoken_point": beat.spoken_point,
+                },
+                frame_paths=frame_paths,
+                source_metadata={"url": candidate.url, "type": candidate.type},
+            )
+            if cache_dir and result.get("decision") != "error":
+                store(cache_dir, cache_key, result)
+            return result
+        except Exception as exc:
+            logger.debug("Multimodal inspection skipped for %s: %s", candidate.url, exc)
+            return None
+
+    def _extract_candidate_frames(
+        self,
+        candidate: Any,
+        agent_dir: str,
+    ) -> list[str]:
+        """Download a candidate asset and return local frame paths for inspection.
+
+        Returns empty list for text types or on any download error (graceful
+        degradation — the inspector can still work from URL/metadata alone).
+        """
+        _IMAGE_TYPES = {"photo", "screenshot"}
+        _VIDEO_TYPES = {"tiktok_clip"}
+        _SKIP_TYPES = {"text_card", "text_overlay"}
+
+        if candidate.type in _SKIP_TYPES or not candidate.url:
+            return []
+
+        if not agent_dir:
+            return []
+
+        frames_dir = Path(agent_dir) / "candidate_frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+
+        if candidate.type in _IMAGE_TYPES:
+            return self._download_image_frame(candidate.url, frames_dir)
+
+        if candidate.type in _VIDEO_TYPES:
+            return self._download_video_frame(candidate.url, frames_dir)
+
+        return []
+
+    def _download_image_frame(
+        self,
+        url: str,
+        frames_dir: Path,
+    ) -> list[str]:
+        """Download an image URL and return its local path as a single frame."""
+        import httpx
+
+        try:
+            ext = Path(url.split("?")[0]).suffix or ".jpg"
+            dest = frames_dir / f"img_{hash(url) & 0xFFFF}{ext}"
+            if dest.exists():
+                return [str(dest)]
+            with httpx.Client(timeout=30) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                dest.write_bytes(resp.content)
+            return [str(dest)]
+        except Exception as exc:
+            logger.debug("Image download for inspection failed: %s", exc)
+            return []
+
+    def _download_video_frame(
+        self,
+        url: str,
+        frames_dir: Path,
+    ) -> list[str]:
+        """Download a video and extract one frame for inspection."""
+        from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
+        from clipper_agency.core.frame_extractor import extract_frames
+
+        try:
+            video_dest = frames_dir / f"vid_{hash(url) & 0xFFFF}.mp4"
+            if not video_dest.exists():
+                ytdlp = YtDlpService()
+                result = ytdlp.download(url, str(video_dest))
+                if not result or not result.path:
+                    return []
+            frame_dir = frames_dir / "extracted"
+            frame_dir.mkdir(parents=True, exist_ok=True)
+            frames = extract_frames(
+                video_path=str(video_dest),
+                timestamps=[0.5],
+                output_dir=str(frame_dir),
+                ffmpeg_runner=run_ffmpeg_streaming,
+            )
+            return [f.path for f in frames if f.path]
+        except Exception as exc:
+            logger.debug("Video frame extraction for inspection failed: %s", exc)
+            return []
+
+    def _apply_best_candidate(
+        self,
+        plan_item: dict,
+        beat: StoryBeat,
+        candidates: list[dict],
+    ) -> None:
+        """Rank candidates and replace plan action with best one if accepted."""
+        if not candidates:
+            return
+        beat_dict = {"beat_id": beat.beat_id}
+        ranked = rank_candidates(beat_dict, candidates)
+        best = select_best_candidate(ranked)
+        if best and best.decision == "accept" and best.asset_id != "fallback":
+            matched = next(
+                (c for c in candidates if c.get("asset_id") == best.asset_id), None,
+            )
+            if matched:
+                cand = matched.get("candidate")
+                plan_item["action"] = self._candidate_to_action(cand, beat)
+
+    @staticmethod
+    def _candidate_to_action(candidate: Any, beat: StoryBeat) -> dict:
+        """Convert an AssetCandidate into a plan action dict."""
+        if candidate.type == "tiktok_clip":
+            return {"type": "tiktok_clip", "source_url": candidate.url}
+        if candidate.type == "screenshot":
+            return {
+                "type": "pexels_image",
+                "source_url": candidate.url,
+                "search_query": beat.fallback.image_search or beat.spoken_point[:50],
+            }
+        if candidate.type == "photo":
+            return {
+                "type": "pexels_image",
+                "source_url": candidate.url,
+                "search_query": beat.fallback.image_search or beat.spoken_point[:50],
+            }
+        return {"type": "text_card", "headline": beat.overlay_text[:60]}
 
     def _resolve_beat_plan_assets(
         self, plan: list[dict], do_not_use: list[str],

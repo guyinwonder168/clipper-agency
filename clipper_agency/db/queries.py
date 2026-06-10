@@ -139,8 +139,48 @@ def append_audit_log(conn: sqlite3.Connection, action: str,
     conn.commit()
 
 
+def update_job_quality_status(conn: sqlite3.Connection,
+                              job_id: int, quality_status: str) -> None:
+    """Update the quality_status column on a job."""
+    conn.execute(
+        "UPDATE jobs SET quality_status = ?, updated_at = datetime('now') WHERE id = ?",
+        (quality_status, job_id),
+    )
+    conn.commit()
+
+
+def update_job_publication_status(conn: sqlite3.Connection,
+                                  job_id: int, publication_status: str) -> None:
+    """Update the publication_status column on a job."""
+    conn.execute(
+        "UPDATE jobs SET publication_status = ?, updated_at = datetime('now') WHERE id = ?",
+        (publication_status, job_id),
+    )
+    conn.commit()
+
+
+def update_job_artifact_status(conn: sqlite3.Connection,
+                               job_id: int, artifact_status: str) -> None:
+    """Update the artifact_status column on a job."""
+    conn.execute(
+        "UPDATE jobs SET artifact_status = ?, updated_at = datetime('now') WHERE id = ?",
+        (artifact_status, job_id),
+    )
+    conn.commit()
+
+
+def update_job_repair_status(conn: sqlite3.Connection,
+                             job_id: int, repair_status: str) -> None:
+    """Update the repair_status column on a job."""
+    conn.execute(
+        "UPDATE jobs SET repair_status = ?, updated_at = datetime('now') WHERE id = ?",
+        (repair_status, job_id),
+    )
+    conn.commit()
+
+
 def reset_agents_from(conn: sqlite3.Connection, job_id: int,
-                      from_agent: str) -> list[str]:
+                       from_agent: str) -> list[str]:
     """Reset target agent and all downstream agents to pending.
 
     Clears completed_at and error_message for reset agents.

@@ -2153,3 +2153,429 @@ class TestEngineRepairRouting:
 
         assert result is not None
         assert result["target_agent"] == "segment_producer"
+
+
+# ── Task 6.2: Bounded automated repair loop ────────────────────────
+
+
+class TestRepairRoutingRules:
+    """Repair routing rules map patch reasons to correct target agents."""
+
+    def test_black_frame_routes_to_composer(self, tmp_path):
+        """Patch with action=replace_visual + black_frame reason routes to composer."""
+        from clipper_agency.core.repair_router import route_repair
+        patch = {"action": "replace_visual", "reason": "black_frame"}
+        assert route_repair(patch) == "composer"
+
+    def test_wrong_event_routes_to_visual_director(self, tmp_path):
+        """Patch with wrong_event reason routes to visual_director."""
+        from clipper_agency.core.repair_router import route_repair
+        patch = {"action": "replace_visual", "reason": "wrong_event"}
+        assert route_repair(patch) == "visual_director"
+
+    def test_package_mismatch_routes_to_segment_producer(self, tmp_path):
+        """Patch with package_mismatch + narrow_topic routes to segment_producer."""
+        from clipper_agency.core.repair_router import route_repair
+        patch = {"action": "narrow_topic", "reason": "package_mismatch"}
+        assert route_repair(patch) == "segment_producer"
+
+
+class TestBoundedRepairLoop:
+    """Tests for the bounded automated repair loop in _execute_repair_cycle."""
+
+    def _make_repair_plan(self, patches, max_cycles=2, decision="revise"):
+        """Build a repair plan dict matching reviewer output format."""
+        return {
+            "decision": decision,
+            "max_repair_cycles": max_cycles,
+            "patches": patches,
+        }
+
+    def _make_patch(self, beat_id="beat_1", action="replace_visual",
+                    reason="black_frame", rerun_from="composer"):
+        """Build a single patch dict."""
+        return {
+            "beat_id": beat_id,
+            "action": action,
+            "reason": reason,
+            "rerun_from": rerun_from,
+        }
+
+    def _setup_repair_job(self, db_path, assets_cache, tmp_path):
+        """Create a job with all agents completed, ready for repair."""
+        from clipper_agency.db.queries import (
+            create_agent_state, create_job, mark_agent_completed,
+        )
+        conn = get_connection(db_path)
+        snapshot = {
+            "topic": "Repair test", "niche": "test_niche",
+            "output_dir": str(tmp_path / "outputs"),
+            "assets_cache": assets_cache,
+            "niche_ctx": {
+                "safety_rules": ["no_defamation"],
+                "channel_description": "Test channel",
+                "language": "id",
+                "tone": "informal_investigative",
+                "content_angle": "Test angle",
+            },
+        }
+        job_id = create_job(conn, "Repair test", "test_niche",
+                            config_snapshot=snapshot)
+        all_agents = ["safety", "segment_producer", "scriptwriter",
+                      "voice_producer", "visual_director", "composer", "reviewer"]
+        for name in all_agents:
+            create_agent_state(conn, job_id, name)
+            mark_agent_completed(conn, job_id, name)
+
+        # Write output.json for all agents
+        agent_outputs = {
+            "safety": {"status": "pass", "reason": "Safe"},
+            "segment_producer": {
+                "status": "completed",
+                "research_brief": "Brief",
+                "sources": [{"url": "https://example.com"}],
+                "story_beats": [],
+                "risk_flags": [],
+            },
+            "scriptwriter": {
+                "status": "completed",
+                "script": [{"scene": 1, "text": "Hello!", "duration": 5}],
+                "caption": "Test caption",
+                "voiceover_text": "Hello!",
+                "hashtags": [],
+                "narrative_structure": [],
+                "estimated_duration": 5,
+            },
+            "voice_producer": {
+                "status": "completed",
+                "audio_files": [],
+                "voiceover_path": "",
+                "timestamps": [],
+                "voiceover_duration_sec": 5.0,
+            },
+            "visual_director": {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": "v.mp4"}],
+            },
+            "composer": {
+                "status": "completed",
+                "video_path": str(tmp_path / "out.mp4"),
+                "thumbnail_path": "",
+                "duration_sec": 5.0,
+            },
+        }
+        for agent_name, output in agent_outputs.items():
+            out_path = Path(assets_cache) / f"job_{job_id}" / "agents" / agent_name / "output.json"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(output), encoding="utf-8")
+
+        close_connection(db_path)
+        return job_id
+
+    @pytest.mark.usefixtures("mock_probe_video_ok")
+    def test_second_successful_repair_cycle_passes(self, db_initialized, tmp_path):
+        """First cycle fails, second cycle passes → repair_status=completed."""
+        ac = str(tmp_path / "cache")
+        job_id = self._setup_repair_job(db_initialized, ac, tmp_path)
+        orch = Orchestrator(db_path=db_initialized)
+
+        repair_plan = self._make_repair_plan(
+            [self._make_patch(reason="black_frame", rerun_from="composer")],
+            max_cycles=2,
+        )
+        # first review fails (with different repair patches to avoid repetition), second passes
+        review_outputs = iter([
+            {"status": "fail", "score": 30, "repair_plan": {
+                "decision": "revise", "max_repair_cycles": 2,
+                "patches": [self._make_patch(beat_id="beat_2", reason="freeze_frame",
+                                             rerun_from="composer")],
+            }},
+            {"status": "pass", "score": 90},
+        ])
+
+        with patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
+             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
+             patch.object(Orchestrator, "_package_output") as mock_pkg, \
+             patch.object(Orchestrator, "_run_safety"), \
+             patch.object(Orchestrator, "_run_researcher"):
+            mock_comp_stage.return_value = ({
+                "status": "completed",
+                "video_path": str(tmp_path / "out.mp4"),
+                "thumbnail_path": "",
+                "duration_sec": 5.0,
+            }, None)
+            mock_rev.side_effect = lambda **kw: next(review_outputs)
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "", "caption_path": "",
+                "thumbnail_path": "", "metadata_path": "",
+            }
+
+            result = orch._execute_repair_cycle(
+                repair_plan=repair_plan,
+                job_id=job_id,
+                assets_cache=ac,
+                output_dir=str(tmp_path / "outputs"),
+                topic="Repair test",
+            )
+
+        assert result["status"] == "completed"
+        conn = get_connection(db_initialized)
+        job = conn.execute(
+            "SELECT repair_status, quality_status FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        assert job["repair_status"] == "completed"
+        assert job["quality_status"] == "passed"
+
+    @pytest.mark.usefixtures("mock_probe_video_ok")
+    def test_third_cycle_blocked_when_max_is_2(self, db_initialized, tmp_path):
+        """After 2 failed cycles, third attempt returns exhausted."""
+        ac = str(tmp_path / "cache")
+        job_id = self._setup_repair_job(db_initialized, ac, tmp_path)
+        orch = Orchestrator(db_path=db_initialized)
+
+        repair_plan = self._make_repair_plan(
+            [self._make_patch(reason="black_frame", rerun_from="composer")],
+            max_cycles=2,
+        )
+
+        with patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
+             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
+             patch.object(Orchestrator, "_run_safety"), \
+             patch.object(Orchestrator, "_run_researcher"):
+            mock_comp_stage.return_value = ({
+                "status": "completed",
+                "video_path": str(tmp_path / "out.mp4"),
+                "thumbnail_path": "",
+                "duration_sec": 5.0,
+            }, None)
+            # Reviewer always fails with a repair plan
+            mock_rev.return_value = {
+                "status": "fail",
+                "score": 30,
+                "repair_plan": {
+                    "decision": "revise",
+                    "max_repair_cycles": 2,
+                    "patches": [self._make_patch()],
+                },
+            }
+
+            result = orch._execute_repair_cycle(
+                repair_plan=repair_plan,
+                job_id=job_id,
+                assets_cache=ac,
+                output_dir=str(tmp_path / "outputs"),
+                topic="Repair test",
+            )
+
+        assert result["status"] == "exhausted"
+        conn = get_connection(db_initialized)
+        job = conn.execute(
+            "SELECT repair_status, artifact_status FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        assert job["repair_status"] == "exhausted"
+        assert job["artifact_status"] == "manual_review_required"
+
+    @pytest.mark.usefixtures("mock_probe_video_ok")
+    def test_repeated_identical_patch_marks_exhausted(self, db_initialized, tmp_path):
+        """Same patch twice in a row → exhausted immediately."""
+        ac = str(tmp_path / "cache")
+        job_id = self._setup_repair_job(db_initialized, ac, tmp_path)
+        orch = Orchestrator(db_path=db_initialized)
+
+        same_patch = self._make_patch(reason="black_frame", rerun_from="composer")
+        repair_plan = self._make_repair_plan([same_patch], max_cycles=3)
+
+        # Track the patch history — simulate the "before" snapshot having
+        # the same patch already
+        from clipper_agency.core.repair_metrics import persist_repair_cycle
+        from clipper_agency.config.schema import RepairCycleRecord
+        # Pre-populate a cycle_0 record with the same patch
+        record = RepairCycleRecord(
+            cycle=0,
+            source_agent="reviewer",
+            target_agent="composer",
+            before_scores={"reviewer_score": 30},
+            after_scores={"reviewer_score": 30},
+        )
+        persist_repair_cycle(ac, job_id, record)
+        # Also persist the same repair plan as "before"
+        from clipper_agency.core.artifacts import write_json
+        plan_dir = Path(ac) / f"job_{job_id}" / "repair"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        write_json(str(plan_dir / "previous_patches.json"), [same_patch])
+
+        with patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
+             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
+             patch.object(Orchestrator, "_run_safety"), \
+             patch.object(Orchestrator, "_run_researcher"):
+            mock_comp_stage.return_value = ({
+                "status": "completed",
+                "video_path": str(tmp_path / "out.mp4"),
+                "thumbnail_path": "",
+                "duration_sec": 5.0,
+            }, None)
+            # First review returns same patches again
+            mock_rev.return_value = {
+                "status": "fail",
+                "score": 30,
+                "repair_plan": {
+                    "decision": "revise",
+                    "max_repair_cycles": 3,
+                    "patches": [same_patch],
+                },
+            }
+
+            result = orch._execute_repair_cycle(
+                repair_plan=repair_plan,
+                job_id=job_id,
+                assets_cache=ac,
+                output_dir=str(tmp_path / "outputs"),
+                topic="Repair test",
+            )
+
+        assert result["status"] == "exhausted"
+        conn = get_connection(db_initialized)
+        job = conn.execute(
+            "SELECT repair_status, artifact_status FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        assert job["repair_status"] == "exhausted"
+        assert job["artifact_status"] == "manual_review_required"
+
+    def test_repair_cycle_preserves_cycle_0_artifacts(self, db_initialized, tmp_path):
+        """cycle_0 directory is not modified after cycle_1 runs."""
+        ac = str(tmp_path / "cache")
+        job_id = self._setup_repair_job(db_initialized, ac, tmp_path)
+
+        # Create cycle_0 directory with sentinel file
+        cycle_0_dir = Path(ac) / f"job_{job_id}" / "cycle_0"
+        cycle_0_dir.mkdir(parents=True, exist_ok=True)
+        sentinel = cycle_0_dir / "sentinel.txt"
+        sentinel.write_text("original", encoding="utf-8")
+        original_mtime = sentinel.stat().st_mtime
+
+        orch = Orchestrator(db_path=db_initialized)
+        repair_plan = self._make_repair_plan(
+            [self._make_patch(reason="black_frame", rerun_from="composer")],
+            max_cycles=2,
+        )
+
+        with patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
+             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
+             patch.object(Orchestrator, "_package_output") as mock_pkg, \
+             patch.object(Orchestrator, "_run_safety"), \
+             patch.object(Orchestrator, "_run_researcher"):
+            mock_comp_stage.return_value = ({
+                "status": "completed",
+                "video_path": str(tmp_path / "out.mp4"),
+                "thumbnail_path": "",
+                "duration_sec": 5.0,
+            }, None)
+            mock_rev.return_value = {"status": "pass", "score": 90}
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "", "caption_path": "",
+                "thumbnail_path": "", "metadata_path": "",
+            }
+
+            orch._execute_repair_cycle(
+                repair_plan=repair_plan,
+                job_id=job_id,
+                assets_cache=ac,
+                output_dir=str(tmp_path / "outputs"),
+                topic="Repair test",
+            )
+
+        # cycle_0 sentinel must be untouched
+        assert sentinel.exists()
+        assert sentinel.read_text(encoding="utf-8") == "original"
+        assert sentinel.stat().st_mtime == original_mtime
+
+    @pytest.mark.usefixtures("mock_probe_video_ok")
+    def test_repair_fail_without_plan_sets_manual_review(self, db_initialized, tmp_path):
+        """When reviewer fails without a repair plan, set manual_review_required."""
+        ac = str(tmp_path / "cache")
+        job_id = self._setup_repair_job(db_initialized, ac, tmp_path)
+        orch = Orchestrator(db_path=db_initialized)
+
+        repair_plan = self._make_repair_plan(
+            [self._make_patch(reason="black_frame", rerun_from="composer")],
+            max_cycles=2,
+        )
+
+        with patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
+             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
+             patch.object(Orchestrator, "_run_safety"), \
+             patch.object(Orchestrator, "_run_researcher"):
+            mock_comp_stage.return_value = ({
+                "status": "completed",
+                "video_path": str(tmp_path / "out.mp4"),
+                "thumbnail_path": "",
+                "duration_sec": 5.0,
+            }, None)
+            # Reviewer fails without repair plan
+            mock_rev.return_value = {"status": "fail", "score": 20}
+
+            result = orch._execute_repair_cycle(
+                repair_plan=repair_plan,
+                job_id=job_id,
+                assets_cache=ac,
+                output_dir=str(tmp_path / "outputs"),
+                topic="Repair test",
+            )
+
+        assert result["status"] == "manual_review_required"
+        conn = get_connection(db_initialized)
+        job = conn.execute(
+            "SELECT repair_status, artifact_status FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        assert job["repair_status"] == "exhausted"
+        assert job["artifact_status"] == "manual_review_required"
+
+    @pytest.mark.usefixtures("mock_probe_video_ok")
+    def test_repair_wrong_event_reruns_visual_director(self, db_initialized, tmp_path):
+        """Wrong event patch triggers visual_director + composer + reviewer."""
+        ac = str(tmp_path / "cache")
+        job_id = self._setup_repair_job(db_initialized, ac, tmp_path)
+        orch = Orchestrator(db_path=db_initialized)
+
+        repair_plan = self._make_repair_plan(
+            [self._make_patch(reason="wrong_event", rerun_from="visual_director")],
+            max_cycles=2,
+        )
+
+        with patch.object(Orchestrator, "_run_visual_director_phase") as mock_vd_phase, \
+             patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
+             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
+             patch.object(Orchestrator, "_run_safety"), \
+             patch.object(Orchestrator, "_run_researcher"):
+            mock_vd_phase.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": "v.mp4"}],
+            }
+            mock_comp_stage.return_value = ({
+                "status": "completed",
+                "video_path": str(tmp_path / "out.mp4"),
+                "thumbnail_path": "",
+                "duration_sec": 5.0,
+            }, None)
+            mock_rev.return_value = {"status": "pass", "score": 90}
+
+            result = orch._execute_repair_cycle(
+                repair_plan=repair_plan,
+                job_id=job_id,
+                assets_cache=ac,
+                output_dir=str(tmp_path / "outputs"),
+                topic="Repair test",
+            )
+
+        assert result["status"] == "completed"
+        mock_vd_phase.assert_called()
+        mock_comp_stage.assert_called()
+        mock_rev.assert_called()

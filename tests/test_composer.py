@@ -1887,6 +1887,15 @@ class TestVisualCoverageDiagnostics:
                 issues=[],
             ),
         )
+        # Mock FFmpeg detector calls (Task 5.1 — Composer coverage diagnostics)
+        mocker.patch(
+            "clipper_agency.agents.composer.detect_black_segments",
+            return_value=[],
+        )
+        mocker.patch(
+            "clipper_agency.agents.composer.detect_freeze_segments",
+            return_value=[],
+        )
 
         agent = ComposerAgent()
         result = agent.execute(
