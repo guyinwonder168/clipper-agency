@@ -204,7 +204,7 @@ def _build_scene_manifest(
     are passed alongside the enriched scene list).
     """
     if not scenes:
-        return build_rendered_scene_manifest([], [], output_dur, video_path)
+        return build_rendered_scene_manifest([], [], output_dur, video_path).model_dump()
 
     if assets:
         scene_list = [
@@ -220,7 +220,7 @@ def _build_scene_manifest(
 
     return build_rendered_scene_manifest(
         scene_list, text_regions, output_dur, video_path,
-    )
+    ).model_dump()
 
 
 def _build_text_regions_from_captions(
