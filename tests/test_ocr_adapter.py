@@ -11,6 +11,23 @@ import pytest
 from clipper_agency.config.schema import OCRInspectionResult
 
 
+@pytest.fixture(autouse=True)
+def _reset_ocr_singleton():
+    """Reset the PaddleOCR adapter singleton before each test.
+
+    The singleton persists across test files. If a previous test file
+    (e.g. VD tests) triggers a real PaddleOCR import, the cached model
+    stays in the class variable and paddleocr lands in sys.modules,
+    preventing sys.modules patching from taking effect.
+    """
+    from clipper_agency.core.ocr_adapter import PaddleOCRAdapter
+
+    PaddleOCRAdapter._reset_model()
+    sys.modules.pop("paddleocr", None)
+    yield
+    PaddleOCRAdapter._reset_model()
+
+
 # ---------------------------------------------------------------------------
 # Helpers for building mock PaddleOCR results
 # ---------------------------------------------------------------------------

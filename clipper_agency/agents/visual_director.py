@@ -29,6 +29,7 @@ from clipper_agency.core.semantic_visual_review import score_visual_relevance
 from clipper_agency.services.pexels import PexelsService
 from clipper_agency.services.ytdlp import YtDlpService
 from clipper_agency.core.media_probe import probe_video
+from clipper_agency.core.frame_inspection_pipeline import run_frame_inspection_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +42,35 @@ _PRIORITY_STOCK = "stock"
 _PUNCTUATION_CHARS = ".,!?;:"
 
 
+# ---------------------------------------------------------------------------
+# Config-gating helpers for OCR and face detection
+# ---------------------------------------------------------------------------
+
+
+def _is_ocr_enabled() -> bool:
+    """Check whether OCR inspection is enabled in quality config."""
+    from clipper_agency.config.loader import load_settings
+    return load_settings().quality.ocr.enabled
+
+
+def _is_face_enabled() -> bool:
+    """Check whether face detection is enabled in quality config."""
+    from clipper_agency.config.loader import load_settings
+    return load_settings().quality.face_detection.enabled
+
+
 class VisualDirectorAgent(BaseAgent):
     """Sources video assets and plans scene layouts for video composition."""
 
     _IMAGE_SOURCES = frozenset({"pexels_image"})
     _VIDEO_SOURCES = frozenset({"tiktok_clip", "pexels_video", "tiktok", "pexels"})
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._candidate_inspections: list[dict] = []
+        self._inspection_metrics: dict[str, dict] = {}
+        self._face_data: dict[str, list] = {}
+        self._runtime_inspection_enabled: bool = True
 
     @property
     def agent_name(self) -> str:
@@ -62,7 +87,9 @@ class VisualDirectorAgent(BaseAgent):
         research_brief_path: str = "",
         **kwargs: Any,
     ) -> dict[str, Any]:
-        self._candidate_inspections: list[dict] = []
+        self._candidate_inspections = []
+        self._inspection_metrics = {}
+        self._face_data = {}
         story_beats = kwargs.get("story_beats")
         timestamps = kwargs.get("timestamps")
         do_not_use = kwargs.get("do_not_use", [])
@@ -668,7 +695,7 @@ class VisualDirectorAgent(BaseAgent):
                 "person_match": rel.person_match, "event_match": rel.event_match,
                 "claim_support": rel.claim_support, "visual_quality": rel.visual_quality,
             },
-            "cleanliness_score": inspection.get("visual_quality", 0.5),
+            "cleanliness_score": self._compute_cleanliness_score(candidate, inspection),
             "candidate": candidate,
             "inspection_diag": {
                 "beat_id": beat.beat_id, "asset_id": asset_id,
@@ -676,6 +703,93 @@ class VisualDirectorAgent(BaseAgent):
                 "from_cache": cached is not None,
             },
         }
+
+    def _compute_cleanliness_score(
+        self,
+        candidate: Any,
+        inspection: dict,
+    ) -> float:
+        """Compute cleanliness score from OCR/face metrics or fall back to proxy.
+
+        When Worker A/B have stored inspection metrics for this candidate's URL,
+        call ``score_source_cleanliness()`` with the actual values.  Otherwise
+        fall back to the legacy ``visual_quality`` proxy from the VLM inspection.
+
+        All exceptions are caught and logged at debug level to avoid crashing
+        the pipeline.
+        """
+        metrics = self._inspection_metrics.get(getattr(candidate, "url", ""), None)
+        if not metrics:
+            return inspection.get("visual_quality", 0.5)
+
+        try:
+            from clipper_agency.core.source_cleanliness import score_source_cleanliness
+
+            result = score_source_cleanliness(
+                ocr_text_area_ratio=metrics.get("ocr_text_area_ratio", 0.0),
+                has_logo=metrics.get("has_logo", False),
+                logo_coverage_ratio=metrics.get("logo_coverage_ratio", 0.0),
+                safe_crop_available=metrics.get("safe_crop_available", False),
+                face_obstructed=metrics.get("face_obstructed", False),
+                resolution=metrics.get("resolution", (1920, 1080)),
+                has_burned_captions=metrics.get("has_burned_captions", False),
+            )
+            return result.get("cleanliness_score", inspection.get("visual_quality", 0.5))
+        except Exception:
+            logger.debug("cleanliness scoring failed for %s", getattr(candidate, "url", ""), exc_info=True)
+            return inspection.get("visual_quality", 0.5)
+
+    def _run_ocr_and_face_on_frames(
+        self,
+        frame_paths: list[str],
+    ) -> tuple[str, list[dict]]:
+        """Run OCR and face detection on extracted keyframes.
+
+        Returns:
+            (ocr_text, face_results) — aggregated OCR text from all frames
+            and a list of face detection result dicts (one per frame).
+        """
+        ocr_text = ""
+        face_results: list[dict] = []
+
+        if not frame_paths:
+            return ocr_text, face_results
+
+        # OCR inspection
+        if _is_ocr_enabled():
+            try:
+                from clipper_agency.core.ocr_adapter import PaddleOCRAdapter
+
+                adapter = PaddleOCRAdapter()
+                texts: list[str] = []
+                for frame_path in frame_paths:
+                    result = adapter.inspect(frame_path, 0.0)
+                    for region in result.regions:
+                        texts.append(region.text)
+                ocr_text = " ".join(texts)
+            except Exception:
+                logger.debug("OCR inspection failed", exc_info=True)
+
+        # Face detection
+        if _is_face_enabled():
+            try:
+                from clipper_agency.core.face_adapter import MediaPipeFaceDetector
+
+                detector = MediaPipeFaceDetector()
+                for frame_path in frame_paths:
+                    result = detector.detect(frame_path, 0.0)
+                    face_results.append({
+                        "frame_path": frame_path,
+                        "faces": [
+                            {"bbox": f.bbox, "confidence": f.confidence}
+                            for f in result.faces
+                        ],
+                        "provider": result.provider,
+                    })
+            except Exception:
+                logger.debug("Face detection failed", exc_info=True)
+
+        return ocr_text, face_results
 
     def _run_multimodal_inspection(
         self,
@@ -693,6 +807,20 @@ class VisualDirectorAgent(BaseAgent):
 
             frame_paths = self._extract_candidate_frames(candidate, agent_dir)
 
+            # --- Enhanced frame inspection pipeline (config-gated) ---
+            enhanced_paths = self._try_enhanced_frame_inspection(
+                candidate, beat, job_id, agent_dir,
+            )
+            if enhanced_paths is not None:
+                frame_paths = enhanced_paths
+            # --- END enhanced pipeline ---
+
+            # --- OCR + face detection on extracted keyframes ---
+            ocr_text, face_data = self._run_ocr_and_face_on_frames(frame_paths)
+            if face_data:
+                self._face_data[candidate.url] = face_data
+            # --- END OCR + face ---
+
             client = OpenRouterClient()
             inspector = MultimodalInspectionClient(client=client)
             result = inspector.inspect_asset(
@@ -706,6 +834,7 @@ class VisualDirectorAgent(BaseAgent):
                     "spoken_point": beat.spoken_point,
                 },
                 frame_paths=frame_paths,
+                ocr_text=ocr_text,
                 source_metadata={"url": candidate.url, "type": candidate.type},
             )
             if cache_dir and result.get("decision") != "error":
@@ -713,6 +842,56 @@ class VisualDirectorAgent(BaseAgent):
             return result
         except Exception as exc:
             logger.debug("Multimodal inspection skipped for %s: %s", candidate.url, exc)
+            return None
+
+    def _try_enhanced_frame_inspection(
+        self,
+        candidate: Any,
+        beat: StoryBeat,
+        job_id: int,
+        agent_dir: str,
+    ) -> list[str] | None:
+        """Run the full frame inspection pipeline for video candidates.
+
+        Returns enhanced frame paths (deduplicated + hashed) when applicable,
+        or None when the pipeline should be skipped (non-video, disabled, no
+        local file, or any error).
+        """
+        if not self._runtime_inspection_enabled:
+            return None
+
+        _VIDEO_TYPES = {"tiktok_clip"}
+        if candidate.type not in _VIDEO_TYPES:
+            return None
+
+        if not agent_dir:
+            return None
+
+        try:
+            frames_dir = Path(agent_dir) / "candidate_frames"
+            video_name = f"vid_{hash(candidate.url) & 0xFFFF}.mp4"
+            video_path = frames_dir / video_name
+
+            if not video_path.exists():
+                return None
+
+            asset_id = f"{candidate.type}_{candidate.url[:40]}"
+            manifest = run_frame_inspection_pipeline(
+                video_path=str(video_path),
+                job_id=job_id,
+                beat_id=str(beat.beat_id),
+                asset_id=asset_id,
+                cache_root=agent_dir,
+                allowed_base_dir=agent_dir,
+            )
+
+            paths = [f.path for f in manifest.frames if f.path]
+            return paths if paths else None
+        except Exception as exc:
+            logger.debug(
+                "Enhanced frame inspection failed for %s: %s",
+                candidate.url, exc,
+            )
             return None
 
     def _extract_candidate_frames(
