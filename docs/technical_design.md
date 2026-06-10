@@ -1,8 +1,8 @@
 # Clipper Agency — Technical Design Document
 
-**Version:** 5.2
-**Date:** 2026-06-10
-**Status:** Phase 22 Complete — Runtime Quality Enforcement + Multi-Source Asset Sourcing
+**Version:** 5.3
+**Date:** 2026-06-11
+**Status:** Phase 23 Complete — Reviewer Context + Diagnostics Enforcement Contract
 **Related:** `docs/PRD.md`, `docs/SRS.md`, `docs/requirements_traceability.md`
 
 ---
@@ -353,7 +353,7 @@ Query construction is config-driven: the niche profile defines search terms, lan
 | **Voice Producer** | voiceover_text + voice_id; persisted as `agents/voice_producer/input.json` | `voiceover.mp3` (single file), `voiceover_duration_sec`, `timestamps` (word-level), `provider`, `output.json` | All providers fail → stop, retry by Admin/Creative Lead |
 | **Visual Director** | story_beats + timestamps + do_not_use + asset_candidates; persisted as `agents/visual_director/input.json` | `visual_plan.json` (LLM decisions), `scene_plan.json`, `provenance.json`, scene/card files, and `output.json` | Download failures → G9 handles |
 | **Composer** | voiceover_path + timestamps + visual assets + narrative_structure; persisted as `agents/composer/input.json` | Final `OUTPUT_DIR/job_{id}/video.mp4`, plus `ffmpeg_command.txt`, diagnostics, and `output.json` | FFmpeg failure → stop, retry by Admin/Creative Lead |
-| **Reviewer** | Rendered video file, script text, caption, voiceover_duration, visual_duration, narrative_structure, unverified_claims; persisted as `agents/reviewer/input.json` | Pass/reject + specific issues (AV sync, caption quality, fact safety, narrative structure) + recommended retry step; persisted as `agents/reviewer/output.json` | Reject → Admin/Creative Lead decides |
+| **Reviewer** | Rendered video file, script text, caption, voiceover_duration, visual_duration, narrative_structure, unverified_claims, `story_beats`, `word_timestamps`, `rendered_scene_manifest`, Composer diagnostics; persisted as `agents/reviewer/input.json` | Pass/reject + specific issues (AV sync, caption quality, fact safety, narrative structure) + deterministic gate results (visual coverage, text collision, safe area, package consistency, timestamp semantic, semantic visual relevance); persisted as `agents/reviewer/output.json` | Reject → Admin/Creative Lead decides or repair loop routes targeted fix |
 
 ### Segment Producer Output Schema
 
@@ -1060,7 +1060,7 @@ Score is combined with quality tier for final candidate ranking.
 - `build_review_context_bundle()`: aggregates scene-beat mappings for reviewer
 - `get_semantic_review_context()`: produces per-beat review context with evidence
 
-**Timestamp semantic review** (reviewer.py): `_run_timestamp_semantic_review()` maps rendered scenes to story beats via midpoint containment + range overlap, emits `SceneSemanticReview` objects. Gate chain: visual_coverage → text_collision → safe_area → package_consistency → **timestamp_semantic** → LLM.
+**Timestamp semantic review** (reviewer.py): `_run_timestamp_semantic_review()` maps rendered scenes to story beats via midpoint containment + range overlap, emits `SceneSemanticReview` objects. Gate chain: `visual_coverage → text_collision → safe_area → package_consistency → timestamp_semantic → semantic_review → LLM`.
 
 ### Bounded Automated Repair Loop (Batch 6)
 
@@ -1102,5 +1102,29 @@ When running repair cycles (cycle > 0), the Composer writes to the standard cont
 ### Wired Timestamp Semantic Review (P2 Fix)
 
 The semantic review gate was wired into both reviewer call sites:
-- `_execute_single_repair_cycle()` and `_retry_review_and_package()` now pass `story_beats`, `word_timestamps`, and `rendered_scene_manifest` to the reviewer
+- `_execute_single_repair_cycle()` and `_retry_review_and_package()` now pass `story_beats`, `word_timestamps`, `rendered_scene_manifest`, and `diagnostics` to the reviewer
 - The timestamp semantic review gate actually enforces scene-to-beat alignment instead of silently skipping
+
+## 16. Phase 23: Reviewer Context + Diagnostics Enforcement Contract
+
+Phase 23 closes the Reviewer enforcement gap exposed by runtime quality gates. Composer now emits structured diagnostics and a rendered scene manifest; the engine forwards both into Reviewer on normal and repair rerun paths.
+
+### Reviewer Context Inputs
+
+- `story_beats` — Segment Producer beat contract with visual instructions and evidence contracts.
+- `word_timestamps` — Voice Producer word-level timestamps.
+- `rendered_scene_manifest` — serialized Composer manifest with scene durations, source types, and timecodes.
+- `diagnostics` — Composer diagnostics including visual coverage, text collision, safe-area, package consistency, and semantic visual review results.
+
+### Enforcement Contract
+
+- Normal pipeline `_retry_review_and_package()` passes all Reviewer context kwargs.
+- Repair rerun path after Composer repair passes the same kwargs so deterministic gates remain active after repair.
+- `RenderedSceneManifest` is serialized to dict before Reviewer gate code reads `entries`.
+- Gate order: `visual_coverage → text_collision → safe_area → package_consistency → timestamp_semantic → semantic_review → LLM`.
+
+### Consequences
+
+- Deterministic gates can fail or route repairs using Composer evidence instead of silently skipping.
+- Timestamp-level semantic review can map rendered scenes to story beats with evidence contracts.
+- Reviewer LLM spend is protected by deterministic gates in both production and repair paths.

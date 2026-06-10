@@ -83,6 +83,58 @@ class TestSegmentProducerSynthesize:
         assert result["research_brief"] == "Research brief: Some analysis"
         assert result["source_count"] == 2
 
+    def test_synthesize_uses_traced_chat_when_writer_configured(self, mocker):
+        writer = object()
+        mock_traced = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat_traced",
+            return_value=self._mock_chat("Traced brief"),
+        )
+        aggregated = {
+            "firecrawl_count": 0,
+            "scrapecreators_count": 0,
+            "total_sources": 0,
+            "sources": [],
+        }
+
+        result = SegmentProducerAgent(trace_writer=writer)._synthesize_research(
+            aggregated,
+            "Trace topic",
+            [],
+            job_id=11,
+        )
+
+        assert result["research_brief"] == "Traced brief"
+        mock_traced.assert_called_once()
+        assert mock_traced.call_args.kwargs["job_id"] == 11
+        assert mock_traced.call_args.kwargs["agent"] == "segment_producer"
+        assert mock_traced.call_args.kwargs["task"] == "synthesize_research"
+
+    def test_synthesize_uses_plain_chat_when_writer_is_none(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value=self._mock_chat("Plain brief"),
+        )
+        mock_traced = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat_traced",
+        )
+        aggregated = {
+            "firecrawl_count": 0,
+            "scrapecreators_count": 0,
+            "total_sources": 0,
+            "sources": [],
+        }
+
+        result = SegmentProducerAgent(trace_writer=None)._synthesize_research(
+            aggregated,
+            "No trace",
+            [],
+            job_id=12,
+        )
+
+        assert result["research_brief"] == "Plain brief"
+        mock_chat.assert_called_once()
+        mock_traced.assert_not_called()
+
     def test_synthesize_passes_topic_and_rules(self, mocker):
         mock_chat = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",

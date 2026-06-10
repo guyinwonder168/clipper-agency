@@ -11,6 +11,23 @@ import pytest
 from clipper_agency.config.schema import OCRInspectionResult
 
 
+@pytest.fixture(autouse=True)
+def _reset_ocr_singleton():
+    """Reset the PaddleOCR adapter singleton before each test.
+
+    The singleton persists across test files. If a previous test file
+    (e.g. VD tests) triggers a real PaddleOCR import, the cached model
+    stays in the class variable and paddleocr lands in sys.modules,
+    preventing sys.modules patching from taking effect.
+    """
+    from clipper_agency.core.ocr_adapter import PaddleOCRAdapter
+
+    PaddleOCRAdapter._reset_model()
+    sys.modules.pop("paddleocr", None)
+    yield
+    PaddleOCRAdapter._reset_model()
+
+
 # ---------------------------------------------------------------------------
 # Helpers for building mock PaddleOCR results
 # ---------------------------------------------------------------------------
@@ -308,6 +325,28 @@ class TestPaddleOCRAdapterLazyImport:
 
             # The PaddleOCR constructor should have been called
             mock_paddleocr.PaddleOCR.assert_called_once()
+
+    def test_paddleocr_constructor_uses_current_orientation_parameter(self):
+        """PaddleOCR should use the non-deprecated textline orientation parameter."""
+        mock_model = MagicMock()
+        mock_model.ocr.return_value = [[]]
+
+        with patch.dict(sys.modules):
+            sys.modules.pop("paddleocr", None)
+            mock_paddleocr = MagicMock()
+            mock_paddleocr.PaddleOCR.return_value = mock_model
+
+            with patch.dict(sys.modules, {"paddleocr": mock_paddleocr}):
+                from clipper_agency.core.ocr_adapter import PaddleOCRAdapter  # noqa: F811
+
+                PaddleOCRAdapter._reset_model()
+                adapter = PaddleOCRAdapter(frame_size=_FRAME_SIZE)
+                adapter.inspect("/fake/img.png", timestamp_sec=0.0)
+
+            mock_paddleocr.PaddleOCR.assert_called_once_with(
+                use_textline_orientation=True,
+                lang="en",
+            )
 
 
 class TestPaddleOCRAdapterSingleton:

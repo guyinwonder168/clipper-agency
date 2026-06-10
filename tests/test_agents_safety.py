@@ -84,6 +84,41 @@ class TestSafetyExecute:
         assert result["status"] == "pass"
         assert result["reason"] == "Entertainment topic"
 
+    def test_execute_uses_traced_chat_when_writer_configured(self, mocker):
+        writer = object()
+        mock_traced = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat_traced",
+            return_value=self._mock_chat(
+                '{"verdict": "pass", "reason": "Traced"}'
+            ),
+        )
+
+        agent = SafetyAgent(trace_writer=writer)
+        result = agent.execute(job_id=7, topic="Trace topic")
+
+        assert result["status"] == "pass"
+        mock_traced.assert_called_once()
+        assert mock_traced.call_args.kwargs["job_id"] == 7
+        assert mock_traced.call_args.kwargs["agent"] == "safety"
+        assert mock_traced.call_args.kwargs["task"] == "safety_check"
+
+    def test_execute_uses_plain_chat_when_writer_is_none(self, mocker):
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value=self._mock_chat(
+                '{"verdict": "pass", "reason": "Untraced"}'
+            ),
+        )
+        mock_traced = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat_traced",
+        )
+
+        result = SafetyAgent(trace_writer=None).execute(job_id=8, topic="No trace")
+
+        assert result["status"] == "pass"
+        mock_chat.assert_called_once()
+        mock_traced.assert_not_called()
+
     def test_execute_hard_block(self, mocker):
         mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",

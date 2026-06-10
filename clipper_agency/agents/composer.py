@@ -41,6 +41,8 @@ from clipper_agency.core.media_detectors import (
 )
 from clipper_agency.config.schema import VisualCoverageResult
 from clipper_agency.core.visual_coverage import evaluate_visual_coverage
+from clipper_agency.core.generated_text_manifest import build_generated_text_regions
+from clipper_agency.core.rendered_scene_manifest import build_rendered_scene_manifest
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
@@ -126,6 +128,57 @@ def _safe_detect_freeze(
         return []
 
 
+def _safe_detect_empty(video_path: str) -> list[tuple[float, float]]:
+    """Detect empty/uniform segments via frame sampling, with graceful fallback.
+
+    Extracts 1 frame per second, computes pixel variance on each, and merges
+    consecutive low-variance frames into empty-segment intervals.  Falls back
+    to an empty list on any error so the pipeline never crashes.
+    """
+    if not video_path:
+        return []
+    try:
+        return _run_empty_frame_detection(video_path)
+    except Exception:
+        logger.warning("Composer: empty-frame detection failed for %s", video_path)
+        return []
+
+
+def _run_empty_frame_detection(video_path: str) -> list[tuple[float, float]]:
+    """Core empty-frame detection: probe → extract → variance → merge."""
+    from pathlib import Path as _Path  # noqa: F811
+
+    from clipper_agency.core.frame_extractor import extract_frames
+    from clipper_agency.core.frame_quality import detect_empty_segments
+    from clipper_agency.core.media_probe import probe_video
+    from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
+    from PIL import Image as PILImage
+
+    info = probe_video(video_path)
+    duration = float(info.get("format", {}).get("duration", 0))
+    if duration <= 0:
+        return []
+
+    # Sample 1 frame per second (up to 60s → 60 frames)
+    timestamps = [float(t) for t in range(min(int(duration), 60))]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        frames = extract_frames(video_path, timestamps, tmpdir, run_ffmpeg_streaming)
+
+        sampled: list[tuple[float, object]] = []
+        for frame in frames:
+            try:
+                img = PILImage.open(_Path(frame.path)).convert("L")
+                sampled.append((frame.timestamp_sec, img))
+            except Exception:
+                logger.warning(
+                    "Composer: failed to read frame %s for empty detection",
+                    frame.path,
+                )
+
+        return detect_empty_segments(sampled, max_gap_sec=2.0)
+
+
 def _compute_scene_segments(
     scene_count: int,
     duration_sec: float,
@@ -135,6 +188,59 @@ def _compute_scene_segments(
         return []
     seg_len = duration_sec / scene_count
     return [(i * seg_len, (i + 1) * seg_len) for i in range(scene_count)]
+
+
+def _build_scene_manifest(
+    scenes: list[dict],
+    text_regions: list[dict],
+    output_dur: float,
+    video_path: str,
+    assets: list[dict] | None = None,
+) -> Any:
+    """Build a ``RenderedSceneManifest`` from scene data and text regions.
+
+    Enriches *scenes* with ``beat_id`` and ``selected_asset_id`` from
+    *assets* when available (used in the audio-first path where assets
+    are passed alongside the enriched scene list).
+    """
+    if not scenes:
+        return build_rendered_scene_manifest([], [], output_dur, video_path).model_dump()
+
+    if assets:
+        scene_list = [
+            {**s, **{
+                "beat_id": assets[i].get("beat_id", s.get("beat_id", i + 1)),
+                "selected_asset_id": assets[i].get("asset_id", ""),
+            }}
+            if i < len(assets) else dict(s)
+            for i, s in enumerate(scenes)
+        ]
+    else:
+        scene_list = [dict(s) for s in scenes]
+
+    return build_rendered_scene_manifest(
+        scene_list, text_regions, output_dur, video_path,
+    ).model_dump()
+
+
+def _build_text_regions_from_captions(
+    captions: list[Any],
+    frame_size: tuple[int, int] = (1080, 1920),
+) -> list[dict]:
+    """Convert caption overlays to generated text region entries.
+
+    Wraps *captions* into a minimal render-plan dict expected by
+    ``build_generated_text_regions``.
+    """
+    if not captions:
+        return []
+    # Convert pydantic CaptionOverlay objects to plain dicts
+    caption_dicts = [
+        c.model_dump() if hasattr(c, "model_dump") else dict(c)
+        for c in captions
+    ]
+    render_plan = {"scenes": [{"captions": caption_dicts}]}
+    return build_generated_text_regions(render_plan, frame_size)
 
 
 def _persist_visual_coverage(
@@ -291,6 +397,9 @@ def _build_keyword_chain(video_filter: str, captions: list) -> str:
 
 class ComposerAgent(BaseAgent):
     """Assembles final video from assets and audio using FFmpeg."""
+
+    def __init__(self, trace_writer: Any | None = None) -> None:
+        self._trace_writer = trace_writer
 
     _ADAPTERS = {
         "news_card": build_news_card_plan,
@@ -501,6 +610,12 @@ class ComposerAgent(BaseAgent):
         output = self._attach_visual_coverage_diagnostics(
             output, voiceover_duration_sec,
         )
+
+        # Build rendered scene manifest from video_assets
+        output["rendered_scene_manifest"] = _build_scene_manifest(
+            video_assets, [], output_dur, video_path,
+        )
+
         return output
 
     def _handle_ffmpeg_error(
@@ -531,6 +646,7 @@ class ComposerAgent(BaseAgent):
         *,
         detect_black: Any = None,
         detect_freeze: Any = None,
+        detect_empty: Any = None,
     ) -> dict[str, Any]:
         """Attach visual coverage evaluation to output diagnostics.
 
@@ -549,8 +665,10 @@ class ComposerAgent(BaseAgent):
         video_path = output.get("video_path", "")
         black_fn = detect_black or detect_black_segments
         freeze_fn = detect_freeze or detect_freeze_segments
+        empty_fn = detect_empty or _safe_detect_empty
         black_segs = _safe_detect_black(black_fn, video_path)
         freeze_segs = _safe_detect_freeze(freeze_fn, video_path)
+        empty_segs = empty_fn(video_path)
         scene_segs = _compute_scene_segments(
             output.get("scene_count", 0), output_dur,
         )
@@ -560,7 +678,7 @@ class ComposerAgent(BaseAgent):
             voiceover_duration_sec=voiceover_duration_sec or output_dur,
             black_segments=black_segs,
             freeze_segments=freeze_segs,
-            empty_segments=[],
+            empty_segments=empty_segs,
             scene_segments=scene_segs,
             thresholds={},
         )
@@ -628,6 +746,10 @@ class ComposerAgent(BaseAgent):
             "template_name": template_name,
             "diagnostics_dir": str(diagnostics_dir),
         }
+
+        # Build generated text region manifest from render plan
+        text_regions = build_generated_text_regions(plan.model_dump(), (1080, 1920))
+        output.setdefault("diagnostics", {})["generated_text_regions"] = text_regions
 
         if agent_dir:
             write_json(agent_output_file(assets_cache, job_id, "composer"), output)
@@ -1533,4 +1655,16 @@ class ComposerAgent(BaseAgent):
                 agent_output_file(assets_cache, job_id, "composer"), output,
             )
         output = self._attach_visual_coverage_diagnostics(output, None)
+
+        # Build generated text region manifest from captions
+        text_regions = _build_text_regions_from_captions(keyword_captions)
+        if "diagnostics" not in output:
+            output["diagnostics"] = {}
+        output["diagnostics"]["generated_text_regions"] = text_regions
+
+        # Build rendered scene manifest from enriched assets
+        output["rendered_scene_manifest"] = _build_scene_manifest(
+            enriched, text_regions, output_dur, video_path, assets,
+        )
+
         return output

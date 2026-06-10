@@ -77,6 +77,7 @@ from clipper_agency.orchestrator.gates import (
 )
 from clipper_agency.orchestrator.validator import validate_content_direction
 from clipper_agency.output.packager import OutputPackager
+from clipper_agency.observability.llm_trace import LLMTraceWriter
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +105,21 @@ class Orchestrator:
 
     def __init__(self, db_path: str = "data/clipper.db") -> None:
         self.db_path = db_path
+        self._trace_writer = self._build_trace_writer()
         conn = get_connection(db_path)
         initialize_schema(conn)
+
+    @staticmethod
+    def _build_trace_writer() -> LLMTraceWriter | None:
+        """Create the shared LLM trace writer when tracing is enabled."""
+        settings = load_settings()
+        trace_cfg = settings.observability.llm_traces
+        if not trace_cfg.enabled:
+            return None
+        return LLMTraceWriter(
+            settings.assets_cache,
+            redact_secrets=trace_cfg.redact_secrets,
+        )
 
     def _init_job_statuses(self, conn, job_id: int) -> None:
         """Initialize lifecycle statuses at pipeline start."""
@@ -422,6 +436,7 @@ class Orchestrator:
             story_beats=research_output.get("story_beats", []),
             word_timestamps=voice_output.get("timestamps", []),
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
+            diagnostics=compose_output.get("diagnostics", {}),
         )
 
         # Persist repair cycle metrics
@@ -1141,6 +1156,7 @@ class Orchestrator:
             story_beats=rp.get("story_beats", []),
             word_timestamps=vo.get("timestamps", []),
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
+            diagnostics=compose_output.get("diagnostics", {}),
         )
         # Route repair plan if reviewer requested revisions
         repair_routing = self._handle_repair_plan(
@@ -1572,14 +1588,14 @@ class Orchestrator:
 
     def _run_safety(self, job_id: int, topic: str,
                     **kwargs: Any) -> dict[str, Any]:
-        agent = SafetyAgent()
+        agent = SafetyAgent(trace_writer=self._trace_writer)
         return agent.execute(job_id=job_id, topic=topic, **kwargs)
 
     def _run_researcher(self, job_id: int, topic: str,
                         safety_rules: list[str] | None = None,
                         output_dir: str = "outputs",
                         **kwargs: Any) -> dict[str, Any]:
-        agent = SegmentProducerAgent()
+        agent = SegmentProducerAgent(trace_writer=self._trace_writer)
         return agent.execute(job_id=job_id, topic=topic,
                              safety_rules=safety_rules or [],
                              output_dir=output_dir, **kwargs)
@@ -1588,7 +1604,7 @@ class Orchestrator:
                           research_brief: str = "",
                           safety_rules: list[str] | None = None,
                           **kwargs: Any) -> dict[str, Any]:
-        agent = ScriptwriterAgent()
+        agent = ScriptwriterAgent(trace_writer=self._trace_writer)
         return agent.execute(
             job_id=job_id, topic=topic,
             research_brief=research_brief,
@@ -1600,7 +1616,7 @@ class Orchestrator:
                             script: list[dict] | None = None,
                             output_dir: str = "outputs",
                             **kwargs: Any) -> dict[str, Any]:
-        agent = VoiceProducerAgent()
+        agent = VoiceProducerAgent(trace_writer=self._trace_writer)
         return agent.execute(
             job_id=job_id, script=script or [],
             output_dir=output_dir,
@@ -1613,7 +1629,7 @@ class Orchestrator:
                              source_urls: list[str] | None = None,
                              output_dir: str = "outputs",
                              **kwargs: Any) -> dict[str, Any]:
-        agent = VisualDirectorAgent()
+        agent = VisualDirectorAgent(trace_writer=self._trace_writer)
         return agent.execute(
             job_id=job_id, script=script or [],
             topic=topic,
@@ -1627,7 +1643,7 @@ class Orchestrator:
                       audio_files: list[str] | None = None,
                       output_dir: str = "outputs",
                       **kwargs: Any) -> dict[str, Any]:
-        agent = ComposerAgent()
+        agent = ComposerAgent(trace_writer=self._trace_writer)
         return agent.execute(
             job_id=job_id, assets=assets or [],
             audio_files=audio_files or [],
@@ -1640,7 +1656,7 @@ class Orchestrator:
                       caption: str = "",
                       safety_rules: list[str] | None = None,
                       **kwargs: Any) -> dict[str, Any]:
-        agent = ReviewerAgent()
+        agent = ReviewerAgent(trace_writer=self._trace_writer)
         return agent.execute(
             job_id=job_id, topic=topic,
             script=script or [],

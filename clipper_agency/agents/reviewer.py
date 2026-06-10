@@ -6,12 +6,17 @@ from typing import Any, TypedDict
 
 from clipper_agency.agents.base import BaseAgent
 from clipper_agency.agents.prompts import PROMPTS_DIR, load_prompt
-from clipper_agency.config.loader import get_agent_config
+from clipper_agency.config.loader import get_agent_config, load_settings
 from clipper_agency.config.schema import SceneSemanticReview
 from clipper_agency.core.package_consistency import evaluate_package_consistency
 from clipper_agency.core.reviewer_context import (
     SceneBeatMapping,
     map_scenes_to_beats,
+)
+from clipper_agency.core.safe_area import detect_safe_area_issues
+from clipper_agency.core.text_collision import (
+    detect_source_text_density,
+    detect_text_collisions,
 )
 from clipper_agency.llm.client import OpenRouterClient
 
@@ -133,6 +138,23 @@ def _format_script_text(script: list[dict] | None) -> str:
     )
 
 
+def _dump_issues(issues: list[Any]) -> list[dict]:
+    """Normalize detector issue objects into plain dictionaries."""
+    return [i.model_dump() if hasattr(i, "model_dump") else dict(i) for i in issues]
+
+
+def _is_enabled(config: Any) -> bool:
+    """Return config.enabled when present; otherwise default enabled."""
+    return bool(getattr(config, "enabled", True))
+
+
+def _frame_size(value: Any) -> tuple[int, int]:
+    """Normalize frame size from diagnostics with a TikTok default."""
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return int(value[0]), int(value[1])
+    return (1080, 1920)
+
+
 def _format_programmatic_results(results: list[dict[str, Any]]) -> str:
     """Format programmatic check results for prompt inclusion."""
     lines = [f"- {r['check']}: {r['status']}" for r in results]
@@ -204,6 +226,9 @@ class ReviewContext(TypedDict, total=False):
 
 class ReviewerAgent(BaseAgent):
     """Reviews final content for quality, safety, and originality."""
+
+    def __init__(self, trace_writer: Any | None = None) -> None:
+        self._trace_writer = trace_writer
 
     @property
     def agent_name(self) -> str:
@@ -309,6 +334,50 @@ class ReviewerAgent(BaseAgent):
                 "programmatic_checks": {},
             }
         return None
+
+    def _populate_actual_detection_diagnostics(
+        self,
+        diagnostics: dict | None,
+    ) -> dict | None:
+        """Populate text-collision and safe-area diagnostics from region data."""
+        if not diagnostics:
+            return diagnostics
+
+        enriched = dict(diagnostics)
+        settings = load_settings()
+        quality = settings.quality
+        frame_size = _frame_size(enriched.get("frame_size"))
+        generated_regions = enriched.get("generated_text_regions") or []
+        source_regions = enriched.get("source_text_regions") or []
+
+        if source_regions and _is_enabled(quality.text_collision):
+            try:
+                thresholds = {
+                    "subtitle_overlap_max": quality.text_collision.subtitle_overlap_max,
+                    "headline_overlap_max": quality.text_collision.headline_overlap_max,
+                }
+                collisions = detect_text_collisions(
+                    source_regions, generated_regions, thresholds,
+                ) if generated_regions else []
+                density = detect_source_text_density(source_regions, frame_size)
+                enriched["text_collision"] = _dump_issues(collisions + density)
+            except Exception as exc:
+                logger.warning("Reviewer text collision detection failed: %s", exc)
+
+        if generated_regions and _is_enabled(quality.safe_area):
+            try:
+                safe_issues = detect_safe_area_issues(
+                    generated_regions=generated_regions,
+                    face_regions=enriched.get("face_regions") or [],
+                    frame_size=frame_size,
+                    platform=enriched.get("platform", "tiktok"),
+                    face_overlap_max=quality.safe_area.face_overlap_max,
+                )
+                enriched["safe_area"] = _dump_issues(safe_issues)
+            except Exception as exc:
+                logger.warning("Reviewer safe-area detection failed: %s", exc)
+
+        return enriched
 
     def _fail_if_package_consistency_failed(
         self,
@@ -495,7 +564,9 @@ class ReviewerAgent(BaseAgent):
             return hard_gate_result
 
         # 2b. New deterministic quality gates (Batch 2)
-        diagnostics = kwargs.get("diagnostics")
+        diagnostics = self._populate_actual_detection_diagnostics(
+            kwargs.get("diagnostics"),
+        )
 
         # 2c. Timestamp-level semantic review (programmatic, no LLM)
         scene_reviews = self._run_timestamp_semantic_review(
@@ -523,11 +594,9 @@ class ReviewerAgent(BaseAgent):
 
         # 4. LLM review
         agent_cfg = get_agent_config("reviewer")
-        llm = OpenRouterClient()
+        llm = OpenRouterClient(trace_writer=self._trace_writer)
         prompt = load_prompt("reviewer", REVIEWER_PROMPT, PROMPTS_DIR)
-        response = llm.chat(
-            model=agent_cfg["model"],
-            messages=[
+        messages = [
                 {
                     "role": "system",
                     "content": prompt.format(
@@ -543,10 +612,25 @@ class ReviewerAgent(BaseAgent):
                         f"Caption: {caption}"
                     ),
                 },
-            ],
+            ]
+        if self._trace_writer:
+            response = llm.chat_traced(
+                model=agent_cfg["model"],
+                messages=messages,
+                job_id=job_id,
+                agent=self.agent_name,
+                task="final_review",
+                temperature=agent_cfg["temperature"],
+                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                prompt_template_id="reviewer.md",
+            )
+        else:
+            response = llm.chat(
+                model=agent_cfg["model"],
+                messages=messages,
             temperature=agent_cfg["temperature"],
             max_completion_tokens=agent_cfg.get("max_completion_tokens"),
-        )
+            )
         review = self._parse_review_response(response["content"])
         logger.info(
             "Reviewer: verdict=%s score=%d issues=%d",

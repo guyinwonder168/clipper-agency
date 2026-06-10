@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -11,6 +12,55 @@ from clipper_agency.config.schema import NicheConfig
 from clipper_agency.db.connection import close_connection, get_connection
 from clipper_agency.db.schema import initialize_schema
 from clipper_agency.orchestrator.engine import Orchestrator
+
+
+def _settings_with_trace_flag(enabled: bool, tmp_path: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        assets_cache=tmp_path / "cache",
+        observability=SimpleNamespace(
+            llm_traces=SimpleNamespace(enabled=enabled, redact_secrets=True),
+        ),
+    )
+
+
+def test_engine_creates_trace_writer_when_enabled(mocker, tmp_path):
+    mocker.patch(
+        "clipper_agency.orchestrator.engine.load_settings",
+        return_value=_settings_with_trace_flag(True, tmp_path),
+    )
+    mock_writer = mocker.patch("clipper_agency.orchestrator.engine.LLMTraceWriter")
+
+    engine = Orchestrator(db_path=str(tmp_path / "trace_enabled.db"))
+
+    mock_writer.assert_called_once_with(tmp_path / "cache", redact_secrets=True)
+    assert engine._trace_writer == mock_writer.return_value
+
+
+def test_engine_skips_trace_writer_when_disabled(mocker, tmp_path):
+    mocker.patch(
+        "clipper_agency.orchestrator.engine.load_settings",
+        return_value=_settings_with_trace_flag(False, tmp_path),
+    )
+    mock_writer = mocker.patch("clipper_agency.orchestrator.engine.LLMTraceWriter")
+
+    engine = Orchestrator(db_path=str(tmp_path / "trace_disabled.db"))
+
+    mock_writer.assert_not_called()
+    assert engine._trace_writer is None
+
+
+def test_engine_passes_trace_writer_to_agent_runners(mocker, tmp_path):
+    mocker.patch(
+        "clipper_agency.orchestrator.engine.load_settings",
+        return_value=_settings_with_trace_flag(True, tmp_path),
+    )
+    mock_writer = mocker.patch("clipper_agency.orchestrator.engine.LLMTraceWriter")
+    mock_safety = mocker.patch("clipper_agency.orchestrator.engine.SafetyAgent")
+
+    engine = Orchestrator(db_path=str(tmp_path / "trace_runner.db"))
+    engine._run_safety(job_id=1, topic="safe topic")
+
+    mock_safety.assert_called_once_with(trace_writer=mock_writer.return_value)
 
 
 @pytest.fixture(autouse=True)

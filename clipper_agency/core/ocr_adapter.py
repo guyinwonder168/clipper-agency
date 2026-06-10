@@ -131,6 +131,11 @@ class PaddleOCRAdapter:
         )
 
     @classmethod
+    def _reset_model(cls) -> None:
+        """Reset the singleton model. Used in tests to isolate test runs."""
+        cls._ocr = None
+
+    @classmethod
     def _get_ocr(cls) -> "object":
         """Return the process-level singleton PaddleOCR model.
 
@@ -139,5 +144,5 @@ class PaddleOCRAdapter:
         if cls._ocr is None:
             from paddleocr import PaddleOCR  # type: ignore[import-untyped]
 
-            cls._ocr = PaddleOCR(use_angle_cls=True, lang="en")
+            cls._ocr = PaddleOCR(use_textline_orientation=True, lang="en")
         return cls._ocr

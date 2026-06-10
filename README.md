@@ -16,12 +16,12 @@
 
 <p align="center">
   <strong>AI-powered short-form video automation.</strong><br>
-  7 agents + gated pipeline + runtime quality gates + auto-repair → one command → ready-to-upload video.
+  7 agents + gated pipeline + runtime quality gates + reviewer context + auto-repair → one command → ready-to-upload video.
 </p>
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue?logo=python">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-1793%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-1837%20passing-brightgreen">
   <img alt="Coverage" src="https://img.shields.io/badge/coverage-93%25-brightgreen">
   <img alt="FFmpeg" src="https://img.shields.io/badge/FFmpeg-5.0%2B-orange?logo=ffmpeg">
   <img alt="SonarCloud" src="https://img.shields.io/badge/SonarCloud-passing-brightgreen?logo=sonarcloud">
@@ -35,7 +35,7 @@
 ## Pipeline
 
 ```
-Topic → G1 → Safety → G2 → Segment Producer (story_beats + edit blueprint) → G3-G5 → Scriptwriter (continuous voiceover) → Script Gate → Voice Producer (single audio + word timestamps) → G8 → Visual Director (beat-driven, audio-aware) → G9 → Composer (smart trim + keyword captions) → G10 → Reviewer (quality gates) → Output
+Topic → G1 → Safety → G2 → Segment Producer (story_beats + edit blueprint) → G3-G5 → Scriptwriter (continuous voiceover) → Script Gate → Voice Producer (single audio + word timestamps) → G8 → Visual Director (beat-driven, audio-aware) → G9 → Composer (rendered_scene_manifest + diagnostics) → G10 → Reviewer (quality gates + timestamp semantic) → Output
 ```
 
 Each step is **gated** (pass/soft-fail/hard-fail). Agents communicate through **database state** — no direct agent-to-agent calls. Audio-first architecture: voiceover generated first, visuals fitted to audio timeline.
@@ -267,7 +267,7 @@ python3 -m pytest -m "not integration and not external"
 python3 -m pytest -m integration
 ```
 
-Tests live in `tests/` mirroring the package structure. Currently **1793 tests** at **93%+ line coverage**.
+Tests live in `tests/` mirroring the package structure. Currently **1837 tests** at **93%+ line coverage**.
 
 ---
 
@@ -286,6 +286,6 @@ Tests live in `tests/` mirroring the package structure. Currently **1793 tests**
 
 ## Status
 
-**✅ Post-MVP (Stage 2)** — Core pipeline hardened with runtime quality gates, multi-provider asset sourcing (YouTube/Tavily/Brave), story-mode reconciliation, multimodal candidate inspection, bounded automated repair loop, and dashboard retry/resume. Single-tenant, manual topic input. Next: multi-account, scheduling, API publishing.
+**✅ Post-MVP (Stage 2)** — Core pipeline hardened with runtime quality gates, multi-provider asset sourcing (YouTube/Tavily/Brave), story-mode reconciliation, multimodal candidate inspection, bounded automated repair loop, dashboard retry/resume, and Reviewer enforcement from Composer diagnostics + rendered scene manifest. Single-tenant, manual topic input. Next: multi-account, scheduling, API publishing.
 
-1793 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing
+1837 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing
