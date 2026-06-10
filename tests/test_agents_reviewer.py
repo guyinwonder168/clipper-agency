@@ -536,6 +536,97 @@ class TestReviewerVisualCoverageGate:
 class TestReviewerTextCollisionGate:
     """Text collision hard gate blocks LLM when collisions detected."""
 
+    def test_runs_actual_text_collision_detection(self, mocker):
+        """Reviewer should call collision detectors from diagnostic regions."""
+        mock_collision = mocker.patch(
+            "clipper_agency.agents.reviewer.detect_text_collisions",
+            create=True,
+            return_value=[
+                {"type": "SUBTITLE_SOURCE_TEXT_OVERLAP", "severity": "reject"},
+            ],
+        )
+        mock_density = mocker.patch(
+            "clipper_agency.agents.reviewer.detect_source_text_density",
+            create=True,
+            return_value=[],
+        )
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "Good", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test",
+            script=[{"scene": 1, "text": "Hi"}],
+            caption="Ok #tag",
+            diagnostics={
+                "visual_coverage": {"status": "pass", "issues": []},
+                "source_text_regions": [
+                    {"bbox": [120, 1480, 960, 1740], "text": "burned text"},
+                ],
+                "generated_text_regions": [
+                    {"layer": "subtitle", "bbox": [120, 500, 960, 700]},
+                ],
+                "frame_size": (1080, 1920),
+            },
+        )
+
+        mock_collision.assert_called_once()
+        mock_density.assert_called_once()
+        assert result["status"] == "fail"
+        assert result["reason"] == "TEXT_COLLISION_FAILED"
+        mock_chat.assert_not_called()
+
+    def test_text_collision_detection_allows_clean_video(self, mocker):
+        """Clean detector results should allow Reviewer to continue to LLM."""
+        mock_collision = mocker.patch(
+            "clipper_agency.agents.reviewer.detect_text_collisions",
+            create=True,
+            return_value=[],
+        )
+        mock_density = mocker.patch(
+            "clipper_agency.agents.reviewer.detect_source_text_density",
+            create=True,
+            return_value=[],
+        )
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "Good", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test",
+            script=[{"scene": 1, "text": "Hi"}],
+            caption="Ok #tag",
+            diagnostics={
+                "visual_coverage": {"status": "pass", "issues": []},
+                "source_text_regions": [
+                    {"bbox": [10, 10, 200, 100], "text": "source text"},
+                ],
+                "generated_text_regions": [
+                    {"layer": "subtitle", "bbox": [120, 500, 960, 700]},
+                ],
+                "frame_size": (1080, 1920),
+            },
+        )
+
+        mock_collision.assert_called_once()
+        mock_density.assert_called_once()
+        assert result["status"] == "pass"
+        mock_chat.assert_called_once()
+
     def test_blocks_llm_on_text_collision(self, mocker):
         mock_chat = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",
@@ -559,6 +650,75 @@ class TestReviewerTextCollisionGate:
 
 class TestReviewerSafeAreaGate:
     """Safe area hard gate blocks LLM when issues detected."""
+
+    def test_runs_actual_safe_area_detection(self, mocker):
+        """Reviewer should call safe-area detection from generated/face regions."""
+        mock_safe = mocker.patch(
+            "clipper_agency.agents.reviewer.detect_safe_area_issues",
+            create=True,
+            return_value=[
+                {"type": "FACE_TEXT_OVERLAP", "severity": "reject"},
+            ],
+        )
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "Good", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test",
+            script=[{"scene": 1, "text": "Hi"}],
+            caption="Ok #tag",
+            diagnostics={
+                "visual_coverage": {"status": "pass", "issues": []},
+                "generated_text_regions": [
+                    {"layer": "headline", "bbox": [100, 100, 400, 400]},
+                ],
+                "face_regions": [
+                    {"bbox": [100, 100, 400, 500], "confidence": 0.9},
+                ],
+                "frame_size": (1080, 1920),
+            },
+        )
+
+        mock_safe.assert_called_once()
+        assert result["status"] == "fail"
+        assert result["reason"] == "SAFE_AREA_FAILED"
+        mock_chat.assert_not_called()
+
+    def test_safe_area_detection_skips_without_generated_regions(self, mocker):
+        """Safe-area detection should gracefully skip when inputs are absent."""
+        mock_safe = mocker.patch(
+            "clipper_agency.agents.reviewer.detect_safe_area_issues",
+            create=True,
+        )
+        mock_chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 85, "feedback": "Good", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test",
+            script=[{"scene": 1, "text": "Hi"}],
+            caption="Ok #tag",
+            diagnostics={"visual_coverage": {"status": "pass", "issues": []}},
+        )
+
+        mock_safe.assert_not_called()
+        assert result["status"] == "pass"
+        mock_chat.assert_called_once()
 
     def test_blocks_llm_on_safe_area_issue(self, mocker):
         mock_chat = mocker.patch(
