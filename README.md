@@ -73,10 +73,14 @@ Then fill in your API keys. Required:
 | Key | Purpose |
 |-----|---------|
 | `OPENROUTER_API_KEY` | LLM routing for all agents |
-| `ELEVENLABS_API_KEY` | Voice generation |
+| `ELEVENLABS_API_KEY` | Voice generation (primary) |
+| `GEMINI_API_KEY` | Voice generation (fallback) & multimodal inspection |
+| `FISHAUDIO_API_KEY` | Voice generation (fallback) |
 | `PEXELS_API_KEY` | Stock video/images fallback |
 | `FIRECRAWL_API_KEY` | Web research & scraping |
 | `SCRAPECREATORS_API_KEY` | TikTok data scraping |
+| `TAVILY_API_KEY` | Web news search (multi-source asset sourcing) |
+| `BRAVE_API_KEY` | Video/web search (multi-source asset sourcing) |
 
 ### Run
 
@@ -115,8 +119,8 @@ docker compose up --build
 | Database | SQLite (WAL mode, advisory locks) |
 | LLM | OpenRouter API (multi-model routing) |
 | Voice | ElevenLabs / Gemini TTS / Fish Audio (fallback chain) |
-| Media | yt-dlp (primary), Pexels (fallback) |
-| Research | ScrapeCreators + Firecrawl |
+| Media | yt-dlp (primary), Pexels (fallback), Brave (video search) |
+| Research | ScrapeCreators + Firecrawl + Tavily (news) |
 | Auth | Basic auth (2 groups: privileged, creative/ops) |
 | Container | Docker Compose |
 | CI/CD | GitHub Actions + SonarCloud + GitGuardian |
@@ -152,7 +156,9 @@ clipper_agency/
 │   ├── pexels.py
 │   ├── ytdlp.py
 │   ├── firecrawl.py
-│   └── scrapecreators.py
+│   ├── scrapecreators.py
+│   ├── brave.py              # Multi-source: Brave Search API
+│   └── tavily.py             # Multi-source: Tavily News API
 ├── rendering/               # Template-driven video rendering engine
 │   ├── templates.py         # YAML template loading & validation
 │   ├── contracts.py         # Typed render plan dataclasses
