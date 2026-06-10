@@ -156,6 +156,10 @@ clipper_agency/
 │   ├── ocr_adapter.py, face_adapter.py, source_cleanliness.py
 │   ├── final_layout_inspection.py, generated_text_manifest.py
 │   ├── repair_router.py, repair_metrics.py
+│   ├── scene_normalizer.py, scene_validator.py, validation.py
+│   ├── ffmpeg_preflight.py, ffmpeg_runner.py, media_probe.py
+│   ├── card_generator.py, card_to_video.py, artifacts.py
+│   ├── model_diagnostics.py, job_debug.py, manifest.py
 │   └── logging.py, paths.py, safe_paths.py, inspection_paths.py
 ├── observability/           # LLM trace artifacts & redaction
 │   ├── llm_trace.py
@@ -176,15 +180,19 @@ clipper_agency/
 │   ├── voice_producer.py
 │   ├── visual_director.py
 │   ├── composer.py
-│   └── reviewer.py
+│   ├── reviewer.py
+│   └── prompts.py            # Shared prompt loading
 ├── llm/                     # OpenRouter client, model routing, multimodal
 │   ├── client.py
+│   ├── router.py
 │   └── multimodal_client.py
 ├── services/                # External API integrations
 │   ├── elevenlabs.py
+│   ├── gemini_tts.py         # TTS fallback: Google AI Studio
+│   ├── fish_audio.py         # TTS fallback: Fish Audio
 │   ├── pexels.py
 │   ├── ytdlp.py
-│   ├── firecrawl.py
+│   ├── firecrawl_service.py
 │   ├── scrapecreators.py
 │   ├── brave.py              # Multi-source: Brave Search API
 │   └── tavily.py             # Multi-source: Tavily News API
