@@ -94,13 +94,45 @@ class TestSuccessfulDetection:
         assert scene_segs[1] == pytest.approx((10.0, 20.0))
         assert scene_segs[2] == pytest.approx((20.0, 30.0))
 
+    def test_empty_segments_passed_via_injectable_detector(self):
+        """Empty segments flow from injectable empty detector to evaluate_visual_coverage."""
+        empty_data = [(7.0, 9.5), (15.0, 17.0)]
+        custom_empty = MagicMock(return_value=empty_data)
+
+        with patch(
+            "clipper_agency.agents.composer.detect_freeze_segments",
+            return_value=[],
+        ), patch(
+            "clipper_agency.agents.composer.detect_black_segments",
+            return_value=[],
+        ), patch(
+            "clipper_agency.agents.composer.evaluate_visual_coverage",
+            return_value=VisualCoverageResult(
+                status="pass",
+                output_duration_sec=30.0,
+                voiceover_duration_sec=30.0,
+                coverage_ratio=1.0,
+                issues=[],
+            ),
+        ) as mock_eval:
+            agent = ComposerAgent()
+            output = _completed_output()
+            agent._attach_visual_coverage_diagnostics(
+                output, 30.0,
+                detect_empty=custom_empty,
+            )
+
+            custom_empty.assert_called_once()
+            eval_call = mock_eval.call_args
+            assert eval_call.kwargs["empty_segments"] == empty_data
+
     @patch("clipper_agency.agents.composer.detect_freeze_segments")
     @patch("clipper_agency.agents.composer.detect_black_segments")
     @patch("clipper_agency.agents.composer.evaluate_visual_coverage")
-    def test_empty_segments_left_empty_when_no_sampler(
+    def test_empty_segments_defaults_to_empty_when_no_detector(
         self, mock_eval, mock_black, mock_freeze,
     ):
-        """Empty segments stay empty — frame sampling not yet wired."""
+        """Empty segments default to [] when no empty detector is configured."""
         mock_black.return_value = []
         mock_freeze.return_value = []
         mock_eval.return_value = VisualCoverageResult(

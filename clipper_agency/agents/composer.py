@@ -126,6 +126,57 @@ def _safe_detect_freeze(
         return []
 
 
+def _safe_detect_empty(video_path: str) -> list[tuple[float, float]]:
+    """Detect empty/uniform segments via frame sampling, with graceful fallback.
+
+    Extracts 1 frame per second, computes pixel variance on each, and merges
+    consecutive low-variance frames into empty-segment intervals.  Falls back
+    to an empty list on any error so the pipeline never crashes.
+    """
+    if not video_path:
+        return []
+    try:
+        return _run_empty_frame_detection(video_path)
+    except Exception:
+        logger.warning("Composer: empty-frame detection failed for %s", video_path)
+        return []
+
+
+def _run_empty_frame_detection(video_path: str) -> list[tuple[float, float]]:
+    """Core empty-frame detection: probe → extract → variance → merge."""
+    from pathlib import Path as _Path  # noqa: F811
+
+    from clipper_agency.core.frame_extractor import extract_frames
+    from clipper_agency.core.frame_quality import detect_empty_segments
+    from clipper_agency.core.media_probe import probe_video
+    from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
+    from PIL import Image as PILImage
+
+    info = probe_video(video_path)
+    duration = float(info.get("format", {}).get("duration", 0))
+    if duration <= 0:
+        return []
+
+    # Sample 1 frame per second (up to 60s → 60 frames)
+    timestamps = [float(t) for t in range(min(int(duration), 60))]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        frames = extract_frames(video_path, timestamps, tmpdir, run_ffmpeg_streaming)
+
+        sampled: list[tuple[float, object]] = []
+        for frame in frames:
+            try:
+                img = PILImage.open(_Path(frame.path)).convert("L")
+                sampled.append((frame.timestamp_sec, img))
+            except Exception:
+                logger.warning(
+                    "Composer: failed to read frame %s for empty detection",
+                    frame.path,
+                )
+
+        return detect_empty_segments(sampled, max_gap_sec=2.0)
+
+
 def _compute_scene_segments(
     scene_count: int,
     duration_sec: float,
@@ -531,6 +582,7 @@ class ComposerAgent(BaseAgent):
         *,
         detect_black: Any = None,
         detect_freeze: Any = None,
+        detect_empty: Any = None,
     ) -> dict[str, Any]:
         """Attach visual coverage evaluation to output diagnostics.
 
@@ -549,8 +601,10 @@ class ComposerAgent(BaseAgent):
         video_path = output.get("video_path", "")
         black_fn = detect_black or detect_black_segments
         freeze_fn = detect_freeze or detect_freeze_segments
+        empty_fn = detect_empty or _safe_detect_empty
         black_segs = _safe_detect_black(black_fn, video_path)
         freeze_segs = _safe_detect_freeze(freeze_fn, video_path)
+        empty_segs = empty_fn(video_path)
         scene_segs = _compute_scene_segments(
             output.get("scene_count", 0), output_dur,
         )
@@ -560,7 +614,7 @@ class ComposerAgent(BaseAgent):
             voiceover_duration_sec=voiceover_duration_sec or output_dur,
             black_segments=black_segs,
             freeze_segments=freeze_segs,
-            empty_segments=[],
+            empty_segments=empty_segs,
             scene_segments=scene_segs,
             thresholds={},
         )
