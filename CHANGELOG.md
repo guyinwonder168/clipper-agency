@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] — 2026-06-11
+
+### Phase 23: Wire Unwired Modules Into Production Pipeline
+
+All 17 core modules from Phases 21 & 22 that were built but never called from production are now wired into actual agent runtime call sites. Every module is config-gated (disabled → backward compat, no-op). No new modules. No new agents.
+
+#### Wired Modules (17)
+
+**Visual Director — Pre-Render Inspection (6):**
+- `run_frame_inspection_pipeline` — keyframe extraction before VLM candidate inspection, frame paths fed to `MultimodalInspectionClient.inspect_asset()`.
+- `PaddleOCRAdapter` — OCR text detection on extracted keyframes, OCR regions passed to VLM.
+- `MediaPipeFaceDetector` — face region detection on keyframes.
+- `score_source_cleanliness` — cleanliness scoring fed into candidate ranking via `candidate_semantic_ranker`.
+- `candidate_inspection_dir` from `inspection_paths` — persisted inspection artifacts.
+- `frame_sampler`, `frame_extractor`, `frame_hash` — pipeline support modules wired.
+
+**Composer — Post-Render Diagnostics (4):**
+- `detect_empty_segments` — replaces hardcoded `empty_segments=[]` with actual frame variance analysis.
+- `build_generated_text_regions` — persists subtitle/headline/overlay bounding boxes for Reviewer collision checks.
+- `build_rendered_scene_manifest` — builds scene-beat-timing manifest (Reviewer receives non-None).
+- `final_layout_inspection` — post-render layout validation wired.
+
+**Reviewer — Actual Detection Calls (2):**
+- `detect_text_collisions` + `detect_source_text_density` — Reviewer now calls actual detection functions instead of checking empty dicts. Text collision data built by `_populate_actual_detection_diagnostics()`.
+- `detect_safe_area_issues` — actual safe zone region checks replacing null-dict gate.
+
+**Observability — All 7 Agents (1):**
+- `LLMTraceWriter` — engine creates singleton trace writer gated by `observability.llm_traces.enabled`. All 7 agents accept `trace_writer` kwarg and call `chat_traced()` when available.
+
+**Cross-Cutting (3):**
+- `text_detection`, `source_cleanliness`, `multimodal_provider` — import chains verified.
+- `generated_text_manifest`, `rendered_scene_manifest` — manifest contracts verified.
+- `llm_trace` + `chat_traced()` — all agents wired.
+
+#### Reviewer Context Contract (Batch 0)
+- `_retry_review_and_package()` and repair rerun `_run_reviewer()` pass `story_beats`, `word_timestamps`, `rendered_scene_manifest`, and `diagnostics` from Composer output.
+- `RenderedSceneManifest` serialized before reviewer consumption.
+- Gate chain: `visual_coverage → text_collision → safe_area → package_consistency → timestamp_semantic → semantic_review → LLM`.
+
+#### Config-Driven Gating
+- `quality.runtime_inspection.enabled` — gates frame extraction, OCR, face detection, cleanliness.
+- `quality.ocr.enabled` / `quality.face_detection.enabled` — per-feature gates.
+- `quality.text_collision` / `quality.safe_area` — Reviewer detection gates.
+- `observability.llm_traces.enabled` — trace writer gate.
+- All disabled by default → backward compatible. All failures caught + logged, not fatal.
+
+#### Codex + Bug Fixes
+- P1 — `_build_scene_manifest()` serializes `RenderedSceneManifest` via `.model_dump()`.
+- P1 — engine forwards `compose_output["diagnostics"]` to Reviewer in both paths.
+- OCR adapter deprecated API fix + LLM trace wiring in all 7 agents.
+
+#### Tests
+- **53 new** E2E wiring verification tests in `tests/test_phase23_wiring_verification.py`.
+- Full offline suite: **1890 passed**, 18 deselected (up from 1837).
+- Coverage: 92%.
+
+#### Documentation
+- PRD v3.3, SRS v3.3, technical_design v5.3, requirements_traceability v4.3.
+- ADR 0024 — Reviewer Context and Diagnostics Enforcement Contract.
+- Implementation plan: `docs/plans/2026-06-10-phase23-wire-unwired-modules.md`.
+
 ## [2.2.0] — 2026-06-11
 
 ### Phase 23: Reviewer Context + Diagnostics Enforcement Contract
