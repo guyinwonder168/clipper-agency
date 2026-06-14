@@ -124,3 +124,40 @@ class TestPackageConsistencyEdgeCases:
             main_entities=[],
         )
         assert isinstance(result, PackageConsistencyResult)
+
+    def test_short_entity_skipped_in_matching(self):
+        """Entities shorter than 2 chars are skipped (avoid false substring match)."""
+        result = evaluate_package_consistency(
+            topic="test",
+            script="test",
+            thumbnail_text="A Ruben News",
+            caption="test",
+            story_mode="roundup",
+            main_entities=["A", "Ruben", "Ayu", "Betrand"],
+        )
+        # "A" (1 char) is skipped, so only Ruben matches → single match → fail
+        assert result.status == "fail"
+
+    def test_unknown_story_mode_returns_pass(self):
+        """Unknown story_mode returns pass without checking."""
+        result = evaluate_package_consistency(
+            topic="test",
+            script="test",
+            thumbnail_text="Single Entity Only",
+            caption="test",
+            story_mode="unknown_mode",
+            main_entities=["Ruben", "Ayu", "Betrand"],
+        )
+        assert result.status == "pass"
+
+    def test_roundup_with_few_entities_returns_pass(self):
+        """Roundup with fewer than 3 entities passes (not enough to require broad scope)."""
+        result = evaluate_package_consistency(
+            topic="test",
+            script="test",
+            thumbnail_text="Only Ruben Here",
+            caption="test",
+            story_mode="roundup",
+            main_entities=["Ruben", "Ayu"],
+        )
+        assert result.status == "pass"
