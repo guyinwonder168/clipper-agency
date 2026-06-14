@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Phase 26: Production Correctness + Canonical Timeline
+
+Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing ADR 0020 canonical timeline, and introducing pre-VD asset qualification. Version stays 2.3.0 until PR 8 (release gate). See `docs/plans/2026-06-15-phase26-production-correctness-asset-qualification.md`.
+
+#### Batch 0 (PR #50) — Job #8 Golden Regression Fixture
+- 6 frozen JSON artifacts from Job #8 in `tests/fixtures/job8/` (vd_output, composer_output, visual_coverage, manifest, narrative_structure, voice_producer_output).
+- 16 characterization tests in `tests/test_job8_regression.py` documenting 4 confirmed bugs (rejected candidates rendered, absurd durations, fade_to_black at start, missing reviewer artifact).
+- ADR 0026 — Contract Enforcement Over Rebuild.
+
+#### PR 1 (#51) — Production Correctness Hotfix
+- **Fixed:** rejected candidates no longer rendered — `_apply_best_candidate()` now replaces plan action with fallback text card when all candidates are rejected (was: original LLM action stayed).
+- **Fixed:** `fade_to_black` now fades at end of clip — template uses `{fade_out_start}` = `duration - 0.5` (was: `{start_time}` defaulting to `0.0`, fading at clip start).
+- **Fixed:** reviewer output now persisted to artifact workspace via `_persist_agent_output()` in both first-pass and repair cycle paths (was: `_run_reviewer()` returned dict, never written to disk).
+- **Verified:** freeze-detector threshold format is correct — `freezedetect=n=-30.0:d=0.1` is valid FFmpeg syntax.
+
+#### PR 2 (#52) — Canonical Beat Timeline Enforcement
+- ADR 0020 canonical timeline now enforced (was "Proposed" since Phase 18).
+- New `core/beat_timeline.py` — `build_canonical_timeline(narrative_structure, timestamps)` produces single source of truth for beat durations.
+- Visual Director and Composer now read orchestrator-built timeline instead of independently deriving durations (eliminates fragile string-matching in VD and divergent word_range logic in Composer).
+- `BeatTimelineEntry` model added to `config/schema.py`.
+- Engine builds timeline after Voice Producer, passes to VD + Composer + Reviewer in all 3 call paths (first-pass, repair, retry).
+- **Codex P2 fix:** unsupported `BeatFallback.type` values (e.g. `ken_burns_photo`) now normalized to `text_card` before action assignment — prevents `source: none` scenes.
+- AGENTS.md: Codex review gate added to git workflow (must wait for + resolve Codex review before merge).
+
+### Phase 25: Dead Code Removal (PR #49)
+
+Removed superseded `core/multimodal_provider.py` — 0 production consumers, deliberately excluded from wiring in Phase 23 plan (`multimodal_client.py` serves the same purpose and is wired into Visual Director). Eliminated 0.1% code duplication.
+
+- Deleted `core/multimodal_provider.py` + `tests/test_multimodal_provider.py`.
+- Removed import smoke-test from `test_phase23_wiring_verification.py`.
+- Fixed 3 stale doc references (SRS FR-62, technical_design §rendering, README core/ listing).
+- Repo hygiene: untracked `.codegraph/daemon.pid` + `.coverage`, added nested `.codegraph/.gitignore`.
+- ADR 0025 — Drop Multimodal Provider Abstraction (defer until 2nd concrete provider exists).
+
+### Phase 24: Composer Probe Blocker Fix (PR #48)
+
+Fixed SonarCloud Reliability E Blocker (python:S930) in `composer.py:157` — `_run_empty_frame_detection` called `probe_video(video_path)` missing `allowed_base_dir` argument + treated `VideoInfo` dataclass as dict via `info.get("format", {})`. Bug masked by `_safe_detect_empty` swallowing exceptions.
+
+- `probe_video()` now called with `allowed_base_dir=str(Path(video_path).parent)`.
+- `VideoInfo` fields accessed via attributes (`info.duration`), not dict `.get()`.
+- Reliability rating: E → A (0 blockers on new code).
+
 ## [2.3.0] — 2026-06-11
 
 ### Phase 23: Wire Unwired Modules Into Production Pipeline

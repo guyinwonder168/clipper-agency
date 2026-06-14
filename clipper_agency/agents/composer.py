@@ -425,6 +425,7 @@ class ComposerAgent(BaseAgent):
         voiceover_path = kwargs.get("voiceover_path")
         timestamps = kwargs.get("timestamps")
         narrative_structure = kwargs.get("narrative_structure")
+        beat_timeline = kwargs.get("beat_timeline")
 
         if voiceover_path and timestamps and narrative_structure:
             preflight_result = self._run_preflight(output_dir, job_id)
@@ -445,6 +446,7 @@ class ComposerAgent(BaseAgent):
                 output_dir=output_dir,
                 assets_cache=assets_cache,
                 agent_dir=agent_dir,
+                beat_timeline=beat_timeline,
             )
 
         # ── Legacy per-scene mode ──
@@ -1444,6 +1446,7 @@ class ComposerAgent(BaseAgent):
         output_dir: str,
         assets_cache: str,
         agent_dir: str,
+        beat_timeline: list | None = None,
     ) -> dict[str, Any]:
         """Execute audio-first composition pipeline.
 
@@ -1458,6 +1461,7 @@ class ComposerAgent(BaseAgent):
                 job_id, voiceover_path, timestamps,
                 narrative_structure, assets,
                 video_path, thumbnail_path, assets_cache, agent_dir,
+                beat_timeline=beat_timeline,
             )
         except subprocess.CalledProcessError as e:
             return self._handle_ffmpeg_error(e, video_path, agent_dir)
@@ -1481,11 +1485,16 @@ class ComposerAgent(BaseAgent):
         thumbnail_path: str,
         assets_cache: str,
         agent_dir: str,
+        beat_timeline: list | None = None,
     ) -> dict[str, Any]:
         """Attempt audio-first assembly. Raises on FFmpeg or unexpected errors."""
-        beat_durations = self._compute_beat_durations(
-            narrative_structure, timestamps,
-        )
+        if beat_timeline:
+            from clipper_agency.core.beat_timeline import timeline_to_duration_list
+            beat_durations = timeline_to_duration_list(beat_timeline)
+        else:
+            beat_durations = self._compute_beat_durations(
+                narrative_structure, timestamps,
+            )
 
         temp_dir = Path(tempfile.mkdtemp(prefix="composer_af_"))
         trimmed_clips: list[str] = []

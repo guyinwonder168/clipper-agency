@@ -355,6 +355,19 @@ class WordTimestamp(BaseModel):
     end: float
 
 
+class BeatTimelineEntry(BaseModel):
+    """Canonical beat timeline entry — single source of truth for beat timing.
+
+    Built once by the orchestrator after Voice Producer completes, consumed
+    by Visual Director, Composer, and Reviewer (ADR 0020).
+    """
+
+    beat_id: int
+    start_sec: float
+    end_sec: float
+    duration_sec: float
+
+
 class VoiceoverOutput(BaseModel):
     """Output contract for the Voice Producer's single continuous voiceover."""
 

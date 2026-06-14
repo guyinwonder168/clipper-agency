@@ -74,17 +74,17 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 
 > **Numbering note:** "PR 1"–"PR 8" below are **logical phase-internal step numbers**, not GitHub PR numbers. The actual GitHub PRs are sequential repo-wide (Batch 0 = #50, Step 1 ≈ #51, Step 2 ≈ #52, …). Branch names use the step number; the GitHub PR title/body will reference the real `#NN`.
 
-| Priority | Step | Title | Branch | Risk | Version after merge |
-|----------|------|-------|--------|------|---------------------|
-| **P0** | Batch 0 | Freeze Job #8 golden regression fixture | `phase/26-batch0-job8-fixture` | Low | v2.3.0 |
-| **P0** | 1 | Job #8 production correctness hotfix | `phase/26-pr1-hotfix` | Low | v2.3.0 |
-| **P1** | 2 | Canonical beat timeline enforcement | `phase/26-pr2-canonical-timeline` | Medium | v2.3.0 |
-| **P1** | 3 | Deterministic failure-to-repair integration | `phase/26-pr3-repair-integration` | Medium | v2.3.0 |
-| **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | v2.3.0 |
-| **P2** | 5 | Pre-VD asset qualification boundary | `phase/26-pr5-pre-vd-qualification` | **High** | v2.3.0 |
-| **P2** | 6 | Source transcript + clip-window selector | `phase/26-pr6-clip-window` | Medium | v2.3.0 |
-| **P2** | 7 | Visual Director multi-shot planning | `phase/26-pr7-multishot-vd` | Medium | v2.3.0 |
-| **P3** | 8 | Release gate + golden-set validation | `phase/26-pr8-release-gate` | Low | **v2.4.0** (bump here) |
+| Priority | Step | Title | Branch | Risk | Status | Version after merge |
+|----------|------|-------|--------|------|-------|---------------------|
+| **P0** | Batch 0 | Freeze Job #8 golden regression fixture | `phase/26-batch0-job8-fixture` | Low | ✅ MERGED (#50, f16e86e) | v2.3.0 |
+| **P0** | 1 | Job #8 production correctness hotfix | `phase/26-pr1-hotfix` | Low | ✅ MERGED (#51, b0e3deb) | v2.3.0 |
+| **P1** | 2 | Canonical beat timeline enforcement | `phase/26-pr2-canonical-timeline` | Medium | ✅ IMPLEMENTED (PR #52) | v2.3.0 |
+| **P1** | 3 | Deterministic failure-to-repair integration | `phase/26-pr3-repair-integration` | Medium | ⬜ Pending | v2.3.0 |
+| **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | ⬜ Pending | v2.3.0 |
+| **P2** | 5 | Pre-VD asset qualification boundary | `phase/26-pr5-pre-vd-qualification` | **High** | ⬜ Pending | v2.3.0 |
+| **P2** | 6 | Source transcript + clip-window selector | `phase/26-pr6-clip-window` | Medium | ⬜ Pending | v2.3.0 |
+| **P2** | 7 | Visual Director multi-shot planning | `phase/26-pr7-multishot-vd` | Medium | ⬜ Pending | v2.3.0 |
+| **P3** | 8 | Release gate + golden-set validation | `phase/26-pr8-release-gate` | Low | ⬜ Pending | **v2.4.0** (bump here) |
 
 **Version bump rule:** v2.3.0 is frozen across steps 1–7. Step 8 is the release PR that bumps to v2.4.0 in the same commit that passes the golden-set validation. No intermediate version bumps.
 
