@@ -446,6 +446,7 @@ class Orchestrator:
             word_timestamps=voice_output.get("timestamps", []),
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
             diagnostics=compose_output.get("diagnostics", {}),
+            beat_timeline=beat_timeline,
         )
         # Persist reviewer output for debugging in repair cycles too.
         self._persist_agent_output(assets_cache, job_id, "reviewer", after_review)
@@ -1179,6 +1180,12 @@ class Orchestrator:
         vo = voice_output or {}
         mark_agent_running(conn, job_id, "reviewer")
         rp = research_output or {}
+        # Build canonical timeline for reviewer (ADR 0020)
+        from clipper_agency.core.beat_timeline import build_canonical_timeline
+        beat_timeline = build_canonical_timeline(
+            script_output.get("narrative_structure", []),
+            vo.get("timestamps", []),
+        )
         review_output = self._run_reviewer(
             job_id=job_id, topic=topic,
             script=script_output.get("script", []),
@@ -1192,6 +1199,7 @@ class Orchestrator:
             word_timestamps=vo.get("timestamps", []),
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
             diagnostics=compose_output.get("diagnostics", {}),
+            beat_timeline=beat_timeline,
         )
         # Persist reviewer output for debugging (deterministic gate results,
         # scores, and verdicts must be on disk even when gates hard-fail).

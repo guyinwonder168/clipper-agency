@@ -485,6 +485,7 @@ class ReviewerAgent(BaseAgent):
         story_beats: list[dict] | None,
         word_timestamps: list[dict] | None,
         audio_duration_sec: float,
+        beat_timeline: list | None = None,
     ) -> list[SceneSemanticReview]:
         """Run programmatic timestamp-level semantic review using scene-beat mapping.
 
@@ -495,11 +496,20 @@ class ReviewerAgent(BaseAgent):
         scenes = rendered_scene_manifest.get("entries", [])
         if not scenes:
             return []
+        # Use canonical timeline ranges when available (ADR 0020)
+        beat_time_ranges = None
+        if beat_timeline:
+            beat_time_ranges = [
+                (e["start_sec"], e["end_sec"]) if isinstance(e, dict)
+                else (e.start_sec, e.end_sec)
+                for e in beat_timeline
+            ]
         mappings = map_scenes_to_beats(
             manifest_entries=scenes,
             story_beats=story_beats,
             word_timestamps=word_timestamps or [],
             audio_duration_sec=audio_duration_sec,
+            beat_time_ranges=beat_time_ranges,
         )
         return _run_programmatic_scene_reviews(mappings)
 
@@ -520,6 +530,7 @@ class ReviewerAgent(BaseAgent):
             "unverified_claims", "visual_plan_actions", "story_mode_decision",
             "thumbnail_text", "main_entities",
             "story_beats", "word_timestamps", "rendered_scene_manifest",
+            "beat_timeline",
         )
         for key in _legacy_keys:
             if key in kwargs and key not in ctx:
@@ -572,6 +583,7 @@ class ReviewerAgent(BaseAgent):
         scene_reviews = self._run_timestamp_semantic_review(
             rendered_scene_manifest, story_beats, word_timestamps,
             audio_duration_sec,
+            beat_timeline=ctx.get("beat_timeline"),
         )
 
         gate_result = (
