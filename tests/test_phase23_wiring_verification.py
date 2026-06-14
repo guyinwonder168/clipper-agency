@@ -310,12 +310,10 @@ class TestAllWiredModulesImportable:
         assert clipper_agency.core.final_layout_inspection is not None
 
     def test_observability_modules_importable(self):
-        """LLM trace and multimodal modules import cleanly."""
+        """LLM trace modules import cleanly."""
         import clipper_agency.observability.llm_trace
-        import clipper_agency.core.multimodal_provider
 
         assert clipper_agency.observability.llm_trace is not None
-        assert clipper_agency.core.multimodal_provider is not None
 
 
 # ──────────────────────────────────────────────────────────────

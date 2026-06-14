@@ -1036,7 +1036,7 @@ Score is combined with quality tier for final candidate ranking.
 
 ### Multimodal Candidate Inspection (Batch 4)
 
-**MultimodalInspectionClient**: wraps `OpenRouterMultimodalProvider` with inspection prompt construction and structured response parsing. Inspects asset candidates for:
+**MultimodalInspectionClient**: wraps `OpenRouterClient` with inspection prompt construction and structured response parsing. Inspects asset candidates for:
 - Relevance to topic
 - Caption/overlay readability  
 - Face quality (visible, centered)
