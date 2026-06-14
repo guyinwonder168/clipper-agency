@@ -2108,3 +2108,63 @@ class MockVisualCoverageResult:
             coverage_ratio=1.0,
             issues=[],
         )
+
+
+class TestEmptyFrameDetectionProbeContract:
+    """Regression for SonarCloud blocker python:S930 (Reliability E on master).
+
+    ``_run_empty_frame_detection`` must honour the ``probe_video`` two-argument
+    contract (``path`` + ``allowed_base_dir``) and read the duration from the
+    ``VideoInfo`` dataclass field — not treat the return value as a raw dict.
+    """
+
+    def test_probe_video_called_with_path_and_allowed_base_dir(
+        self, tmp_path, mocker,
+    ):
+        """probe_video receives (video_path, parent_dir) and duration via .duration."""
+        from clipper_agency.agents.composer import _run_empty_frame_detection
+        from clipper_agency.core.media_probe import VideoInfo
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"x" * 2048)
+
+        fake_info = VideoInfo(
+            path=str(video),
+            width=1080,
+            height=1920,
+            codec="h264",
+            pix_fmt="yuv420p",
+            duration=3.0,
+        )
+        probe_spy = mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=fake_info,
+        )
+        # No real ffmpeg: frame extraction yields nothing → detect_empty_segments([]) → []
+        mocker.patch(
+            "clipper_agency.core.frame_extractor.extract_frames",
+            return_value=[],
+        )
+
+        result = _run_empty_frame_detection(str(video))
+
+        # Bug #1 (S930): both path and allowed_base_dir must be passed.
+        probe_spy.assert_called_once_with(str(video), str(tmp_path))
+        # Bug #2: duration read from VideoInfo.duration; function returns a list.
+        assert isinstance(result, list)
+
+    def test_probe_video_returning_none_yields_empty_list(
+        self, tmp_path, mocker,
+    ):
+        """When probe_video returns None (missing/unreadable file), return []."""
+        from clipper_agency.agents.composer import _run_empty_frame_detection
+
+        video = tmp_path / "missing.mp4"
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=None,
+        )
+
+        result = _run_empty_frame_detection(str(video))
+
+        assert result == []

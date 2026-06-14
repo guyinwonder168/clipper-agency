@@ -154,10 +154,10 @@ def _run_empty_frame_detection(video_path: str) -> list[tuple[float, float]]:
     from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
     from PIL import Image as PILImage
 
-    info = probe_video(video_path)
-    duration = float(info.get("format", {}).get("duration", 0))
-    if duration <= 0:
+    info = probe_video(video_path, str(Path(video_path).parent))
+    if info is None or info.duration is None or info.duration <= 0:
         return []
+    duration = float(info.duration)
 
     # Sample 1 frame per second (up to 60s → 60 frames)
     timestamps = [float(t) for t in range(min(int(duration), 60))]
