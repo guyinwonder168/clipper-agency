@@ -172,7 +172,7 @@ class TestInspectCandidatesFallbackAllRejected:
     @patch(
         "clipper_agency.agents.visual_director.store",
     )
-    def test_preserves_original_action(
+    def test_uses_fallback_when_all_rejected(
         self,
         mock_store: MagicMock,
         mock_lookup: MagicMock,
@@ -190,9 +190,9 @@ class TestInspectCandidatesFallbackAllRejected:
                 plan, [beat], 1, "/tmp/agent_dir",
             )
 
-        # Original action should remain since all candidates rejected
+        # Fallback should replace original action since all candidates rejected
         assert updated_plan[0]["action"]["type"] == "text_card"
-        assert updated_plan[0]["action"]["headline"] == "Original"
+        assert updated_plan[0]["action"]["headline"] == "Fallback"
         assert len(inspections) == 1
 
 

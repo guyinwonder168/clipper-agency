@@ -72,8 +72,10 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 
 ## 2. Priority Ordering & Version Strategy
 
-| Priority | PR | Title | Branch | Risk | Version after merge |
-|----------|-----|-------|--------|------|---------------------|
+> **Numbering note:** "PR 1"–"PR 8" below are **logical phase-internal step numbers**, not GitHub PR numbers. The actual GitHub PRs are sequential repo-wide (Batch 0 = #50, Step 1 ≈ #51, Step 2 ≈ #52, …). Branch names use the step number; the GitHub PR title/body will reference the real `#NN`.
+
+| Priority | Step | Title | Branch | Risk | Version after merge |
+|----------|------|-------|--------|------|---------------------|
 | **P0** | Batch 0 | Freeze Job #8 golden regression fixture | `phase/26-batch0-job8-fixture` | Low | v2.3.0 |
 | **P0** | 1 | Job #8 production correctness hotfix | `phase/26-pr1-hotfix` | Low | v2.3.0 |
 | **P1** | 2 | Canonical beat timeline enforcement | `phase/26-pr2-canonical-timeline` | Medium | v2.3.0 |
@@ -84,15 +86,15 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 | **P2** | 7 | Visual Director multi-shot planning | `phase/26-pr7-multishot-vd` | Medium | v2.3.0 |
 | **P3** | 8 | Release gate + golden-set validation | `phase/26-pr8-release-gate` | Low | **v2.4.0** (bump here) |
 
-**Version bump rule:** v2.3.0 is frozen across PRs 1–7. PR 8 is the release PR that bumps to v2.4.0 in the same commit that passes the golden-set validation. No intermediate version bumps.
+**Version bump rule:** v2.3.0 is frozen across steps 1–7. Step 8 is the release PR that bumps to v2.4.0 in the same commit that passes the golden-set validation. No intermediate version bumps.
 
 ---
 
 ## 3. PR Detail
 
-### Batch 0 — Freeze Job #8 Golden Regression Fixture (P0, prerequisite)
+### Batch 0 — Freeze Job #8 Golden Regression Fixture (P0, prerequisite) ✅ MERGED (PR #50)
 
-**Branch:** `phase/26-batch0-job8-fixture`
+**Branch:** `phase/26-batch0-job8-fixture` — merged commit `f16e86e`
 **Scope:** Capture Job #8's confirmed failure as a characterization test. **No production code changes.** This is a prerequisite for PR 1 — it pins the broken behavior before any fix lands, so every subsequent fix is verifiable.
 
 **Source artifacts (exist on disk at `data/assets/cache/job_8/` and `data/outputs/job_8/`):**
@@ -152,12 +154,12 @@ These tests assert the **current broken behavior** — they PASS on master today
 
 ---
 
-### PR 1 — Job #8 Production Correctness Hotfix (P0)
+### PR 1 — Job #8 Production Correctness Hotfix (P0) ✅ IMPLEMENTED
 
 **Branch:** `phase/26-pr1-hotfix`
 **Scope:** Fix only confirmed runtime defects. No architecture changes.
 
-**Fixes:**
+**Fixes applied:**
 
 1. **Candidate rejection enforcement** (`visual_director.py:997`)
    - When `select_best_candidate` returns `None` (all rejected), clear the original `plan_item["action"]` and replace with fallback text card.

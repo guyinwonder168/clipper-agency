@@ -1000,7 +1000,12 @@ class VisualDirectorAgent(BaseAgent):
         beat: StoryBeat,
         candidates: list[dict],
     ) -> None:
-        """Rank candidates and replace plan action with best one if accepted."""
+        """Rank candidates and replace plan action with best one if accepted.
+
+        When all candidates are rejected (or only fallback accepted), the
+        original LLM-planned action is replaced with the beat's fallback so
+        that a rejected asset is never rendered.
+        """
         if not candidates:
             return
         beat_dict = {"beat_id": beat.beat_id}
@@ -1013,6 +1018,15 @@ class VisualDirectorAgent(BaseAgent):
             if matched:
                 cand = matched.get("candidate")
                 plan_item["action"] = self._candidate_to_action(cand, beat)
+                return
+        # All candidates rejected → use fallback text card, not the original
+        # LLM action which references a now-rejected asset.
+        fallback = plan_item.get("fallback")
+        plan_item["action"] = dict(fallback) if fallback else {
+            "type": "text_card",
+            "headline": (beat.overlay_text or f"Beat {beat.beat_id}")[:60],
+            "style": "news_card",
+        }
 
     @staticmethod
     def _candidate_to_action(candidate: Any, beat: StoryBeat) -> dict:

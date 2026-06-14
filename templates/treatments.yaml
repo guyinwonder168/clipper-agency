@@ -64,7 +64,7 @@ treatments:
     target_fps: 30
     default_duration: null
     input_type: video
-    ffmpeg_filter: "fade=t=out:st={start_time}:d=0.5"
+    ffmpeg_filter: "fade=t=out:st={fade_out_start}:d=0.5"
 
 transitions:
   crossfade:

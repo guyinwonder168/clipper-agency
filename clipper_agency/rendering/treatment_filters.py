@@ -16,13 +16,12 @@ class TreatmentFilterBuilder:
     def __init__(self, config: TreatmentConfig) -> None:
         self._config = config
 
-    def build(self, asset: dict, start_time: float = 0.0) -> str:
+    def build(self, asset: dict) -> str:
         """Build FFmpeg filter string for one scene's treatment.
 
         Args:
             asset: Dict with keys like "treatment", "target_duration",
                    "headline", "type".
-            start_time: Cumulative offset for time-based filters.
 
         Returns:
             FFmpeg filter string, or "null" for no treatment.
@@ -43,7 +42,7 @@ class TreatmentFilterBuilder:
         filter_str = filter_str.replace("{frames}", str(int(duration * fps)))
         filter_str = filter_str.replace("{text}", text)
         filter_str = filter_str.replace("{duration}", str(duration))
-        filter_str = filter_str.replace("{start_time}", str(start_time))
+        filter_str = filter_str.replace("{fade_out_start}", str(max(0.0, duration - 0.5)))
 
         input_type = asset.get("type", treatment.input_type)
 

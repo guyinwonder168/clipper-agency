@@ -75,23 +75,23 @@ class TestDurationSubstitution:
             "target_duration": 5.0,
             "type": "video",
         }
-        result = builder.build(asset, start_time=4.0)
+        result = builder.build(asset)
         # fade_to_black doesn't use {duration}, but let's test it with a
         # treatment that could. We verify the substitution didn't leave the
         # placeholder in any case.
         assert "{duration}" not in result
 
 
-class TestStartTimeSubstitution:
-    def test_start_time_replaced_correctly(self, builder: TreatmentFilterBuilder) -> None:
-        """{start_time} is replaced with the cumulative offset."""
+class TestFadeOutStartSubstitution:
+    def test_fade_out_start_is_duration_minus_half(self, builder: TreatmentFilterBuilder) -> None:
+        """fade_to_black st is computed as duration - 0.5 (fade in last 0.5s)."""
         asset = {
             "treatment": "fade_to_black",
             "target_duration": 5.0,
             "type": "video",
         }
-        result = builder.build(asset, start_time=4.0)
-        assert "st=4.0" in result
+        result = builder.build(asset)
+        assert "st=4.5" in result  # 5.0 - 0.5 = 4.5
 
 
 # --- Input-type rules ---
