@@ -1,0 +1,9 @@
+{
+  "status": "completed",
+  "video_path": "data/outputs/job_8/video.mp4",
+  "thumbnail_path": "data/outputs/job_8/thumbnail.png",
+  "card_fallback_scenes": [],
+  "mode": "audio_first",
+  "scene_count": 8,
+  "output_duration_sec": 34.902
+}

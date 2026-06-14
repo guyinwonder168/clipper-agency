@@ -1,0 +1,117 @@
+{
+  "job_id": 8,
+  "topic": "berita hot gossip artist indonesia terbaru",
+  "assets_cache": "data/assets/cache",
+  "output_dir": "data/outputs",
+  "config_snapshot": {
+    "topic": "berita hot gossip artist indonesia terbaru",
+    "niche": "indonesian_artists",
+    "output_dir": "data/outputs",
+    "assets_cache": "data/assets/cache",
+    "niche_ctx": {
+      "safety_rules": [
+        "no_defamation",
+        "mark_rumors_as_unconfirmed",
+        "soft_wording_for_unverified"
+      ],
+      "channel_description": "a Indonesian trending artist update casual TikTok channel",
+      "language": "Indonesian",
+      "tone": "casual TikTok",
+      "content_angle": "trending artist update"
+    }
+  },
+  "created_at": "2026-06-10T18:02:02.695015+00:00",
+  "agents": {
+    "safety": {
+      "status": "completed",
+      "input": "",
+      "output": "",
+      "completed_at": "2026-06-10T18:02:04.297788+00:00"
+    },
+    "segment_producer": {
+      "status": "completed",
+      "input": "",
+      "output": "",
+      "completed_at": "2026-06-10T18:02:48.853658+00:00"
+    },
+    "scriptwriter": {
+      "status": "completed",
+      "input": "",
+      "output": "",
+      "completed_at": "2026-06-10T18:03:06.855589+00:00"
+    },
+    "voice_producer": {
+      "status": "completed",
+      "input": "",
+      "output": "",
+      "completed_at": "2026-06-10T18:03:26.352854+00:00"
+    },
+    "visual_director": {
+      "status": "completed",
+      "input": "",
+      "output": "",
+      "completed_at": "2026-06-10T18:04:07.083642+00:00"
+    },
+    "composer": {
+      "status": "completed",
+      "input": "",
+      "output": "",
+      "completed_at": "2026-06-10T18:06:12.248936+00:00"
+    },
+    "reviewer": {
+      "status": "completed",
+      "input": "",
+      "output": "",
+      "completed_at": "2026-06-10T18:06:12.427394+00:00"
+    }
+  },
+  "gates": {
+    "G2_cost_estimate": {
+      "passed": true,
+      "severity": "pass",
+      "file": "data/assets/cache/job_8/gates/G2_cost_estimate.json"
+    },
+    "G3_research_cache": {
+      "passed": false,
+      "severity": "hard_fail",
+      "file": "data/assets/cache/job_8/gates/G3_research_cache.json"
+    },
+    "G4_post_research_risk": {
+      "passed": true,
+      "severity": "pass",
+      "file": "data/assets/cache/job_8/gates/G4_post_research_risk.json"
+    },
+    "G5_source_quality": {
+      "passed": true,
+      "severity": "pass",
+      "file": "data/assets/cache/job_8/gates/G5_source_quality.json"
+    },
+    "G6_creative_memory": {
+      "passed": false,
+      "severity": "hard_fail",
+      "file": "data/assets/cache/job_8/gates/G6_creative_memory.json"
+    },
+    "G7_script_validation": {
+      "passed": false,
+      "severity": "hard_fail",
+      "file": "data/assets/cache/job_8/gates/G7_script_validation.json"
+    },
+    "G8_audio_validation": {
+      "passed": true,
+      "severity": "pass",
+      "file": "data/assets/cache/job_8/gates/G8_audio_validation.json"
+    },
+    "G9_asset_validation": {
+      "passed": true,
+      "severity": "pass",
+      "file": "data/assets/cache/job_8/gates/G9_asset_validation.json"
+    },
+    "G10_video_validation": {
+      "passed": true,
+      "severity": "pass",
+      "file": "data/assets/cache/job_8/gates/G10_video_validation.json"
+    }
+  },
+  "final_outputs": {},
+  "updated_at": "2026-06-10T18:06:12.427421+00:00"
+}
