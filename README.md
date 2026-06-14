@@ -154,7 +154,7 @@ clipper_agency/
 │   ├── duration_budget.py, package_consistency.py, semantic_visual_review.py
 │   ├── rendered_scene_manifest.py, reviewer_context.py
 │   ├── frame_extractor.py, frame_hash.py, frame_inspection_pipeline.py
-│   ├── multimodal_provider.py, inspection_cache.py, candidate_semantic_ranker.py
+│   ├── inspection_cache.py, candidate_semantic_ranker.py
 │   ├── ocr_adapter.py, face_adapter.py, source_cleanliness.py
 │   ├── final_layout_inspection.py, generated_text_manifest.py
 │   ├── repair_router.py, repair_metrics.py
