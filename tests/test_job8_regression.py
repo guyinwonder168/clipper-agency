@@ -19,9 +19,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from clipper_agency.agents.visual_director import VisualDirectorAgent
 from clipper_agency.rendering.treatment_config import TreatmentConfig
 from clipper_agency.rendering.treatment_filters import TreatmentFilterBuilder
 
@@ -34,38 +36,75 @@ def _load(name: str) -> Any:
     return json.loads((FIXTURE_DIR / name).read_text())
 
 
+def _make_beat(beat_id: int = 1, overlay_text: str = "Opening Hook") -> MagicMock:
+    """Create a minimal beat mock for _apply_best_candidate tests."""
+    beat = MagicMock()
+    beat.beat_id = beat_id
+    beat.overlay_text = overlay_text
+    return beat
+
+
 # ---------------------------------------------------------------------------
 # Bug 1: Rejected candidates remain rendered in the visual plan
 #
-# Root cause: visual_director.py _apply_best_candidate only updates
-# plan_item["action"] when best.decision == "accept". Rejected beats keep
-# their original LLM-assigned action and still get rendered.
+# Root cause: visual_director.py _apply_best_candidate only updated
+# plan_item["action"] when best.decision == "accept". Rejected beats kept
+# their original LLM-assigned action and still got rendered.
+#
+# FIX (PR 1): Added else branch — rejected → use plan_item["fallback"]
+# or construct minimal text_card.
+#
+# Tests below exercise _apply_best_candidate directly (converted from
+# fixture-based characterization per code review).
 # ---------------------------------------------------------------------------
 
 
-class TestBug1RejectedCandidatesStillRendered:
-    """CHARACTERIZATION: rejected inspection decisions are ignored — assets remain."""
+class TestBug1RejectedCandidatesUseFallback:
+    """FIXED: rejected inspection decisions now trigger fallback actions."""
 
-    def test_rejected_beats_still_have_assets(self) -> None:
-        """Every beat with inspection=reject still has a rendered asset."""
-        vd_output = _load("vd_output.json")
-        assets_by_beat = {a["beat_id"]: a for a in vd_output["assets"]}
+    def test_rejected_candidates_trigger_fallback_action(self) -> None:
+        """When all candidates are rejected, action is replaced with fallback."""
+        agent = VisualDirectorAgent.__new__(VisualDirectorAgent)
+        plan_item = {
+            "action": {"type": "tiktok_clip", "source": "rejected.mp4"},
+            "fallback": {"type": "text_card", "headline": "Beat 1", "style": "news_card"},
+        }
+        beat = _make_beat(beat_id=1, overlay_text="Opening Hook")
 
-        rejected_beats = [
-            insp["beat_id"]
-            for insp in vd_output["candidate_inspections"]
-            if insp["decision"] == "reject"
-        ]
+        with patch(
+            "clipper_agency.agents.visual_director.rank_candidates",
+            return_value=[],
+        ), patch(
+            "clipper_agency.agents.visual_director.select_best_candidate",
+            return_value=None,
+        ):
+            agent._apply_best_candidate(plan_item, beat, [{"asset_id": "a1"}])
 
-        # BROKEN: rejected beats should NOT have assets, but they do
-        for beat_id in rejected_beats:
-            assert beat_id in assets_by_beat, (
-                f"Beat {beat_id} was rejected but has no asset — "
-                "this assertion will fail when Bug 1 is fixed"
-            )
+        assert plan_item["action"]["type"] == "text_card"
+        assert plan_item["action"]["headline"] == "Beat 1"
+
+    def test_no_fallback_constructs_minimal_text_card(self) -> None:
+        """Without a fallback, a minimal text_card is constructed from beat text."""
+        agent = VisualDirectorAgent.__new__(VisualDirectorAgent)
+        plan_item: dict[str, Any] = {
+            "action": {"type": "tiktok_clip", "source": "rejected.mp4"},
+        }
+        beat = _make_beat(beat_id=3, overlay_text="Reaction")
+
+        with patch(
+            "clipper_agency.agents.visual_director.rank_candidates",
+            return_value=[],
+        ), patch(
+            "clipper_agency.agents.visual_director.select_best_candidate",
+            return_value=None,
+        ):
+            agent._apply_best_candidate(plan_item, beat, [{"asset_id": "a1"}])
+
+        assert plan_item["action"]["type"] == "text_card"
+        assert plan_item["action"]["headline"] == "Reaction"
 
     def test_majority_of_beats_were_rejected(self) -> None:
-        """7 of 8 beats were rejected by inspection — the pipeline ignored all."""
+        """Historical observation: 7 of 8 Job #8 beats were rejected."""
         vd_output = _load("vd_output.json")
         inspections = vd_output["candidate_inspections"]
         rejected = [i for i in inspections if i["decision"] == "reject"]
@@ -125,43 +164,26 @@ class TestBug2AbsurdBeatDurations:
 # ---------------------------------------------------------------------------
 
 
-class TestBug3FadeToBlackStartsAtZero:
-    """CHARACTERIZATION: fade_to_black filter uses st=0.0 instead of end-of-clip."""
+class TestBug3FadeToBlackStartsAtEnd:
+    """FIXED: fade_to_black now uses st=duration-0.5 (fade in last 0.5s)."""
 
     @pytest.fixture
     def builder(self) -> TreatmentFilterBuilder:
         config = TreatmentConfig(TEMPLATES_PATH)
         return TreatmentFilterBuilder(config)
 
-    def test_fade_to_black_filter_has_st_zero(self, builder: TreatmentFilterBuilder) -> None:
-        """Building fade_to_black without start_time produces st=0.0."""
+    def test_fade_to_black_uses_duration_minus_half(self, builder: TreatmentFilterBuilder) -> None:
+        """fade_to_black st is computed as duration - 0.5."""
         asset = {
             "treatment": "fade_to_black",
             "target_duration": 5.0,
             "type": "video",
         }
 
-        # BROKEN: composer calls build(asset) without start_time
         result = builder.build(asset)
 
-        assert "st=0.0" in result, (
-            "fade_to_black filter no longer has st=0.0 — "
-            "this assertion will fail when Bug 3 is fixed"
-        )
-
-    def test_fade_to_black_filter_should_have_st_near_duration(
-        self, builder: TreatmentFilterBuilder
-    ) -> None:
-        """Contrast: if start_time were passed correctly, st would be near duration."""
-        asset = {
-            "treatment": "fade_to_black",
-            "target_duration": 5.0,
-            "type": "video",
-        }
-
-        # This is what SHOULD happen after the fix
-        result_correct = builder.build(asset, start_time=4.5)
-        assert "st=4.5" in result_correct
+        assert "st=4.5" in result  # 5.0 - 0.5 = 4.5
+        assert "st=0.0" not in result  # must NOT be at clip start
 
 
 class TestBug3BlackFramesInOutput:

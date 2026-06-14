@@ -438,6 +438,8 @@ class Orchestrator:
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
             diagnostics=compose_output.get("diagnostics", {}),
         )
+        # Persist reviewer output for debugging in repair cycles too.
+        self._persist_agent_output(assets_cache, job_id, "reviewer", after_review)
 
         # Persist repair cycle metrics
         record = compute_repair_cycle_record(
@@ -996,6 +998,16 @@ class Orchestrator:
         except (FileNotFoundError, ValueError):
             return {}
 
+    @staticmethod
+    def _persist_agent_output(
+        assets_cache: str, job_id: int, agent_name: str, output: dict,
+    ) -> None:
+        """Write an agent's output.json to the artifact workspace."""
+        from clipper_agency.core.paths import agent_output_file, ensure_agent_dir
+        from clipper_agency.core.artifacts import write_json
+        ensure_agent_dir(assets_cache, job_id, agent_name)
+        write_json(agent_output_file(assets_cache, job_id, agent_name), output)
+
     def _try_load_cached(
         self, assets_cache: str, job_id: int, agent_name: str,
     ) -> dict[str, Any]:
@@ -1158,6 +1170,9 @@ class Orchestrator:
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
             diagnostics=compose_output.get("diagnostics", {}),
         )
+        # Persist reviewer output for debugging (deterministic gate results,
+        # scores, and verdicts must be on disk even when gates hard-fail).
+        self._persist_agent_output(assets_cache, job_id, "reviewer", review_output)
         # Route repair plan if reviewer requested revisions
         repair_routing = self._handle_repair_plan(
             review_output=review_output,
