@@ -195,6 +195,36 @@ class TestInspectCandidatesFallbackAllRejected:
         assert updated_plan[0]["action"]["headline"] == "Fallback"
         assert len(inspections) == 1
 
+    @patch(
+        "clipper_agency.agents.visual_director.lookup",
+        return_value=None,
+    )
+    @patch(
+        "clipper_agency.agents.visual_director.store",
+    )
+    def test_unsupported_fallback_type_normalized_to_text_card(
+        self,
+        mock_store: MagicMock,
+        mock_lookup: MagicMock,
+    ) -> None:
+        """Fallback types not in _EXECUTABLE_ACTION_TYPES are normalized to text_card."""
+        agent = _make_agent()
+        cand = _make_candidate("tiktok_clip", "https://bad.com/clip.mp4")
+        beat = _make_beat(candidates=[cand])
+        plan = [_make_plan_item()]
+        # Override fallback with an unsupported type
+        plan[0]["fallback"] = {"type": "ken_burns_photo", "headline": "KB Photo"}
+
+        with patch.object(
+            agent, "_run_multimodal_inspection", return_value=_low_inspection(),
+        ):
+            updated_plan, _ = agent._do_inspect_and_select(
+                plan, [beat], 1, "/tmp/agent_dir",
+            )
+
+        assert updated_plan[0]["action"]["type"] == "text_card"
+        assert updated_plan[0]["action"]["headline"] == "KB Photo"
+
 
 # ---------------------------------------------------------------------------
 # 3. test_inspect_candidates_skipped_on_error

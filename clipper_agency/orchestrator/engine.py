@@ -400,10 +400,18 @@ class Orchestrator:
         compose_output = {}
         abort = None
 
+        # Build canonical timeline for repair cycle (ADR 0020)
+        from clipper_agency.core.beat_timeline import build_canonical_timeline
+        beat_timeline = build_canonical_timeline(
+            script_output.get("narrative_structure", []),
+            voice_output.get("timestamps", []),
+        )
+
         if target_agent in ("visual_director",):
             visual_output = self._run_visual_director_phase(
                 conn, job_id, topic, research_output, script_output,
                 output_dir, assets_cache, voice_output=voice_output,
+                beat_timeline=beat_timeline,
             )
             if visual_output.get("status") == "failed":
                 abort = self._fail_agent(
@@ -416,6 +424,7 @@ class Orchestrator:
             compose_output, abort = self._retry_composer_stage(
                 conn, job_id, visual_output, voice_output,
                 output_dir, assets_cache, cycle=cycle,
+                beat_timeline=beat_timeline,
             )
 
         if abort:
@@ -437,6 +446,7 @@ class Orchestrator:
             word_timestamps=voice_output.get("timestamps", []),
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
             diagnostics=compose_output.get("diagnostics", {}),
+            beat_timeline=beat_timeline,
         )
         # Persist reviewer output for debugging in repair cycles too.
         self._persist_agent_output(assets_cache, job_id, "reviewer", after_review)
@@ -728,11 +738,20 @@ class Orchestrator:
 
         Returns compose_output dict on success or a failure dict.
         """
+        # Build canonical beat timeline once (ADR 0020) — single source of
+        # truth for beat durations consumed by VD, Composer, and Reviewer.
+        from clipper_agency.core.beat_timeline import build_canonical_timeline
+        beat_timeline = build_canonical_timeline(
+            script_output.get("narrative_structure", []),
+            voice_output.get("timestamps", []),
+        )
+
         logger.info("G8: running Visual Director agent")
         visual_output = self._run_visual_director_phase(
             conn, job_id, topic, research_output, script_output,
             output_dir, assets_cache,
             voice_output=voice_output,
+            beat_timeline=beat_timeline,
         )
 
         if visual_output.get("status") == "failed":
@@ -761,6 +780,7 @@ class Orchestrator:
             voiceover_path=voice_output.get("voiceover_path", ""),
             timestamps=voice_output.get("timestamps", []),
             narrative_structure=script_output.get("narrative_structure", []),
+            beat_timeline=beat_timeline,
         )
 
         if compose_output.get("status") == "failed":
@@ -1040,6 +1060,7 @@ class Orchestrator:
         research_output: dict[str, Any], script_output: dict[str, Any],
         output_dir: str, assets_cache: str,
         voice_output: dict[str, Any] | None = None,
+        beat_timeline: list | None = None,
     ) -> dict[str, Any]:
         """Run Visual Director agent: sources → visual output → complete."""
         mark_agent_running(conn, job_id, "visual_director")
@@ -1069,6 +1090,7 @@ class Orchestrator:
             do_not_use=research_output.get("do_not_use", []),
             asset_candidates=research_output.get("asset_candidates", []),
             voiceover_duration_sec=vo.get("voiceover_duration_sec", 0.0),
+            beat_timeline=beat_timeline,
         )
         if visual_output.get("status") != "failed":
             self._complete_agent(conn, assets_cache, job_id, "visual_director")
@@ -1078,6 +1100,7 @@ class Orchestrator:
         self, conn, job_id: int, visual_output: dict[str, Any],
         voice_output: dict[str, Any], output_dir: str, assets_cache: str,
         cycle: int = 0,
+        beat_timeline: list | None = None,
     ) -> tuple[dict[str, Any], dict | None]:
         """Run composer with error handling and G10 gate enforcement.
 
@@ -1108,6 +1131,7 @@ class Orchestrator:
             voiceover_path=voice_output.get("voiceover_path", ""),
             timestamps=voice_output.get("timestamps", []),
             narrative_structure=script_output.get("narrative_structure", []),
+            beat_timeline=beat_timeline,
         )
 
         # After compose succeeds, copy output to cycle dir for _promote_to_final
@@ -1156,6 +1180,12 @@ class Orchestrator:
         vo = voice_output or {}
         mark_agent_running(conn, job_id, "reviewer")
         rp = research_output or {}
+        # Build canonical timeline for reviewer (ADR 0020)
+        from clipper_agency.core.beat_timeline import build_canonical_timeline
+        beat_timeline = build_canonical_timeline(
+            script_output.get("narrative_structure", []),
+            vo.get("timestamps", []),
+        )
         review_output = self._run_reviewer(
             job_id=job_id, topic=topic,
             script=script_output.get("script", []),
@@ -1169,6 +1199,7 @@ class Orchestrator:
             word_timestamps=vo.get("timestamps", []),
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
             diagnostics=compose_output.get("diagnostics", {}),
+            beat_timeline=beat_timeline,
         )
         # Persist reviewer output for debugging (deterministic gate results,
         # scores, and verdicts must be on disk even when gates hard-fail).
@@ -1344,11 +1375,19 @@ class Orchestrator:
                 ),
             )
 
+        # Build canonical timeline for retry (ADR 0020)
+        from clipper_agency.core.beat_timeline import build_canonical_timeline
+        beat_timeline = build_canonical_timeline(
+            script_output.get("narrative_structure", []),
+            voice_output.get("timestamps", []),
+        )
+
         if from_idx <= PIPELINE_ORDER.index("visual_director"):
             visual_output = self._run_visual_director_phase(
                 conn, job_id, topic, research_output, script_output,
                 output_dir, assets_cache,
                 voice_output=voice_output,
+                beat_timeline=beat_timeline,
             )
             if visual_output.get("status") == "failed":
                 return self._fail_agent(conn, job_id, "visual_director",
@@ -1358,6 +1397,7 @@ class Orchestrator:
             compose_output, abort = self._retry_composer_stage(
                 conn, job_id, visual_output, voice_output,
                 output_dir, assets_cache,
+                beat_timeline=beat_timeline,
             )
             if abort:
                 return abort

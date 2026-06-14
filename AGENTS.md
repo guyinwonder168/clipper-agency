@@ -69,16 +69,17 @@ Ten recurring failure patterns documented in `docs/repetitive-failure-patterns.m
 - ❌ Error string used >1x = module constant.
 
 ### Pre-PR Checklist
-Before `git push`: `.venv/bin/python3 -m pytest -m "not external and not integration" -q` (all pass); `--cov=clipper_agency --cov-report=term-missing` (≥93%). Fix uncovered spots. Wait for SonarCloud ✅ before merging.
+Before `git push`: `.venv/bin/python3 -m pytest -m "not external and not integration" -q` (all pass); `--cov=clipper_agency --cov-report=term-missing` (≥93%). Fix uncovered spots. **Update `CHANGELOG.md`** (add entry under `[Unreleased]`). **Update spec docs** (`docs/PRD.md`, `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`) if code changes affect requirements, architecture, or traceability. Wait for SonarCloud ✅ before merging.
 
 ## Git Branching & PR Workflow
 
 **Never push directly to `master`.** Every phase of work must go through a branch + PR + SonarCloud gate.
 
 ```
-                         Create     Push     Open      SonarCloud   Merge    Delete
- Phase N Start ────────► branch ──► push ──► PR ────► passes? ──► PR ────► branch
-                                    │         │         │           │
+                         Create     Push     Open      SonarCloud   Codex       Merge    Delete
+ Phase N Start ────────► branch ──► push ──► PR ────► passes? ──► resolved? ──► PR ────► branch
+                                    │         │         │           │             │
+                                    │         │         │           └─ address ───┘
                                     │         │         └─ fix ────┘
                                     │         │
                                     └─────────┘
@@ -91,6 +92,13 @@ Before `git push`: `.venv/bin/python3 -m pytest -m "not external and not integra
    git checkout -b phase/N-short-description
    ```
 2. **Implement** — TDD: tests first, code, commit incrementally. Multiple commits per phase are fine.
+   - **Update `CHANGELOG.md`** — add an entry under `[Unreleased]` describing the change (what was added/fixed/changed).
+   - **Update spec docs if affected** — if code changes affect product requirements, software requirements, architecture, or traceability, update the corresponding docs:
+     - `docs/PRD.md` — product requirements changed/added
+     - `docs/SRS.md` — functional/non-functional requirements changed/added
+     - `docs/technical_design.md` — architecture, agent roles, pipeline, or modules changed
+     - `docs/requirements_traceability.md` — new facts, edge cases, or traceability mappings
+   - These doc updates go in the **same PR** as the code changes, not after merge.
 3. **Push branch** — `git push -u origin phase/N-short-description`
 4. **Create PR** — via `gh pr create`:
    ```bash
@@ -99,19 +107,23 @@ Before `git push`: `.venv/bin/python3 -m pytest -m "not external and not integra
 5. **Wait for SonarCloud** — PR must show ✅ green from SonarCloud Quality Gate.
    - If SonarCloud fails (bugs, vulnerabilities, code smells), fix issues on the branch, push again, and wait for re-check.
    - **Do NOT merge until SonarCloud passes.**
-6. **Merge** — **without squashing** (retain commit history):
+6. **Wait for Codex review** — check PR for Codex (ChatGPT) review comments.
+   - If Codex review has NOT started yet (no comments posted), **wait** — do not merge until Codex has reviewed.
+   - If Codex posted comments, evaluate each one (P0/P1 must fix, P2 should fix, P3 optional). Address or push back with reasoning.
+   - **Do NOT merge until all Codex comments are resolved** (fixed or acknowledged with a reply).
+7. **Merge** — **without squashing** (retain commit history):
    ```bash
    gh pr merge phase/N-short-description --merge
    ```
    - Never squash or rebase-merge. Use `--merge` (true merge commit).
-7. **Delete branch** — after merge succeeds:
+8. **Delete branch** — after merge succeeds:
    ```bash
    git branch -d phase/N-short-description           # local
    git push origin --delete phase/N-short-description  # remote
    git checkout master && git pull origin master
    ```
-8. **Update docs** — update `AGENTS.md` (Repository State) and the plan document to reflect the completed phase.
-9. **Start next phase** — create new branch from updated master.
+9. **Update docs** — update `AGENTS.md` (Repository State) and the plan document to reflect the completed phase.
+10. **Start next phase** — create new branch from updated master.
 
 ### Commit Message Convention
 
@@ -136,6 +148,8 @@ phase/3-services        phase/7-dashboard         phase/11-logging-model-config
 
 - ❌ NEVER push directly to `master`.
 - ❌ NEVER merge a PR before SonarCloud passes.
+- ❌ NEVER merge a PR before Codex review is resolved (wait if not started yet).
+- ❌ NEVER merge a PR without updating `CHANGELOG.md`.
 - ❌ NEVER squash or rebase-merge — always use `--merge` (true merge commit).
 - ✅ Always delete the feature branch after successful merge.
 - ✅ Always pull master after deleting branch to stay in sync.
@@ -223,15 +237,7 @@ Content rules (language, tone, platform) are **data-driven, not hardcoded**:
 - Templates: `templates/*.yaml`
 - Changing niche or template should never require code changes.
 
-## graphify
+## Codegraph MCP
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
-
-When the user types `/graphify`, invoke the `skill` tool with `skill: "graphify"` before doing anything else.
-
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+use Codegraph MCP to understand code base better.
+- If possible use Codegraph compare to Grep the file directly

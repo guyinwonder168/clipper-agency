@@ -76,3 +76,89 @@ def test_cache_not_refreshed_when_fresh(tmp_path, monkeypatch):
         refresh_model_cache(force=False)
         # httpx.Client should NOT be instantiated for fresh cache
         mock_client_cls.assert_not_called()
+
+
+def test_get_model_metadata_returns_none_when_cache_unavailable(tmp_path, monkeypatch):
+    """get_model_metadata returns None when cache file can't be loaded."""
+    from clipper_agency.config import model_cache
+
+    # Cache file doesn't exist and refresh fails silently
+    cache_file = tmp_path / "model_cache.json"
+    monkeypatch.setattr(model_cache, "_CACHE_PATH", cache_file)
+    monkeypatch.setattr(model_cache, "_load_cache", lambda: None)
+
+    assert model_cache.get_model_metadata("any-model") is None
+
+
+def test_refresh_model_cache_handles_network_failure(tmp_path, monkeypatch):
+    """refresh_model_cache logs warning and returns on network error."""
+    from clipper_agency.config.model_cache import refresh_model_cache
+
+    cache_file = tmp_path / "model_cache.json"
+    monkeypatch.setattr("clipper_agency.config.model_cache._CACHE_PATH", cache_file)
+
+    with patch("httpx.Client") as mock_client_cls:
+        mock_client_cls.side_effect = OSError("connection refused")
+        # Should not raise
+        refresh_model_cache(force=True)
+
+    assert not cache_file.exists()
+
+
+def test_load_cache_triggers_refresh_when_missing(tmp_path, monkeypatch):
+    """_load_cache calls refresh_model_cache when cache file doesn't exist."""
+    from clipper_agency.config import model_cache
+
+    cache_file = tmp_path / "model_cache.json"
+    monkeypatch.setattr(model_cache, "_CACHE_PATH", cache_file)
+
+    refresh_called = []
+    monkeypatch.setattr(model_cache, "refresh_model_cache",
+                        lambda force=False: refresh_called.append(True))
+
+    model_cache._load_cache()
+    assert len(refresh_called) == 1
+
+
+def test_load_cache_returns_none_when_refresh_fails(tmp_path, monkeypatch):
+    """_load_cache returns None when refresh doesn't create the file."""
+    from clipper_agency.config import model_cache
+
+    cache_file = tmp_path / "model_cache.json"
+    monkeypatch.setattr(model_cache, "_CACHE_PATH", cache_file)
+    # refresh_model_cache is a no-op (simulating network failure)
+    monkeypatch.setattr(model_cache, "refresh_model_cache", lambda force=False: None)
+
+    assert model_cache._load_cache() is None
+
+
+def test_load_cache_returns_none_on_corrupted_json(tmp_path, monkeypatch):
+    """_load_cache returns None when cache file has invalid JSON."""
+    from clipper_agency.config import model_cache
+
+    cache_file = tmp_path / "model_cache.json"
+    cache_file.write_text("{invalid json content")
+    monkeypatch.setattr(model_cache, "_CACHE_PATH", cache_file)
+
+    assert model_cache._load_cache() is None
+
+
+def test_cache_is_fresh_returns_false_when_missing(tmp_path, monkeypatch):
+    """_cache_is_fresh returns False when cache file doesn't exist."""
+    from clipper_agency.config.model_cache import _cache_is_fresh
+
+    cache_file = tmp_path / "model_cache.json"
+    monkeypatch.setattr("clipper_agency.config.model_cache._CACHE_PATH", cache_file)
+
+    assert _cache_is_fresh() is False
+
+
+def test_cache_is_fresh_returns_false_on_corrupted_json(tmp_path, monkeypatch):
+    """_cache_is_fresh returns False when cache file has invalid JSON."""
+    from clipper_agency.config.model_cache import _cache_is_fresh
+
+    cache_file = tmp_path / "model_cache.json"
+    cache_file.write_text("not json at all")
+    monkeypatch.setattr("clipper_agency.config.model_cache._CACHE_PATH", cache_file)
+
+    assert _cache_is_fresh() is False

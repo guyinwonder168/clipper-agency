@@ -41,6 +41,11 @@ _PRIORITY_TEXT_CARD = "text_card"
 _PRIORITY_STOCK = "stock"
 _PUNCTUATION_CHARS = ".,!?;:"
 
+# Action types handled by _execute_action — used to normalize fallback types.
+_EXECUTABLE_ACTION_TYPES = frozenset({
+    "tiktok_clip", "pexels_video", "pexels_image", "text_card",
+})
+
 
 # ---------------------------------------------------------------------------
 # Config-gating helpers for OCR and face detection
@@ -94,6 +99,7 @@ class VisualDirectorAgent(BaseAgent):
         timestamps = kwargs.get("timestamps")
         do_not_use = kwargs.get("do_not_use", [])
         voiceover_duration_sec = kwargs.get("voiceover_duration_sec", 0.0)
+        beat_timeline = kwargs.get("beat_timeline")
 
         # Detect beat-driven path: story_beats and timestamps present
         beat_driven = bool(story_beats) and bool(timestamps)
@@ -138,6 +144,7 @@ class VisualDirectorAgent(BaseAgent):
                     output_dir=output_dir,
                     agent_dir=agent_dir,
                     topic=topic,
+                    beat_timeline=beat_timeline,
                 )
                 pexels_videos: list[dict] = []
             elif research_contract_path:
@@ -216,12 +223,17 @@ class VisualDirectorAgent(BaseAgent):
         output_dir: str,
         agent_dir: str,
         topic: str = "",
+        beat_timeline: list | None = None,
     ) -> tuple[list[dict], list[dict]]:
         """Beat-driven planning aligned to audio timeline. Returns (plan, assets)."""
         parsed_beats = [StoryBeat(**b) for b in story_beats]
         parsed_ts = [WordTimestamp(**t) for t in timestamps]
 
-        beat_durations = self._calculate_beat_durations(parsed_beats, parsed_ts)
+        if beat_timeline:
+            from clipper_agency.core.beat_timeline import timeline_to_duration_map
+            beat_durations = timeline_to_duration_map(beat_timeline)
+        else:
+            beat_durations = self._calculate_beat_durations(parsed_beats, parsed_ts)
 
         scenes_dir = (
             f"{agent_dir}/scenes"
@@ -1021,12 +1033,22 @@ class VisualDirectorAgent(BaseAgent):
                 return
         # All candidates rejected → use fallback text card, not the original
         # LLM action which references a now-rejected asset.
+        # All candidates rejected → use fallback, not the original LLM action
+        # which references a now-rejected asset.
         fallback = plan_item.get("fallback")
-        plan_item["action"] = dict(fallback) if fallback else {
-            "type": "text_card",
-            "headline": (beat.overlay_text or f"Beat {beat.beat_id}")[:60],
-            "style": "news_card",
-        }
+        if fallback:
+            action = dict(fallback)
+            # Normalize unsupported fallback types to text_card so
+            # _execute_action always has a handler (see discussion_r3410008182).
+            if action.get("type") not in _EXECUTABLE_ACTION_TYPES:
+                action["type"] = "text_card"
+            plan_item["action"] = action
+        else:
+            plan_item["action"] = {
+                "type": "text_card",
+                "headline": (beat.overlay_text or f"Beat {beat.beat_id}")[:60],
+                "style": "news_card",
+            }
 
     @staticmethod
     def _candidate_to_action(candidate: Any, beat: StoryBeat) -> dict:

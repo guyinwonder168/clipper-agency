@@ -40,6 +40,7 @@ class ReviewContextBundle(BaseModel):
     package_metadata: dict | None = None
     audio_duration_sec: float = 0.0
     video_duration_sec: float = 0.0
+    beat_timeline: list[dict] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +168,7 @@ def map_scenes_to_beats(
     story_beats: list[dict],
     word_timestamps: list[dict],
     audio_duration_sec: float = 0.0,
+    beat_time_ranges: list[tuple[float, float]] | None = None,
 ) -> list[SceneBeatMapping]:
     """Map rendered scenes to story beats using temporal overlap.
 
@@ -176,13 +178,19 @@ def map_scenes_to_beats(
     Overlap detection uses two strategies:
       - **midpoint**: beat midpoint falls within scene range
       - **range_overlap**: beat time range overlaps scene time range
+
+    When ``beat_time_ranges`` is provided (from canonical timeline),
+    it takes precedence over the even-chunking derivation.
     """
     if not manifest_entries:
         return []
 
-    beat_ranges = _derive_beat_time_ranges(
-        story_beats, word_timestamps, audio_duration_sec,
-    )
+    if beat_time_ranges is not None:
+        beat_ranges = beat_time_ranges
+    else:
+        beat_ranges = _derive_beat_time_ranges(
+            story_beats, word_timestamps, audio_duration_sec,
+        )
     beat_ids = [b.get("beat_id", i) for i, b in enumerate(story_beats)]
 
     mappings: list[SceneBeatMapping] = []
@@ -252,9 +260,18 @@ def get_semantic_review_context(
     scene_start = scene_entry.get("start_sec", 0.0) if scene_entry else None
     scene_end = scene_entry.get("end_sec", 0.0) if scene_entry else None
 
+    # Build canonical beat time ranges from timeline if available (ADR 0020)
+    beat_time_ranges = None
+    if bundle.beat_timeline:
+        beat_time_ranges = [
+            (e["start_sec"], e["end_sec"])
+            for e in bundle.beat_timeline
+        ]
+
     mappings = map_scenes_to_beats(
         scenes, bundle.story_beats, bundle.word_timestamps,
         bundle.audio_duration_sec,
+        beat_time_ranges=beat_time_ranges,
     )
     matched_mapping = _find_mapping(mappings, scene_index)
     matched_beat_ids = matched_mapping.matched_beat_ids if matched_mapping else []

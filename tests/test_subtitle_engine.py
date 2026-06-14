@@ -479,3 +479,106 @@ def test_build_word_subtitle_captions_uses_narration_words_not_keywords():
     assert result[0].position == "bottom"
     assert result[0].start_seconds == 0.0
     assert result[-1].end_seconds == 1.5
+
+
+# ---------------------------------------------------------------------------
+# Coverage: edge cases for helper functions
+# ---------------------------------------------------------------------------
+
+
+def test_ts_value_with_object_timestamp():
+    """_ts_value handles non-dict timestamps (e.g. WordTimestamp objects)."""
+    from types import SimpleNamespace
+    from clipper_agency.rendering.subtitle_engine import _ts_value
+
+    ts = SimpleNamespace(start=1.5, end=2.5)
+    assert _ts_value(ts, "start", 0.0) == 1.5
+    assert _ts_value(ts, "end", 0.0) == 2.5
+    assert _ts_value(ts, "missing", 9.9) == 9.9
+
+
+def test_beat_timing_fallback_returns_none_for_short_word_range():
+    """_beat_timing_fallback returns None when word_range has < 2 elements."""
+    from clipper_agency.rendering.subtitle_engine import _beat_timing_fallback
+
+    assert _beat_timing_fallback({"word_range": [5]}, 2.0) is None
+    assert _beat_timing_fallback({"word_range": []}, 2.0) is None
+
+
+def test_beat_timing_fallback_returns_none_when_end_le_start():
+    """_beat_timing_fallback returns None when end <= start."""
+    from clipper_agency.rendering.subtitle_engine import _beat_timing_fallback
+
+    # word_range [10, 10] → start=5.0, end=5.0 → end <= start
+    assert _beat_timing_fallback({"word_range": [10, 10]}, 2.0) is None
+
+
+def test_beat_timing_from_ts_returns_none_for_short_word_range():
+    """_beat_timing_from_ts returns None when word_range < 2."""
+    from clipper_agency.rendering.subtitle_engine import _beat_timing_from_ts
+
+    ts = [{"start": 0.0, "end": 1.0}]
+    assert _beat_timing_from_ts({"word_range": [0]}, ts) is None
+
+
+def test_beat_timing_from_ts_returns_none_when_end_le_start():
+    """_beat_timing_from_ts returns None when end <= start."""
+    from clipper_agency.rendering.subtitle_engine import _beat_timing_from_ts
+
+    # Both words have same start/end → end <= start
+    ts = [{"start": 2.0, "end": 2.0}, {"start": 2.0, "end": 2.0}]
+    assert _beat_timing_from_ts({"word_range": [0, 2]}, ts) is None
+
+
+def test_keyword_captions_skips_beat_when_timing_is_none():
+    """build_keyword_captions skips beats with valid keywords but unresolvable timing."""
+    # beat 1: word_range [0,2] → ts[0]={5.0,5.0} end<=start → timing None → skipped
+    # beat 2: word_range [1,3] → ts[1]={1.0,2.0} ts[2]={2.0,3.0} → valid timing
+    beats = [
+        {"beat_id": 1, "word_range": [0, 2], "caption_keywords": ["skipped"]},
+        {"beat_id": 2, "word_range": [1, 3], "caption_keywords": ["valid"]},
+    ]
+    ts = [
+        {"start": 5.0, "end": 5.0},
+        {"start": 1.0, "end": 2.0},
+        {"start": 2.0, "end": 3.0},
+    ]
+    result = build_keyword_captions(beats, ts)
+    assert len(result) == 1
+    assert result[0].text == "valid"
+
+
+def test_word_subtitle_captions_skips_chunks_before_hook_duration():
+    """build_word_subtitle_captions skips chunks starting before hook_duration."""
+    timestamps = [
+        {"word": "early", "start": 0.5, "end": 1.0},
+        {"word": "late", "start": 5.0, "end": 5.5},
+    ]
+    result = build_word_subtitle_captions(timestamps, max_words=1, hook_duration=2.0)
+    # Only "late" should survive (start 5.0 >= 2.0)
+    assert len(result) == 1
+    assert result[0].text == "late"
+
+
+def test_word_subtitle_captions_skips_empty_text():
+    """build_word_subtitle_captions skips chunks with empty text or end <= start."""
+    timestamps = [
+        {"word": "", "start": 0.0, "end": 0.5},
+        {"word": "valid", "start": 1.0, "end": 2.0},
+    ]
+    result = build_word_subtitle_captions(timestamps, max_words=1)
+    # Empty word produces empty text → skipped
+    assert len(result) == 1
+    assert result[0].text == "valid"
+
+
+def test_hook_overlay_returns_none_for_empty_text():
+    """build_hook_overlay returns None when first scene has empty text."""
+    assert build_hook_overlay([{"text": "", "duration": 5.0}]) is None
+    assert build_hook_overlay([{"text": "   ", "duration": 5.0}]) is None
+
+
+def test_hook_overlay_returns_none_when_duration_zero():
+    """build_hook_overlay returns None when computed end <= 0."""
+    # duration=0 → end = min(3.0, 0.0) = 0.0 → end <= 0
+    assert build_hook_overlay([{"text": "hello", "duration": 0.0}]) is None
