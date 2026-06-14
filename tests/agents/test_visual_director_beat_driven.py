@@ -12,6 +12,7 @@ from clipper_agency.agents.visual_director import (
 from clipper_agency.config.schema import (
     AssetCandidate,
     BeatFallback,
+    BeatTimelineEntry,
     StoryBeat,
     WordTimestamp,
 )
@@ -324,6 +325,72 @@ class TestBeatDrivenExecute:
         assert result["status"] == "completed"
         assert len(result["assets"]) == 1
         assert result["assets"][0]["scene"] == 1
+
+    def test_execute_uses_canonical_timeline_when_provided(self, mocker, tmp_path):
+        """When beat_timeline is passed, VD uses it instead of string-matching."""
+        mock_pexels = mocker.patch(
+            "clipper_agency.agents.visual_director.PexelsService",
+        )
+        mock_pexels.return_value.search_photos.return_value = []
+        mock_ytdlp = mocker.patch(
+            "clipper_agency.agents.visual_director.YtDlpService",
+        )
+        mock_ytdlp.return_value.download.return_value = None
+
+        mock_llm = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient",
+        )
+        mock_llm.return_value.chat.return_value = {
+            "content": json.dumps({
+                "scenes": [
+                    {
+                        "scene_number": 1,
+                        "beat_id": 1,
+                        "role": "hook",
+                        "reasoning": "Use viral clip",
+                        "treatment": "hook_big_caption",
+                        "target_duration": 2.3,
+                        "transition_in": "hard_cut",
+                        "transition_out": "crossfade",
+                        "action": {"type": "text_card", "headline": "NEW ALBUM", "style": "breaking_news", "image_search": "album cover"},
+                        "fallback": {"type": "text_card", "headline": "ALBUM", "style": "news_card", "image_search": "music"},
+                    },
+                ]
+            }),
+            "model": "test",
+            "usage": {},
+        }
+        mocker.patch(
+            "clipper_agency.agents.prompts.load_prompt",
+            return_value="You are a Visual Director for {content_angle} content.",
+        )
+        mocker.patch(
+            "clipper_agency.config.loader.load_settings",
+        )
+
+        # Canonical timeline says beat 1 = 4.2s (overrides LLM's 2.3s)
+        beat_timeline = [
+            BeatTimelineEntry(beat_id=1, start_sec=0.0, end_sec=4.2, duration_sec=4.2),
+        ]
+
+        agent = VisualDirectorAgent()
+        # Mock _calculate_beat_durations to verify it's NOT called
+        # when beat_timeline is provided (ADR 0020 canonical path).
+        mocker.patch.object(
+            agent, "_calculate_beat_durations",
+            side_effect=AssertionError("should not call _calculate_beat_durations"),
+        )
+        result = agent.execute(
+            job_id=1,
+            topic="Artist X",
+            output_dir=str(tmp_path),
+            story_beats=[_make_beat(overlay_text="Artist X just released")],
+            timestamps=_make_timestamps(),
+            beat_timeline=beat_timeline,
+            voiceover_duration_sec=4.2,
+        )
+
+        assert result["status"] == "completed"
 
     def test_execute_beat_driven_persists_artifacts(self, mocker, tmp_path):
         """Beat-driven execution writes input/output/provenance to agent dir."""

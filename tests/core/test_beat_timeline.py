@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from clipper_agency.config.schema import BeatTimelineEntry
 from clipper_agency.core.beat_timeline import (
     build_canonical_timeline,
@@ -144,3 +146,18 @@ class TestTimelineToDurationList:
         dur_list = timeline_to_duration_list(timeline)
         for i, entry in enumerate(timeline):
             assert dur_list[i] == entry.duration_sec
+
+
+# ── Object timestamps (getattr path) ──
+
+
+class TestObjectTimestamps:
+    """Timestamps as objects (SimpleNamespace) exercise the getattr branch."""
+
+    def test_works_with_object_timestamps(self) -> None:
+        obj_ts = [SimpleNamespace(**ts) for ts in TIMESTAMPS]
+        timeline = build_canonical_timeline(NARRATIVE, obj_ts)
+        assert len(timeline) == 3
+        # Beat 1 spans words 0→4: start=0.0, next beat word 4 start=1.6
+        assert timeline[0].start_sec == 0.0
+        assert timeline[0].end_sec == 1.6
