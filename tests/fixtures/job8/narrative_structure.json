@@ -1,0 +1,122 @@
+[
+  {
+    "beat_id": 1,
+    "section": "hook",
+    "description": "Attention-grabbing opening",
+    "word_range": [
+      0,
+      15
+    ],
+    "overlay_text": "BERITA ARTIS HARI INI",
+    "caption_keywords": [
+      "berita",
+      "artis",
+      "hari ini"
+    ]
+  },
+  {
+    "beat_id": 2,
+    "section": "story_1",
+    "description": "Zara Adhisty's wedding announcement",
+    "word_range": [
+      16,
+      24
+    ],
+    "overlay_text": "ZARA NIKAH & HAMIL",
+    "caption_keywords": [
+      "zara",
+      "nikah",
+      "hamil"
+    ]
+  },
+  {
+    "beat_id": 3,
+    "section": "story_1_reveal",
+    "description": "Show viral clip evidence",
+    "word_range": [
+      25,
+      30
+    ],
+    "overlay_text": "VIRAL 1M+ VIEWS",
+    "caption_keywords": [
+      "viral",
+      "views",
+      "zara"
+    ]
+  },
+  {
+    "beat_id": 4,
+    "section": "story_2",
+    "description": "Ruben Onsu's child support claim",
+    "word_range": [
+      31,
+      37
+    ],
+    "overlay_text": "RUBEN STOP NAFKAH?",
+    "caption_keywords": [
+      "ruben",
+      "nafkah",
+      "anak"
+    ]
+  },
+  {
+    "beat_id": 5,
+    "section": "story_2_reveal",
+    "description": "Show viral clip evidence",
+    "word_range": [
+      38,
+      43
+    ],
+    "overlay_text": "VIRAL 4M+ VIEWS",
+    "caption_keywords": [
+      "viral",
+      "views",
+      "ruben"
+    ]
+  },
+  {
+    "beat_id": 6,
+    "section": "story_3",
+    "description": "Raffi Ahmad's legal case",
+    "word_range": [
+      44,
+      50
+    ],
+    "overlay_text": "RAFFI & HOTMAN",
+    "caption_keywords": [
+      "raffi",
+      "hotman",
+      "sidang"
+    ]
+  },
+  {
+    "beat_id": 7,
+    "section": "reaction",
+    "description": "Audience engagement question",
+    "word_range": [
+      51,
+      55
+    ],
+    "overlay_text": "PANAS BANGET!",
+    "caption_keywords": [
+      "panas",
+      "berita",
+      "hari ini"
+    ]
+  },
+  {
+    "beat_id": 8,
+    "section": "closing_cta",
+    "description": "Call to action",
+    "word_range": [
+      56,
+      63
+    ],
+    "overlay_text": "FOLLOW & COMMENT!",
+    "caption_keywords": [
+      "follow",
+      "comment",
+      "artis"
+    ]
+  }
+]

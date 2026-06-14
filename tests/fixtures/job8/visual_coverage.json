@@ -1,0 +1,29 @@
+{
+  "status": "fail",
+  "output_duration_sec": 34.902,
+  "voiceover_duration_sec": 34.902,
+  "coverage_ratio": 1.0,
+  "issues": [
+    {
+      "type": "BLACK_FRAME",
+      "start_sec": 17.1,
+      "end_sec": 19.2,
+      "severity": "hard_fail",
+      "detail": "Black segment 2100ms > 200ms"
+    },
+    {
+      "type": "BLACK_FRAME",
+      "start_sec": 19.6667,
+      "end_sec": 20.8667,
+      "severity": "hard_fail",
+      "detail": "Black segment 1200ms > 200ms"
+    },
+    {
+      "type": "BLACK_FRAME",
+      "start_sec": 21.3,
+      "end_sec": 34.8333,
+      "severity": "hard_fail",
+      "detail": "Black segment 13533ms > 200ms"
+    }
+  ]
+}

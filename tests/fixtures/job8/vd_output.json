@@ -1,0 +1,155 @@
+{
+  "status": "completed",
+  "assets": [
+    {
+      "scene": 1,
+      "source": "text_card",
+      "path": "data/assets/cache/job_8/agents/visual_director/scenes/scene_1_img.png",
+      "headline": "BERITA ARTIS HARI INI",
+      "style": "breaking_news",
+      "bg_color": "gradient_red",
+      "treatment": "hook_big_caption",
+      "target_duration": 33.173,
+      "transition_in": "hard_cut",
+      "transition_out": "crossfade",
+      "beat_id": 1,
+      "role": "hook"
+    },
+    {
+      "scene": 2,
+      "source": "tiktok_clip",
+      "path": "data/assets/cache/job_8/agents/visual_director/scenes/scene_2.mp4",
+      "treatment": "broll_standard",
+      "target_duration": 0.5,
+      "transition_in": "crossfade",
+      "transition_out": "crossfade",
+      "beat_id": 2,
+      "role": "main_claim"
+    },
+    {
+      "scene": 3,
+      "source": "pexels_image",
+      "path": "data/assets/cache/job_8/agents/visual_director/scenes/scene_3_img.jpg",
+      "treatment": "broll_standard",
+      "target_duration": 11.349,
+      "transition_in": "crossfade",
+      "transition_out": "crossfade",
+      "beat_id": 3,
+      "role": "evidence"
+    },
+    {
+      "scene": 4,
+      "source": "tiktok_clip",
+      "path": "data/assets/cache/job_8/agents/visual_director/scenes/scene_4.mp4",
+      "treatment": "broll_standard",
+      "target_duration": 2.182,
+      "transition_in": "crossfade",
+      "transition_out": "crossfade",
+      "beat_id": 4,
+      "role": "main_claim"
+    },
+    {
+      "scene": 5,
+      "source": "pexels_image",
+      "path": "data/assets/cache/job_8/agents/visual_director/scenes/scene_5_img.jpg",
+      "treatment": "broll_standard",
+      "target_duration": 11.349,
+      "transition_in": "crossfade",
+      "transition_out": "crossfade",
+      "beat_id": 5,
+      "role": "evidence"
+    },
+    {
+      "scene": 6,
+      "source": "text_card",
+      "path": "data/assets/cache/job_8/agents/visual_director/scenes/scene_6_img.png",
+      "headline": "RAFFI & HOTMAN",
+      "style": "news_card",
+      "bg_color": "",
+      "treatment": "broll_standard",
+      "target_duration": 1.746,
+      "transition_in": "crossfade",
+      "transition_out": "crossfade",
+      "beat_id": 6,
+      "role": "main_claim"
+    },
+    {
+      "scene": 7,
+      "source": "text_card",
+      "path": "data/assets/cache/job_8/agents/visual_director/scenes/scene_7_img.png",
+      "headline": "PANAS BANGET!",
+      "style": "speech_bubble",
+      "bg_color": "gradient_purple",
+      "treatment": "text_card_reveal",
+      "target_duration": 29.681,
+      "transition_in": "crossfade",
+      "transition_out": "crossfade",
+      "beat_id": 7,
+      "role": "reaction"
+    },
+    {
+      "scene": 8,
+      "source": "text_card",
+      "path": "data/assets/cache/job_8/agents/visual_director/scenes/scene_8_img.png",
+      "headline": "FOLLOW & COMMENT!",
+      "style": "mock_ui",
+      "bg_color": "gradient_blue",
+      "treatment": "fade_to_black",
+      "target_duration": 1.31,
+      "transition_in": "crossfade",
+      "transition_out": "dissolve",
+      "beat_id": 8,
+      "role": "closing_cta"
+    }
+  ],
+  "candidate_inspections": [
+    {
+      "beat_id": 1,
+      "asset_id": "image_https://www.intipseleb.com/",
+      "decision": "reject",
+      "from_cache": false
+    },
+    {
+      "beat_id": 2,
+      "asset_id": "video_https://www.tiktok.com/@garuda.siwa.info",
+      "decision": "reject",
+      "from_cache": false
+    },
+    {
+      "beat_id": 3,
+      "asset_id": "video_https://www.tiktok.com/@garuda.siwa.info",
+      "decision": "reject",
+      "from_cache": false
+    },
+    {
+      "beat_id": 4,
+      "asset_id": "video_https://www.tiktok.com/@garuda.siwa.info",
+      "decision": "reject",
+      "from_cache": false
+    },
+    {
+      "beat_id": 5,
+      "asset_id": "video_https://www.tiktok.com/@garuda.siwa.info",
+      "decision": "reject",
+      "from_cache": false
+    },
+    {
+      "beat_id": 6,
+      "asset_id": "video_https://www.tiktok.com/@garuda.siwa.info",
+      "decision": "accept",
+      "from_cache": false
+    },
+    {
+      "beat_id": 7,
+      "asset_id": "image_https://www.intipseleb.com/",
+      "decision": "reject",
+      "from_cache": false
+    },
+    {
+      "beat_id": 8,
+      "asset_id": "image_https://www.intipseleb.com/",
+      "decision": "reject",
+      "from_cache": false
+    }
+  ]
+}

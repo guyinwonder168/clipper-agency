@@ -1,0 +1,457 @@
+{
+  "status": "success",
+  "voiceover_path": "data/assets/cache/job_8/agents/voice_producer/voiceover.mp3",
+  "voiceover_duration_sec": 38.410958,
+  "timestamps": [
+    {
+      "word": "Halo",
+      "start": 0.0,
+      "end": 0.436
+    },
+    {
+      "word": "geng!",
+      "start": 0.436,
+      "end": 0.873
+    },
+    {
+      "word": "Berita",
+      "start": 0.873,
+      "end": 1.309
+    },
+    {
+      "word": "artis",
+      "start": 1.309,
+      "end": 1.746
+    },
+    {
+      "word": "hari",
+      "start": 1.746,
+      "end": 2.182
+    },
+    {
+      "word": "ini",
+      "start": 2.182,
+      "end": 2.619
+    },
+    {
+      "word": "panas",
+      "start": 2.619,
+      "end": 3.055
+    },
+    {
+      "word": "banget",
+      "start": 3.055,
+      "end": 3.492
+    },
+    {
+      "word": "nih.",
+      "start": 3.492,
+      "end": 3.928
+    },
+    {
+      "word": "Ada",
+      "start": 3.928,
+      "end": 4.365
+    },
+    {
+      "word": "pernikahan,",
+      "start": 4.365,
+      "end": 4.801
+    },
+    {
+      "word": "konflik",
+      "start": 4.801,
+      "end": 5.238
+    },
+    {
+      "word": "keluarga,",
+      "start": 5.238,
+      "end": 5.674
+    },
+    {
+      "word": "dan",
+      "start": 5.674,
+      "end": 6.111
+    },
+    {
+      "word": "masalah",
+      "start": 6.111,
+      "end": 6.547
+    },
+    {
+      "word": "hukum!",
+      "start": 6.547,
+      "end": 6.984
+    },
+    {
+      "word": "Pertama,",
+      "start": 6.984,
+      "end": 7.42
+    },
+    {
+      "word": "Zara",
+      "start": 7.42,
+      "end": 7.857
+    },
+    {
+      "word": "Adhisty",
+      "start": 7.857,
+      "end": 8.293
+    },
+    {
+      "word": "akhirnya",
+      "start": 8.293,
+      "end": 8.73
+    },
+    {
+      "word": "umumkan",
+      "start": 8.73,
+      "end": 9.166
+    },
+    {
+      "word": "pernikahan",
+      "start": 9.166,
+      "end": 9.603
+    },
+    {
+      "word": "dan",
+      "start": 9.603,
+      "end": 10.039
+    },
+    {
+      "word": "kehamilan",
+      "start": 10.039,
+      "end": 10.476
+    },
+    {
+      "word": "setelah",
+      "start": 10.476,
+      "end": 10.912
+    },
+    {
+      "word": "diterpa",
+      "start": 10.912,
+      "end": 11.349
+    },
+    {
+      "word": "rumor",
+      "start": 11.349,
+      "end": 11.785
+    },
+    {
+      "word": "bulan-bulan.",
+      "start": 11.785,
+      "end": 12.222
+    },
+    {
+      "word": "Liat",
+      "start": 12.222,
+      "end": 12.658
+    },
+    {
+      "word": "nih",
+      "start": 12.658,
+      "end": 13.095
+    },
+    {
+      "word": "klipnya",
+      "start": 13.095,
+      "end": 13.531
+    },
+    {
+      "word": "viral",
+      "start": 13.531,
+      "end": 13.968
+    },
+    {
+      "word": "banget,",
+      "start": 13.968,
+      "end": 14.404
+    },
+    {
+      "word": "1",
+      "start": 14.404,
+      "end": 14.841
+    },
+    {
+      "word": "juta",
+      "start": 14.841,
+      "end": 15.277
+    },
+    {
+      "word": "lebih",
+      "start": 15.277,
+      "end": 15.714
+    },
+    {
+      "word": "views!",
+      "start": 15.714,
+      "end": 16.15
+    },
+    {
+      "word": "Kedua,",
+      "start": 16.15,
+      "end": 16.587
+    },
+    {
+      "word": "Ruben",
+      "start": 16.587,
+      "end": 17.023
+    },
+    {
+      "word": "Onsu",
+      "start": 17.023,
+      "end": 17.46
+    },
+    {
+      "word": "disebut",
+      "start": 17.46,
+      "end": 17.896
+    },
+    {
+      "word": "stop",
+      "start": 17.896,
+      "end": 18.333
+    },
+    {
+      "word": "nafkah",
+      "start": 18.333,
+      "end": 18.769
+    },
+    {
+      "word": "anak",
+      "start": 18.769,
+      "end": 19.205
+    },
+    {
+      "word": "karena",
+      "start": 19.205,
+      "end": 19.642
+    },
+    {
+      "word": "alasan",
+      "start": 19.642,
+      "end": 20.078
+    },
+    {
+      "word": "akses",
+      "start": 20.078,
+      "end": 20.515
+    },
+    {
+      "word": "bertemu",
+      "start": 20.515,
+      "end": 20.951
+    },
+    {
+      "word": "putrinya.",
+      "start": 20.951,
+      "end": 21.388
+    },
+    {
+      "word": "Klip",
+      "start": 21.388,
+      "end": 21.824
+    },
+    {
+      "word": "ini",
+      "start": 21.824,
+      "end": 22.261
+    },
+    {
+      "word": "juga",
+      "start": 22.261,
+      "end": 22.697
+    },
+    {
+      "word": "viral,",
+      "start": 22.697,
+      "end": 23.134
+    },
+    {
+      "word": "4",
+      "start": 23.134,
+      "end": 23.57
+    },
+    {
+      "word": "juta",
+      "start": 23.57,
+      "end": 24.007
+    },
+    {
+      "word": "lebih",
+      "start": 24.007,
+      "end": 24.443
+    },
+    {
+      "word": "views!",
+      "start": 24.443,
+      "end": 24.88
+    },
+    {
+      "word": "Ketiga,",
+      "start": 24.88,
+      "end": 25.316
+    },
+    {
+      "word": "Raffi",
+      "start": 25.316,
+      "end": 25.753
+    },
+    {
+      "word": "Ahmad",
+      "start": 25.753,
+      "end": 26.189
+    },
+    {
+      "word": "gandeng",
+      "start": 26.189,
+      "end": 26.626
+    },
+    {
+      "word": "Hotman",
+      "start": 26.626,
+      "end": 27.062
+    },
+    {
+      "word": "Paris",
+      "start": 27.062,
+      "end": 27.499
+    },
+    {
+      "word": "terkait",
+      "start": 27.499,
+      "end": 27.935
+    },
+    {
+      "word": "sidang",
+      "start": 27.935,
+      "end": 28.372
+    },
+    {
+      "word": "suap",
+      "start": 28.372,
+      "end": 28.808
+    },
+    {
+      "word": "impor",
+      "start": 28.808,
+      "end": 29.245
+    },
+    {
+      "word": "barang",
+      "start": 29.245,
+      "end": 29.681
+    },
+    {
+      "word": "di",
+      "start": 29.681,
+      "end": 30.118
+    },
+    {
+      "word": "Bea",
+      "start": 30.118,
+      "end": 30.554
+    },
+    {
+      "word": "Cukai.",
+      "start": 30.554,
+      "end": 30.991
+    },
+    {
+      "word": "Wah,",
+      "start": 30.991,
+      "end": 31.427
+    },
+    {
+      "word": "panas",
+      "start": 31.427,
+      "end": 31.864
+    },
+    {
+      "word": "banget",
+      "start": 31.864,
+      "end": 32.3
+    },
+    {
+      "word": "ya",
+      "start": 32.3,
+      "end": 32.737
+    },
+    {
+      "word": "berita",
+      "start": 32.737,
+      "end": 33.173
+    },
+    {
+      "word": "hari",
+      "start": 33.173,
+      "end": 33.61
+    },
+    {
+      "word": "ini!",
+      "start": 33.61,
+      "end": 34.046
+    },
+    {
+      "word": "Jangan",
+      "start": 34.046,
+      "end": 34.483
+    },
+    {
+      "word": "lupa",
+      "start": 34.483,
+      "end": 34.919
+    },
+    {
+      "word": "follow",
+      "start": 34.919,
+      "end": 35.356
+    },
+    {
+      "word": "&",
+      "start": 35.356,
+      "end": 35.792
+    },
+    {
+      "word": "comment",
+      "start": 35.792,
+      "end": 36.229
+    },
+    {
+      "word": "berita",
+      "start": 36.229,
+      "end": 36.665
+    },
+    {
+      "word": "artis",
+      "start": 36.665,
+      "end": 37.101
+    },
+    {
+      "word": "favoritmu",
+      "start": 37.101,
+      "end": 37.538
+    },
+    {
+      "word": "di",
+      "start": 37.538,
+      "end": 37.974
+    },
+    {
+      "word": "bawah!",
+      "start": 37.974,
+      "end": 38.411
+    }
+  ],
+  "provider": "gemini_tts",
+  "audio_files": [
+    "data/assets/cache/job_8/agents/voice_producer/voiceover.mp3"
+  ],
+  "attempts": [
+    {
+      "provider": "gemini_tts",
+      "status": "success"
+    }
+  ]
+}
