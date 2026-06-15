@@ -23,6 +23,7 @@ coverage.xml
 .memsearch/
 .opencode/
 .playwright-mcp/
+.codegraph/
 sonar-*
 .tmp/
 
