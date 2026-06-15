@@ -80,8 +80,8 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 | **P0** | 1 | Job #8 production correctness hotfix | `phase/26-pr1-hotfix` | Low | ✅ MERGED (#51, b0e3deb) | v2.3.0 |
 | **P1** | 2 | Canonical beat timeline enforcement | `phase/26-pr2-canonical-timeline` | Medium | ✅ MERGED (#52, 85df554) | v2.3.0 |
 | **P1** | 3 | Deterministic failure-to-repair integration | `phase/26-pr3-repair-integration` | Medium | ✅ MERGED (#53, 86b37ba) | v2.3.0 |
-| **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | ✅ MERGED (#56, 8edc837) | v2.3.0 |
-| **P2** | 5 | Pre-VD asset qualification boundary | ~~`phase/26-pr5-pre-vd-qualification`~~ | ~~High~~ | ⏭️ **DEFERRED** — investigation found VD already qualifies per-beat; Step 4 removes root cause | v2.3.0 |
+| **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | 🔄 PARTIAL (#56, 8edc837) — 4c done; 4a, 4b, 4d, 4e remaining | v2.3.0 |
+| **P2** | 5 | Pre-VD asset qualification boundary | `phase/26-pr5-pre-vd-qualification` | High | ⬜ Pending (un-deferred per Job #8 evidence: 7/8 candidates rejected, all fell back to text cards, no source recovery) | v2.3.0 |
 | **P2** | 6 | Source transcript + clip-window selector | `phase/26-pr6-clip-window` | Medium | ⬜ Pending | v2.3.0 |
 | **P2** | 7 | Visual Director multi-shot planning | `phase/26-pr7-multishot-vd` | Medium | ⬜ Pending | v2.3.0 |
 | **P3** | 8 | Release gate + golden-set validation | `phase/26-pr8-release-gate` | Low | ⬜ Pending | **v2.4.0** (bump here) |
@@ -259,18 +259,26 @@ These tests assert the **current broken behavior** — they PASS on master today
 **Branch:** `phase/26-pr4-sp-precision`
 **Scope:** Improve existing multi-source discovery; do NOT add new providers.
 
+> **Status:** PR #56 (`8edc837`) delivered 4c (provider tracking) + partial 4e (distribution method exists but is a no-op when beats have LLM-provided candidates). Remaining work: 4a, 4b, 4d, 4e-fixes.
+
 **Changes:**
 
-1. Structured entity extraction from research (event name, date, location, quoted statement, original publisher).
-2. Per-beat search queries driven by `story_beats[].visual_must_show` + `spoken_point`.
-3. Provider attempt history persisted (which provider returned which candidate).
-4. Source-tier escalation (if tier-1 source fails, escalate to tier-2).
-5. Candidates grouped by beat, not globally.
+1. **4a.** Structured entity extraction from research (event name, date, location, quoted statement, original publisher) + stop-word filtering + entity boosting in keyword extraction. ⬜
+2. **4b.** Per-beat search queries driven by `story_beats[].visual_must_show` + `spoken_point` (currently topic-level only). ⬜
+3. **4c.** Provider attempt history persisted (which provider returned which candidate). ✅ DONE (#56)
+4. **4d.** Source-tier escalation (if tier-1 source fails, escalate to tier-2). ⬜
+5. **4e.** Candidates grouped by beat, not globally:
+   - **Don't skip beats with existing LLM candidates** — merge + dedupe + rank instead (fixes no-op bug found in Job #8 rerun). ⬜
+   - **Persist distribution score** on each candidate for debugging. ⬜
+   - **Min score threshold** — reject candidates scoring below 0.1 to avoid noise. ⬜
 
 **Verification:**
-- Each beat has its own candidate group
+- Each beat has its own candidate group (distribution runs even when LLM provided candidates)
 - Entity extraction produces structured fields
 - Provider history artifact exists
+- Distribution score persisted on each candidate
+- Min threshold filters out noise candidates
+- Job #8 rerun: VD receives >1 candidate per beat (not just LLM-provided)
 
 ---
 
@@ -279,7 +287,13 @@ These tests assert the **current broken behavior** — they PASS on master today
 **Branch:** `phase/26-pr5-pre-vd-qualification`
 **Scope:** Move qualification upstream. Reuse existing modules — do NOT rebuild.
 
-> ⚠️ **Highest-risk PR.** This refactors a working pipeline. Requires PRs 1–4 merged and stable. Strong integration tests mandatory.
+> ⚠️ **Highest-risk PR.** This refactors a working pipeline. Requires **Step 4 fully complete** and stable. Strong integration tests mandatory.
+
+> **Un-deferred justification (Job #8 rerun evidence):** The original deferral assumed "VD already qualifies per-beat; Step 4 removes root cause." Job #8 rerun disproved this:
+> - VD inspected 8 candidates → **7/8 REJECTED** (VD correctly identified bad sources)
+> - **ALL 8 beats fell back to text_card** — no source recovery, no second chance with 28 global candidates
+> - Reviewer: `scenes=0` → repair → VD → still text cards
+> - Root cause: VD qualifies but has **no recovery path** before text-card fallback
 
 **Changes:**
 
@@ -303,10 +317,13 @@ These tests assert the **current broken behavior** — they PASS on master today
 
 4. VD may still inspect final crop/layout, but source qualification happens upstream.
 
+5. **Source recovery:** When all candidates for a beat are rejected, trigger re-search/re-discovery BEFORE falling back to text card. Text card is the last resort, not the first fallback.
+
 **Verification:**
 - Rejected candidates never reach Visual Director
 - Qualification artifact (`job_{id}/qualification_report.json`) exists
 - All existing VD tests pass (adapted to receive pre-qualified candidates)
+- **Job #8 integration test:** full pipeline rerun → VD receives qualified candidates → fewer text-card fallbacks than baseline
 - Integration test: full pipeline with a known-bad source → rejected before VD
 
 ---
@@ -394,18 +411,20 @@ PR 2 (canonical timeline) ──────────────────
                                                │
 PR 3 (repair integration) ───────────────────► merge (needs PR 1)
                                                │
-          ┌────────────────────────────────────┘
-          │
-PR 4 (SP precision) ──────┐
-PR 5 (pre-VD qual)  ──────┤ (needs PRs 1–3; PR 5 is highest risk)
-PR 6 (clip window)  ──────┤ (needs PR 5 for qualified sources)
-PR 7 (multishot VD) ──────┘ (needs PR 2 for canonical timeline)
-          │
-          ▼
+           ┌───────────────────────────────────┘
+           │
+PR 4 (SP precision) ─────────────────────────► merge (needs PR 3; must FULLY complete 4a-4e)
+                                               │
+PR 5 (pre-VD qual) ──────────────────────────► merge (needs PR 4 FULLY complete; highest risk)
+                                               │
+PR 6 (clip window) ──────────────────────────► merge (needs PR 5 for qualified sources)
+PR 7 (multishot VD) ──────────────────────────► merge (needs PR 2 for canonical timeline)
+           │
+           ▼
 PR 8 (release gate + v2.4.0 bump) ──────────► merge (needs ALL prior)
 ```
 
-**Rule:** Batch 0 is the prerequisite — it must merge before PR 1. PRs 4–7 can be developed in parallel branches but must merge sequentially after PR 3. PR 8 is the final merge that bumps the version.
+**Rule:** Batch 0 is the prerequisite — it must merge before PR 1. PR 4 must fully complete (all sub-items 4a-4e) before PR 5 starts. PR 5 is un-deferred — Job #8 evidence showed source recovery is needed. PR 8 is the final merge that bumps the version.
 
 ---
 
