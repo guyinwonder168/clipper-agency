@@ -43,6 +43,8 @@ Array of beats, each with:
 - `verified_facts`: Array of {fact, source_url, confidence, safe_wording}
 - `unverified_claims`: Array of {claim, label, safe_wording}
 - `do_not_use`: Array of strings — visual types/sources that must be avoided
+- `entities`: Array of {name, type, date?, location?, role?} — key entities (people, events, places, organizations) referenced in this story. Extract from research data.
+- `risk_flags`: Array of {category, description} — top-level safety concerns (legal, factual, sensitivity). Category options: "legal", "factual", "sensitivity", "copyright".
 - `reference_style`: {format, target_duration_sec, hook_duration_sec, avg_scene_duration_sec, caption_style, transition_style, visual_priority}
 
 ## Rules

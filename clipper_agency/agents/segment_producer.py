@@ -593,9 +593,34 @@ class SegmentProducerAgent(BaseAgent):
 
     # ── multi-source asset discovery ──────────────────────────────────────
 
-    def _build_search_queries(self, topic: str, entities: dict) -> list[str]:
-        """Derive search queries from topic + entity names."""
+    def _build_search_queries(
+        self,
+        topic: str,
+        entities: dict,
+        beats: list[dict] | None = None,
+        max_queries: int = 5,
+    ) -> list[str]:
+        """Derive search queries from topic, entities, and/or beat context.
+
+        When ``beats`` is provided, generates per-beat queries from
+        ``visual_must_show`` and ``spoken_point`` keywords. Falls back to
+        topic + entity name queries when ``beats`` is None (backward compat).
+        """
         queries = [topic]
+
+        # Per-beat queries (preferred when beats are available)
+        if beats:
+            for beat in beats:
+                if len(queries) >= max_queries:
+                    break
+                keywords = self._extract_beat_keywords(beat)
+                if keywords:
+                    beat_query = f"{' '.join(keywords[:3])} {topic}"
+                    if beat_query not in queries:
+                        queries.append(beat_query)
+            return queries[:max_queries]
+
+        # Fallback: entity-based queries (backward compat)
         if not isinstance(entities, dict):
             return queries
         entity_list = entities.get("entities", [])
@@ -614,15 +639,20 @@ class SegmentProducerAgent(BaseAgent):
         topic: str,
         entities: dict,
         config: Any,
+        beats: list[dict] | None = None,
     ) -> tuple[list[dict], list[dict]]:
         """Search YouTube, Tavily, Brave for additional asset candidates.
 
-        Returns ``(sources, attempts)`` where ``attempts`` records which
-        provider was queried, with what query, and how many results came back.
+        When ``beats`` is provided, builds per-beat search queries for more
+        targeted discovery. Returns ``(sources, attempts)`` where ``attempts``
+        records which provider was queried, with what query, and how many
+        results came back.
         """
         sources: list[dict] = []
         attempts: list[dict] = []
-        search_queries = self._build_search_queries(topic, entities)
+        search_queries = self._build_search_queries(
+            topic, entities, beats=beats,
+        )
 
         # YouTube search (free, no API key needed)
         try:
@@ -707,27 +737,37 @@ class SegmentProducerAgent(BaseAgent):
 
     # ── per-beat candidate distribution ───────────────────────────────────
 
-    @staticmethod
-    def _extract_beat_keywords(beat: dict) -> list[str]:
+    _STOP_WORDS: frozenset[str] = frozenset({
+        # Indonesian
+        "yang", "di", "ke", "dari", "dan", "atau", "ini", "itu", "ada",
+        "dengan", "untuk", "pada", "juga", "akan", "tidak", "dalam",
+        "adalah", "oleh", "agar", "sudah", "belum", "seperti", "karena",
+        # English
+        "the", "and", "with", "that", "this", "for", "from", "have",
+        "has", "are", "was", "were", "will", "would", "could", "should",
+    })
+
+    @classmethod
+    def _extract_beat_keywords(cls, beat: dict) -> list[str]:
         """Extract lowercase keywords from beat context for candidate matching.
 
         Combines keywords from visual_must_show, caption_keywords, and
-        spoken_point. Filters words shorter than 3 characters.
+        spoken_point. Filters words shorter than 3 characters and stop words.
         """
         keywords: set[str] = set()
 
         for chunk in beat.get("visual_must_show", "").split(","):
             for word in chunk.strip().split():
-                if len(word) >= 3:
+                if len(word) >= 3 and word.lower() not in cls._STOP_WORDS:
                     keywords.add(word.lower())
 
         for kw in beat.get("caption_keywords", []):
             kw_stripped = kw.strip().lower()
-            if kw_stripped:
+            if kw_stripped and kw_stripped not in cls._STOP_WORDS:
                 keywords.add(kw_stripped)
 
         for word in beat.get("spoken_point", "").split():
-            if len(word) >= 3:
+            if len(word) >= 3 and word.lower() not in cls._STOP_WORDS:
                 keywords.add(word.lower())
 
         return list(keywords)
@@ -752,11 +792,14 @@ class SegmentProducerAgent(BaseAgent):
         story_beats: list[dict],
         global_candidates: list[dict],
         max_per_beat: int = 5,
+        min_score: float = 0.1,
     ) -> list[dict]:
-        """Distribute global asset candidates to beats lacking candidates.
+        """Distribute global asset candidates to beats via keyword matching.
 
-        Uses keyword matching to assign relevant candidates per beat.
-        Beats that already have asset_candidates are left unchanged.
+        Beats that already have asset_candidates are MERGED with global
+        candidates (not skipped). Each distributed candidate gets a
+        ``distribution_score`` field for debugging. Candidates scoring below
+        ``min_score`` are filtered out.
         Returns a NEW list of beat dicts (does not mutate input).
         """
         if not global_candidates:
@@ -765,9 +808,6 @@ class SegmentProducerAgent(BaseAgent):
         result: list[dict] = []
         for beat in story_beats:
             beat_copy = dict(beat)
-            if beat_copy.get("asset_candidates"):
-                result.append(beat_copy)
-                continue
 
             keywords = SegmentProducerAgent._extract_beat_keywords(beat_copy)
             if not keywords:
@@ -779,13 +819,31 @@ class SegmentProducerAgent(BaseAgent):
                 score = SegmentProducerAgent._score_candidate_for_beat(
                     candidate, keywords,
                 )
-                if score > 0.0:
+                if score >= min_score:
                     candidate_copy = dict(candidate)
                     candidate_copy["related_beat_id"] = beat_copy.get("beat_id")
+                    candidate_copy["distribution_score"] = round(score, 4)
                     scored.append((score, candidate_copy))
 
             scored.sort(key=lambda x: x[0], reverse=True)
-            beat_copy["asset_candidates"] = [c for _, c in scored[:max_per_beat]]
+            new_assignments = [c for _, c in scored[:max_per_beat]]
+
+            existing = beat_copy.get("asset_candidates") or []
+            if existing:
+                seen_urls: set[str] = {
+                    c.get("url", "") for c in existing if c.get("url")
+                }
+                merged = list(existing)
+                for cand in new_assignments:
+                    url = cand.get("url", "")
+                    if url and url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    merged.append(cand)
+                beat_copy["asset_candidates"] = merged[:max_per_beat]
+            else:
+                beat_copy["asset_candidates"] = new_assignments
+
             result.append(beat_copy)
 
         return result
@@ -843,8 +901,8 @@ class SegmentProducerAgent(BaseAgent):
         write_json(video_sources_path, scrapecreators_data)
         write_json(context_sources_path, firecrawl_data)
         write_json(music_candidates_path, [])
-        write_json(entities_path, {})
-        write_json(risk_flags_path, [])
+        write_json(entities_path, output.get("entities", []))
+        write_json(risk_flags_path, output.get("risk_flags", []))
 
         asset_candidates_path = base / "normalized" / "asset_candidates.json"
         write_json(asset_candidates_path, output.get("asset_candidates", []))
@@ -860,8 +918,8 @@ class SegmentProducerAgent(BaseAgent):
             "video_sources": scrapecreators_data,
             "context_sources": firecrawl_data,
             "music_candidates": [],
-            "entities": {},
-            "risk_flags": [],
+            "entities": output.get("entities", []),
+            "risk_flags": output.get("risk_flags", []),
             "asset_candidates": output.get("asset_candidates", []),
             "asset_candidates_path": str(asset_candidates_path),
             "story_beats": output.get("story_beats", []),
@@ -1000,6 +1058,8 @@ class SegmentProducerAgent(BaseAgent):
                 "verified_facts": data.get("verified_facts", []),
                 "unverified_claims": data.get("unverified_claims", []),
                 "reference_style": data.get("reference_style"),
+                "entities": data.get("entities", []),
+                "risk_flags": data.get("risk_flags", []),
             }
         except (json.JSONDecodeError, KeyError):
             return {
@@ -1012,6 +1072,8 @@ class SegmentProducerAgent(BaseAgent):
                 "verified_facts": [],
                 "unverified_claims": [],
                 "reference_style": None,
+                "entities": [],
+                "risk_flags": [],
             }
 
     @staticmethod
