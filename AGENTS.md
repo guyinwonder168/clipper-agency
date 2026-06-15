@@ -69,7 +69,7 @@ Ten recurring failure patterns documented in `docs/repetitive-failure-patterns.m
 - ❌ Error string used >1x = module constant.
 
 ### Pre-PR Checklist
-Before `git push`: `.venv/bin/python3 -m pytest -m "not external and not integration" -q` (all pass); `--cov=clipper_agency --cov-report=term-missing` (≥93%). Fix uncovered spots. **Update `CHANGELOG.md`** (add entry under `[Unreleased]`). **Update spec docs** (`docs/PRD.md`, `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`) if code changes affect requirements, architecture, or traceability. Wait for SonarCloud ✅ before merging.
+Before `git push`: `.venv/bin/python3 -m pytest -m "not external and not integration" -q` (all pass); `--cov=clipper_agency --cov-report=term-missing` (≥93%). Fix uncovered spots. **Update `CHANGELOG.md`** (add entry under `[Unreleased]`). **Update spec docs** (`docs/PRD.md`, `docs/SRS.md`, `docs/technical_design.md`, `docs/requirements_traceability.md`) if code changes affect requirements, architecture, or traceability. Wait for SonarCloud ✅ **with zero new issues** before merging.
 
 ## Git Branching & PR Workflow
 
@@ -77,7 +77,7 @@ Before `git push`: `.venv/bin/python3 -m pytest -m "not external and not integra
 
 ```
                          Create     Push     Open      SonarCloud   Codex       Merge    Delete
- Phase N Start ────────► branch ──► push ──► PR ────► passes? ──► resolved? ──► PR ────► branch
+ Phase N Start ────────► branch ──► push ──► PR ────► pass+0 iss? ─► resolved? ──► PR ────► branch
                                     │         │         │           │             │
                                     │         │         │           └─ address ───┘
                                     │         │         └─ fix ────┘
@@ -104,9 +104,11 @@ Before `git push`: `.venv/bin/python3 -m pytest -m "not external and not integra
    ```bash
    gh pr create --base master --title "Phase N: Feature Title" --body "Implements feature per the implementation plan."
    ```
-5. **Wait for SonarCloud** — PR must show ✅ green from SonarCloud Quality Gate.
-   - If SonarCloud fails (bugs, vulnerabilities, code smells), fix issues on the branch, push again, and wait for re-check.
-   - **Do NOT merge until SonarCloud passes.**
+5. **Wait for SonarCloud** — PR must show ✅ green Quality Gate **AND zero new issues**.
+   - **Quality Gate passing is necessary but NOT sufficient.** The gate can pass while new issues (bugs, vulnerabilities, code smells, cognitive complexity violations, unused code) are still present.
+   - If the Quality Gate fails, fix issues on the branch, push again, and wait for re-check.
+   - If the Quality Gate passes but **new issues** exist, fix them on the branch, push again, and wait for re-check. Repeat until zero new issues.
+   - **Do NOT merge until SonarCloud passes with zero new issues.**
 6. **Wait for Codex review** — check PR for Codex (ChatGPT) review comments.
    - If Codex review has NOT started yet (no comments posted), **wait** — do not merge until Codex has reviewed.
    - If Codex posted comments, evaluate each one (P0/P1 must fix, P2 should fix, P3 optional). Address or push back with reasoning.
@@ -147,7 +149,7 @@ phase/3-services        phase/7-dashboard         phase/11-logging-model-config
 ### Rules
 
 - ❌ NEVER push directly to `master`.
-- ❌ NEVER merge a PR before SonarCloud passes.
+- ❌ NEVER merge a PR before SonarCloud passes with zero new issues.
 - ❌ NEVER merge a PR before Codex review is resolved (wait if not started yet).
 - ❌ NEVER merge a PR without updating `CHANGELOG.md`.
 - ❌ NEVER squash or rebase-merge — always use `--merge` (true merge commit).

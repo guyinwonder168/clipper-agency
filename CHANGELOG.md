@@ -41,6 +41,8 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 #### Post-PR #3 SonarCloud Fixes — Engine Refactor
 - **Fixed cognitive complexity (rule: brain-overload):** extracted VD/Composer cached-upstream repair branch from `_execute_single_repair_cycle` (complexity 17 > 15) into new `_run_cached_upstream_repair()` helper method.
 - **Removed dead code (rule: cweunused):** `_rerun_upstream_cascade` now returns a 5-tuple (was 6-tuple with unused `visual_output` — VD output is consumed internally by Composer during the cascade, never referenced by the caller or Reviewer per ADR 0020 §4 contracts).
+- **Codex P2 fix:** bundled 8+ scalar repair params into `RepairCycleContext` dataclass (was: `_run_cached_upstream_repair` and `_rerun_upstream_cascade` took 7-8 individual scalar params, violating AGENTS.md ">5 scalar params = bundle" rule).
+- **AGENTS.md:** strengthened SonarCloud merge gate — Quality Gate passing is necessary but NOT sufficient; PR must also show zero new issues before merge.
 - Pure refactor — 1945 tests pass, no behavior change.
 
 ### Phase 25: Dead Code Removal (PR #49)
