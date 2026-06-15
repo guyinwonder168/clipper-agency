@@ -59,6 +59,7 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 
 #### PR 4 (remaining) — SP Precision + Persistence Completeness
 - **Fixed (4e):** `_distribute_candidates_to_beats()` now MERGES global candidates into beats with existing LLM candidates (was: skipped them → no-op when LLM populated candidates, all global candidates ignored).
+- **Fixed (4e):** `_merge_candidates()` now INTERLEAVES existing + new candidates (was: append-then-slice → no-op when beat already full at `max_per_beat`).
 - **Fixed (4e):** Distribution score persisted on each candidate as `distribution_score` for debugging (was: score calculated but discarded).
 - **Fixed (4e):** Min score threshold (`0.1`) filters out noise candidates (was: any `>0.0` match accepted).
 - **Fixed (4e):** URL-based dedup when merging LLM + global candidates (was: potential duplicates).
@@ -68,7 +69,7 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - **Fixed (4b):** `_build_search_queries()` now generates per-beat queries from `visual_must_show` + `spoken_point` when beats are available (was: topic-level only, missed specific beat context).
 - **Fixed (4b):** `execute()` now passes `beats=` to `_discover_multi_source_assets()` so per-beat queries run in production (was: param existed but call site omitted it, Codex P2 fix).
 - **Fixed (4f-SP):** `entities.json` and `risk_flags.json` artifacts now persist actual LLM-extracted values (was: hardcoded `{}` and `[]`).
-- **Fixed (4f-SP):** SP output `result["risk_flags"]` now passes synthesis values (was: hardcoded `[]`).
+- **Fixed (4f-SP):** SP output `result["risk_flags"]` now passes synthesis values (was: hardcoded `[]`). `result["entities"]` added (was: missing entirely — CodeReviewer catch).
 - **Refactored (SonarCloud):** Extracted `_per_beat_queries()`, `_entity_list_queries()` from `_build_search_queries()` (cognitive complexity 22→<10).
 - **Refactored (SonarCloud):** Extracted `_score_and_filter_candidates()`, `_merge_candidates()` from `_distribute_candidates_to_beats()` (cognitive complexity 21→<10).
 - **Fixed (Codex P2):** `entities` parameter type changed from `dict` to `list` across `_build_search_queries()` + `_discover_multi_source_assets()` to match parser output shape (was: type mismatch caused entities to be silently ignored).

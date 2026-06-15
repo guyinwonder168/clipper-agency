@@ -446,6 +446,29 @@ class TestDistributeMergeNotSkip:
         urls = [c["url"] for c in result[0]["asset_candidates"]]
         assert urls.count(shared_url) == 1
 
+    def test_global_candidates_get_slots_when_beat_full(self):
+        """Interleave: when existing fills max_per_beat, globals still get in.
+
+        Regression for CodeReviewer finding: append-after-then-slice was
+        a no-op when existing >= max_per_beat. Interleave ensures diversity.
+        """
+        existing = [
+            _make_candidate(url=f"https://llm{i}.com", title="artis")
+            for i in range(5)
+        ]
+        beats = [_make_beat(
+            beat_id=1, visual_must_show="artis", asset_candidates=existing,
+        )]
+        candidates = [_make_candidate(
+            url="https://global.com", title="artis viral",
+        )]
+        result = SegmentProducerAgent._distribute_candidates_to_beats(
+            beats, candidates, max_per_beat=5,
+        )
+        urls = [c["url"] for c in result[0]["asset_candidates"]]
+        assert "https://global.com" in urls
+        assert len(urls) == 5
+
 
 # ─── Stop-word filtering tests ──────────────────────────────────────────
 

@@ -541,6 +541,41 @@ class TestSegmentProducerNewContract:
         assert result["reference_style"]["caption_style"] == "keyword"
         assert result["reference_style"]["transition_style"] == "hard_cut"
 
+    def test_execute_propagates_entities_and_risk_flags(self, mocker, tmp_path):
+        """execute() result must include entities + risk_flags from synthesis.
+
+        Regression test: execute() result dict previously hardcoded
+        risk_flags: [] and omitted entities entirely, causing the
+        _persist_contract_artifacts fix to be a no-op.
+        """
+        import json as _json
+        payload = _json.dumps({
+            "research_brief": "Brief with risks",
+            "story_beats": [],
+            "entities": [{"name": "Artis X", "type": "person"}],
+            "risk_flags": [{"category": "unverified_claim", "description": "Dating rumor"}],
+        })
+        mocker.patch(
+            "clipper_agency.services.firecrawl_service.FirecrawlService.search",
+            return_value=[],
+        )
+        mocker.patch(
+            "clipper_agency.services.scrapecreators.ScrapeCreatorsService.search_tiktok_videos",
+            return_value=[],
+        )
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={"content": payload, "model": "test", "usage": {}},
+        )
+        mocker.patch.object(
+            SegmentProducerAgent, "_discover_multi_source_assets",
+            return_value=([], []),
+        )
+        agent = SegmentProducerAgent()
+        result = agent.execute(job_id=1, topic="Test", output_dir=str(tmp_path))
+        assert result["entities"] == [{"name": "Artis X", "type": "person"}]
+        assert result["risk_flags"] == [{"category": "unverified_claim", "description": "Dating rumor"}]
+
     def test_execute_returns_empty_lists_when_llm_plain_text(self, mocker, tmp_path):
         """When LLM returns plain text (not JSON), all new fields default to empty."""
         mocker.patch(

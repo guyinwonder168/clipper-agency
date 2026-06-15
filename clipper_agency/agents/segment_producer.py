@@ -277,7 +277,8 @@ class SegmentProducerAgent(BaseAgent):
             "status": "completed",
             "research_brief": synthesis["research_brief"],
             "sources": aggregated,
-            "risk_flags": [],
+            "risk_flags": synthesis.get("risk_flags", []),
+            "entities": synthesis.get("entities", []),
             "story_beats": story_beats_distributed,
             "format_decision": legacy_format,
             "asset_candidates": global_candidates,
@@ -637,6 +638,8 @@ class SegmentProducerAgent(BaseAgent):
         queries = [topic]
         if beats:
             queries.extend(self._per_beat_queries(topic, beats, max_queries))
+            if len(queries) == 1 and isinstance(entities, list) and entities:
+                queries.extend(self._entity_list_queries(topic, entities, max_queries=2))
             return queries[:max_queries]
         if isinstance(entities, list) and entities:
             queries.extend(self._entity_list_queries(topic, entities, max_queries=2))
@@ -821,15 +824,25 @@ class SegmentProducerAgent(BaseAgent):
         new_assignments: list[dict],
         max_per_beat: int,
     ) -> list[dict]:
-        """Merge existing beat candidates with new assignments, dedup by URL."""
+        """Merge existing beat candidates with new assignments, dedup by URL.
+
+        Interleaves existing and new candidates so global candidates
+        get slots even when existing (LLM) candidates fill the beat.
+        """
         seen_urls: set[str] = {c.get("url", "") for c in existing if c.get("url")}
-        merged = list(existing)
+        deduped_new: list[dict] = []
         for cand in new_assignments:
             url = cand.get("url", "")
             if url and url in seen_urls:
                 continue
             seen_urls.add(url)
-            merged.append(cand)
+            deduped_new.append(cand)
+        merged: list[dict] = []
+        for i in range(max(len(existing), len(deduped_new))):
+            if i < len(existing):
+                merged.append(existing[i])
+            if i < len(deduped_new):
+                merged.append(deduped_new[i])
         return merged[:max_per_beat]
 
     @staticmethod
