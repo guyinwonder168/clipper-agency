@@ -38,6 +38,11 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - **Codex P2 #1 fix:** segment_producer repair now reruns the full SP→SW→VP→VD→Composer cascade (was: only reset state without regenerating, so cached outputs were reused → same failure). New `_rerun_upstream_cascade()` helper in engine.
 - **Codex P2 #2 fix:** multi-gate sequential repair now works — after each repair cycle review, if a different deterministic gate fails, `build_gate_failure_repair_plan` is tried before falling back to manual review (was: only LLM repair_plan checked → different gate failure went to manual review).
 
+#### Post-PR #3 SonarCloud Fixes — Engine Refactor
+- **Fixed cognitive complexity (rule: brain-overload):** extracted VD/Composer cached-upstream repair branch from `_execute_single_repair_cycle` (complexity 17 > 15) into new `_run_cached_upstream_repair()` helper method.
+- **Removed dead code (rule: cweunused):** `_rerun_upstream_cascade` now returns a 5-tuple (was 6-tuple with unused `visual_output` — VD output is consumed internally by Composer during the cascade, never referenced by the caller or Reviewer per ADR 0020 §4 contracts).
+- Pure refactor — 1945 tests pass, no behavior change.
+
 ### Phase 25: Dead Code Removal (PR #49)
 
 Removed superseded `core/multimodal_provider.py` — 0 production consumers, deliberately excluded from wiring in Phase 23 plan (`multimodal_client.py` serves the same purpose and is wired into Visual Director). Eliminated 0.1% code duplication.
