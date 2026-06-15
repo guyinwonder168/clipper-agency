@@ -80,7 +80,7 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 | **P0** | 1 | Job #8 production correctness hotfix | `phase/26-pr1-hotfix` | Low | ✅ MERGED (#51, b0e3deb) | v2.3.0 |
 | **P1** | 2 | Canonical beat timeline enforcement | `phase/26-pr2-canonical-timeline` | Medium | ✅ MERGED (#52, 85df554) | v2.3.0 |
 | **P1** | 3 | Deterministic failure-to-repair integration | `phase/26-pr3-repair-integration` | Medium | ✅ MERGED (#53, 86b37ba) | v2.3.0 |
-| **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | 🔄 PARTIAL (#56, 8edc837) — 4c done; 4a, 4b, 4d, 4e remaining | v2.3.0 |
+| **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | 🔄 PARTIAL (#56, 8edc837) — 4c done; 4a, 4b, 4d, 4e, 4f remaining | v2.3.0 |
 | **P2** | 5 | Pre-VD asset qualification boundary | `phase/26-pr5-pre-vd-qualification` | High | ⬜ Pending (un-deferred per Job #8 evidence: 7/8 candidates rejected, all fell back to text cards, no source recovery) | v2.3.0 |
 | **P2** | 6 | Source transcript + clip-window selector | `phase/26-pr6-clip-window` | Medium | ⬜ Pending | v2.3.0 |
 | **P2** | 7 | Visual Director multi-shot planning | `phase/26-pr7-multishot-vd` | Medium | ⬜ Pending | v2.3.0 |
@@ -259,11 +259,12 @@ These tests assert the **current broken behavior** — they PASS on master today
 **Branch:** `phase/26-pr4-sp-precision`
 **Scope:** Improve existing multi-source discovery; do NOT add new providers.
 
-> **Status:** PR #56 (`8edc837`) delivered 4c (provider tracking) + partial 4e (distribution method exists but is a no-op when beats have LLM-provided candidates). Remaining work: 4a, 4b, 4d, 4e-fixes.
+> **Status:** PR #56 (`8edc837`) delivered 4c (provider tracking) + partial 4e (distribution method exists but is a no-op when beats have LLM-provided candidates). Remaining work: 4a, 4b, 4d, 4e-fixes, 4f.
 
 **Changes:**
 
 1. **4a.** Structured entity extraction from research (event name, date, location, quoted statement, original publisher) + stop-word filtering + entity boosting in keyword extraction. ⬜
+   - **Logging bug:** SP `entities.json` currently produces empty `[]` — entity extraction not running or not persisting.
 2. **4b.** Per-beat search queries driven by `story_beats[].visual_must_show` + `spoken_point` (currently topic-level only). ⬜
 3. **4c.** Provider attempt history persisted (which provider returned which candidate). ✅ DONE (#56)
 4. **4d.** Source-tier escalation (if tier-1 source fails, escalate to tier-2). ⬜
@@ -271,13 +272,22 @@ These tests assert the **current broken behavior** — they PASS on master today
    - **Don't skip beats with existing LLM candidates** — merge + dedupe + rank instead (fixes no-op bug found in Job #8 rerun). ⬜
    - **Persist distribution score** on each candidate for debugging. ⬜
    - **Min score threshold** — reject candidates scoring below 0.1 to avoid noise. ⬜
+6. **4f.** Artifact/logging correctness (cross-cutting, found in Job #8 rerun):
+   - **SP:** `risk_flags.json` currently produces empty `[]` — safety risk assessment not persisting output. ⬜
+   - **VD:** `inspection_cache/` NOT invalidated on rerun — stale cache from previous run (Jun 11 files used during Jun 15 rerun). Cache must be keyed by candidate content hash + invalidated when SP produces new candidates. ⬜
+   - **VD:** `candidate_frames/` empty — no frame extraction happening for new candidates. ⬜
+   - **Reviewer:** `programmatic_checks` produces empty `{}` — the 4 programmatic checks (AV sync, caption quality, fact safety, narrative structure) either not running or not persisting. ⬜
 
 **Verification:**
 - Each beat has its own candidate group (distribution runs even when LLM provided candidates)
-- Entity extraction produces structured fields
+- Entity extraction produces structured fields (`entities.json` non-empty)
 - Provider history artifact exists
 - Distribution score persisted on each candidate
 - Min threshold filters out noise candidates
+- `risk_flags.json` produces non-empty output when risks exist
+- VD `inspection_cache/` invalidated on rerun (no stale entries from previous run)
+- VD `candidate_frames/` contains extracted frames for inspected candidates
+- Reviewer `programmatic_checks` contains results for all 4 checks (not empty `{}`)
 - Job #8 rerun: VD receives >1 candidate per beat (not just LLM-provided)
 
 ---
