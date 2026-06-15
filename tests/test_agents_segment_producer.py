@@ -557,7 +557,7 @@ class TestSegmentProducerNewContract:
         )
         mocker.patch.object(
             SegmentProducerAgent, "_discover_multi_source_assets",
-            return_value=[],
+            return_value=([], []),
         )
         agent = SegmentProducerAgent()
         result = agent.execute(job_id=1, topic="Test", output_dir=str(tmp_path))
@@ -1374,7 +1374,7 @@ class TestMultiSourceDiscovery:
         )
         agent = SegmentProducerAgent()
         config = self._mock_config()
-        results = agent._discover_multi_source_assets(
+        results, _ = agent._discover_multi_source_assets(
             topic="K-pop", entities={}, config=config,
         )
         assert len(results) == 1
@@ -1411,7 +1411,7 @@ class TestMultiSourceDiscovery:
 
         agent = SegmentProducerAgent()
         config = self._mock_config(tavily_api_key="tv-key", brave_api_key="br-key")
-        results = agent._discover_multi_source_assets(
+        results, _ = agent._discover_multi_source_assets(
             topic="K-pop", entities={}, config=config,
         )
         # 1 YouTube + 1 Tavily + 1 Brave = 3
@@ -1440,7 +1440,7 @@ class TestMultiSourceDiscovery:
 
         agent = SegmentProducerAgent()
         config = self._mock_config(tavily_api_key="tv-key")
-        results = agent._discover_multi_source_assets(
+        results, _ = agent._discover_multi_source_assets(
             topic="K-pop", entities={}, config=config,
         )
         # YouTube failed, Tavily succeeded
@@ -1472,7 +1472,7 @@ class TestMultiSourceDiscovery:
 
         agent = SegmentProducerAgent()
         config = self._mock_config(tavily_api_key="tv-key", brave_api_key="br-key")
-        results = agent._discover_multi_source_assets(
+        results, _ = agent._discover_multi_source_assets(
             topic="K-pop", entities={}, config=config,
         )
         assert results == []
