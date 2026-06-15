@@ -95,6 +95,7 @@ _PACKAGING_FAILED = "Packaging failed"
 _VOICE_GEN_FAILED = "Voice generation failed"
 _ASSET_SOURCING_FAILED = "Asset sourcing failed"
 _SCRIPT_BUDGET_FAILED = "Scriptwriter duration budget exceeded"
+_RESEARCH_FAILED = "Research generation failed"
 _REPAIR_EXHAUSTED = "Repair cycles exhausted"
 _MANUAL_REVIEW_REQUIRED = "Manual review required"
 _SAME_PATCH_REPEATED = "Identical repair patch repeated"
@@ -298,6 +299,21 @@ class Orchestrator:
                 "before_review": after_review,
             }
 
+        # No LLM repair plan — try deterministic gate failure synthesis
+        # (Codex P2 #2: enables multi-gate sequential repair within budget)
+        from clipper_agency.core.repair_router import (
+            build_gate_failure_repair_plan,)
+        gate_plan = build_gate_failure_repair_plan(after_review)
+        if gate_plan:
+            self._complete_agent(conn, assets_cache, job_id, "reviewer")
+            update_job_quality_status(conn, job_id, "failed")
+            return {
+                "_action": "continue",
+                "target_agent": gate_plan["target_agent"],
+                "patches": gate_plan["patches"],
+                "before_review": after_review,
+            }
+
         # Reviewer failed with no repair plan — manual review
         self._complete_agent(conn, assets_cache, job_id, "reviewer")
         update_job_repair_status(conn, job_id, "exhausted")
@@ -380,56 +396,67 @@ class Orchestrator:
         # Save current patches for next cycle's comparison
         self._save_previous_patches(assets_cache, job_id, patches)
 
-        # Determine which agent to rerun based on routing
-        target_idx = PIPELINE_ORDER.index(target_agent)
-        reset_agents_from(conn, job_id, target_agent)
-
-        # Reconstruct upstream outputs
-        (research_output, script_output,
-         voice_output, visual_output) = self._reconstruct_upstream_outputs(
-            target_idx, assets_cache, job_id,
-        )
-
         # Load niche context
         job = get_job(conn, job_id)
         snapshot = json.loads(
             (job.get("config_snapshot") or "{}") if job else "{}")
         niche_ctx = snapshot.get("niche_ctx", {})
 
-        # Re-run agents from target onward
-        compose_output = {}
-        abort = None
+        # Determine which agent to rerun based on routing
+        target_idx = PIPELINE_ORDER.index(target_agent)
+        reset_agents_from(conn, job_id, target_agent)
 
-        # Build canonical timeline for repair cycle (ADR 0020)
-        from clipper_agency.core.beat_timeline import build_canonical_timeline
-        beat_timeline = build_canonical_timeline(
-            script_output.get("narrative_structure", []),
-            voice_output.get("timestamps", []),
-        )
-
-        if target_agent in ("visual_director",):
-            visual_output = self._run_visual_director_phase(
-                conn, job_id, topic, research_output, script_output,
-                output_dir, assets_cache, voice_output=voice_output,
-                beat_timeline=beat_timeline,
+        if target_agent in ("segment_producer",):
+            # Full cascade: SP→SW→VP→VD→Composer (Codex P2 #1)
+            cascade = self._rerun_upstream_cascade(
+                cycle, conn, job_id, topic, niche_ctx,
+                output_dir, assets_cache,
             )
-            if visual_output.get("status") == "failed":
-                abort = self._fail_agent(
-                    conn, job_id, "visual_director",
-                    visual_output, _ASSET_SOURCING_FAILED)
-
-        if not abort and target_agent in (
-            "visual_director", "composer",
-        ):
-            compose_output, abort = self._retry_composer_stage(
-                conn, job_id, visual_output, voice_output,
-                output_dir, assets_cache, cycle=cycle,
-                beat_timeline=beat_timeline,
+            if isinstance(cascade, dict):
+                cascade["_action"] = "return"
+                return cascade
+            (research_output, script_output, voice_output,
+             visual_output, compose_output, beat_timeline) = cascade
+        else:
+            # VD/Composer repair: reconstruct cached upstream outputs
+            (research_output, script_output,
+             voice_output, visual_output) = self._reconstruct_upstream_outputs(
+                target_idx, assets_cache, job_id,
             )
 
-        if abort:
-            abort["_action"] = "return"
-            return abort
+            # Build canonical timeline for repair cycle (ADR 0020)
+            from clipper_agency.core.beat_timeline import (
+                build_canonical_timeline,)
+            beat_timeline = build_canonical_timeline(
+                script_output.get("narrative_structure", []),
+                voice_output.get("timestamps", []),
+            )
+
+            compose_output = {}
+            abort = None
+            if target_agent in ("visual_director",):
+                visual_output = self._run_visual_director_phase(
+                    conn, job_id, topic, research_output, script_output,
+                    output_dir, assets_cache, voice_output=voice_output,
+                    beat_timeline=beat_timeline,
+                )
+                if visual_output.get("status") == "failed":
+                    abort = self._fail_agent(
+                        conn, job_id, "visual_director",
+                        visual_output, _ASSET_SOURCING_FAILED)
+
+            if not abort and target_agent in (
+                "visual_director", "composer",
+            ):
+                compose_output, abort = self._retry_composer_stage(
+                    conn, job_id, visual_output, voice_output,
+                    output_dir, assets_cache, cycle=cycle,
+                    beat_timeline=beat_timeline,
+                )
+
+            if abort:
+                abort["_action"] = "return"
+                return abort
 
         # Re-run reviewer
         mark_agent_running(conn, job_id, "reviewer")
@@ -476,6 +503,96 @@ class Orchestrator:
             cycle, job_id, before_review, after_review,
             conn, assets_cache,
         )
+
+    def _rerun_upstream_cascade(
+        self,
+        cycle: int,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        niche_ctx: dict[str, Any],
+        output_dir: str,
+        assets_cache: str,
+    ) -> dict[str, Any] | tuple:
+        """Rerun SP→SW→VP→VD→Composer cascade for upstream repair.
+
+        Returns a 6-tuple (research, script, voice, visual, compose,
+        beat_timeline) on success, or an abort dict on failure.
+        """
+        # Rerun Segment Producer
+        research_output = self._run_researcher(
+            job_id=job_id, topic=topic,
+            safety_rules=niche_ctx.get("safety_rules", []),
+            channel_description=niche_ctx.get("channel_description", ""),
+            language=niche_ctx.get("language", "id"),
+            tone=niche_ctx.get("tone", "informative"),
+            content_angle=niche_ctx.get("content_angle", ""),
+            output_dir=output_dir, assets_cache=assets_cache,
+        )
+        if research_output.get("status") == "failed":
+            return self._fail_agent(
+                conn, job_id, "segment_producer",
+                research_output, _RESEARCH_FAILED)
+        self._complete_agent(conn, assets_cache, job_id, "segment_producer")
+
+        # Rerun Scriptwriter
+        script_output = self._run_content_scriptwriter(
+            conn, job_id, topic,
+            niche_ctx.get("safety_rules", []),
+            niche_ctx.get("channel_description", ""),
+            niche_ctx.get("language", "id"),
+            niche_ctx.get("tone", "informative"),
+            niche_ctx.get("content_angle", ""),
+            research_output, assets_cache,
+        )
+        if script_output.get("status") == "failed":
+            return self._fail_agent(
+                conn, job_id, "scriptwriter", script_output,
+                _SCRIPT_BUDGET_FAILED)
+
+        # Rerun Voice Producer
+        mark_agent_running(conn, job_id, "voice_producer")
+        voice_output = self._run_voice_producer(
+            job_id=job_id,
+            script=script_output.get("script", []),
+            voiceover_text=script_output.get("voiceover_text", ""),
+            output_dir=output_dir, assets_cache=assets_cache,
+        )
+        if voice_output.get("status") == "failed":
+            return self._fail_agent(
+                conn, job_id, "voice_producer",
+                voice_output, _VOICE_GEN_FAILED)
+        self._complete_agent(conn, assets_cache, job_id, "voice_producer")
+
+        # Rebuild canonical timeline from fresh outputs (ADR 0020)
+        from clipper_agency.core.beat_timeline import build_canonical_timeline
+        beat_timeline = build_canonical_timeline(
+            script_output.get("narrative_structure", []),
+            voice_output.get("timestamps", []),
+        )
+
+        # Rerun Visual Director
+        visual_output = self._run_visual_director_phase(
+            conn, job_id, topic, research_output, script_output,
+            output_dir, assets_cache, voice_output=voice_output,
+            beat_timeline=beat_timeline,
+        )
+        if visual_output.get("status") == "failed":
+            return self._fail_agent(
+                conn, job_id, "visual_director",
+                visual_output, _ASSET_SOURCING_FAILED)
+
+        # Rerun Composer
+        compose_output, abort = self._retry_composer_stage(
+            conn, job_id, visual_output, voice_output,
+            output_dir, assets_cache, cycle=cycle,
+            beat_timeline=beat_timeline,
+        )
+        if abort:
+            return abort
+
+        return (research_output, script_output, voice_output,
+                visual_output, compose_output, beat_timeline)
 
     def _execute_repair_cycle(
         self,

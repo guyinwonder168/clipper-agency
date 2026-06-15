@@ -238,3 +238,130 @@ class TestGateFailureRepairRouting:
         assert review_output is not None
         # Unknown reason → no repair routing → stays blocked
         assert "repair_routing" not in review_output
+
+
+class TestUpstreamCascadeRepair:
+    """P2 #1: SP repair triggers full SP→SW→VP→VD→Composer cascade."""
+
+    def test_segment_producer_repair_reruns_full_cascade(
+        self, db_initialized, tmp_path,
+    ):
+        """SP target_agent reruns all 5 agents, not just cached outputs."""
+        ac = str(tmp_path / "cache")
+        job_id = _setup_job(db_initialized, ac, tmp_path)
+        orch = Orchestrator(db_path=db_initialized)
+        conn = get_connection(db_initialized)
+
+        call_log = []
+
+        def track(name, return_value):
+            def _mock(*args, **kwargs):
+                call_log.append(name)
+                return return_value
+            return _mock
+
+        with patch.object(orch, "_run_researcher",
+                          side_effect=track("_run_researcher", {
+                              "status": "completed", "story_beats": [],
+                              "research_brief": "x", "sources": [],
+                              "risk_flags": [],
+                          })), \
+             patch.object(orch, "_run_content_scriptwriter",
+                          side_effect=track("_run_content_scriptwriter", {
+                              "status": "completed", "script": [],
+                              "caption": "c", "voiceover_text": "",
+                              "narrative_structure": [], "unverified_claims": [],
+                          })), \
+             patch.object(orch, "_run_voice_producer",
+                          side_effect=track("_run_voice_producer", {
+                              "status": "completed", "timestamps": [],
+                              "voiceover_duration_sec": 5.0,
+                          })), \
+             patch.object(orch, "_run_visual_director_phase",
+                          side_effect=track("_run_visual_director_phase", {
+                              "status": "completed", "assets": [],
+                          })), \
+             patch.object(orch, "_retry_composer_stage",
+                          return_value=({"status": "completed",
+                                          "duration_sec": 5.0}, None)), \
+             patch.object(orch, "_run_reviewer",
+                          return_value={"status": "pass", "score": 85}):
+            result = orch._execute_single_repair_cycle(
+                cycle=1, max_cycles=3,
+                target_agent="segment_producer",
+                patches=[{"beat_id": "all", "action": "redo_research",
+                          "reason": "wrong_event"}],
+                before_review={"status": "fail",
+                               "reason": "PACKAGE_CONSISTENCY_FAILED"},
+                job_id=job_id,
+                assets_cache=ac,
+                output_dir=str(tmp_path / "outputs"),
+                topic="Test",
+                conn=conn,
+            )
+
+        # All 5 agents rerun in order
+        assert call_log == [
+            "_run_researcher", "_run_content_scriptwriter",
+            "_run_voice_producer", "_run_visual_director_phase",
+        ]
+        assert result.get("status") == "completed"
+        conn.close()
+
+
+class TestMultiGateSequentialRepair:
+    """P2 #2: After repair, a different gate failure triggers new patches."""
+
+    def test_gate_failure_after_repair_continues_with_new_patches(
+        self, db_initialized, tmp_path,
+    ):
+        """Post-repair review fails with different gate → continue."""
+        ac = str(tmp_path / "cache")
+        job_id = _setup_job(db_initialized, ac, tmp_path)
+        orch = Orchestrator(db_path=db_initialized)
+        conn = get_connection(db_initialized)
+
+        after_review = {
+            "status": "fail",
+            "reason": "TEXT_COLLISION_FAILED",
+            "score": 0,
+        }
+
+        result = orch._handle_review_outcome(
+            cycle=1, job_id=job_id,
+            before_review={"status": "fail",
+                           "reason": "VISUAL_COVERAGE_FAILED"},
+            after_review=after_review,
+            conn=conn, assets_cache=ac,
+        )
+
+        assert result["_action"] == "continue"
+        assert result["target_agent"] == "visual_director"
+        assert len(result["patches"]) == 1
+        conn.close()
+
+    def test_no_repair_plan_and_no_gate_failure_goes_manual(
+        self, db_initialized, tmp_path,
+    ):
+        """Neither repair_plan nor gate failure → manual review."""
+        ac = str(tmp_path / "cache")
+        job_id = _setup_job(db_initialized, ac, tmp_path)
+        orch = Orchestrator(db_path=db_initialized)
+        conn = get_connection(db_initialized)
+
+        after_review = {
+            "status": "fail",
+            "reason": "UNKNOWN_REASON",
+            "score": 0,
+        }
+
+        result = orch._handle_review_outcome(
+            cycle=1, job_id=job_id,
+            before_review={"status": "fail"},
+            after_review=after_review,
+            conn=conn, assets_cache=ac,
+        )
+
+        assert result["_action"] == "return"
+        assert result["status"] == "manual_review_required"
+        conn.close()
