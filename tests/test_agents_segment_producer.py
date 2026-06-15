@@ -1298,22 +1298,20 @@ class TestBuildSearchQueries:
 
     def test_topic_only_returns_single_query(self):
         agent = SegmentProducerAgent()
-        queries = agent._build_search_queries("K-pop drama", {})
+        queries = agent._build_search_queries("K-pop drama", [])
         assert queries == ["K-pop drama"]
 
     def test_topic_only_with_empty_entities_list(self):
         agent = SegmentProducerAgent()
-        queries = agent._build_search_queries("K-pop drama", {"entities": []})
+        queries = agent._build_search_queries("K-pop drama", [])
         assert queries == ["K-pop drama"]
 
     def test_with_entities_adds_name_queries(self):
         agent = SegmentProducerAgent()
-        entities = {
-            "entities": [
-                {"name": "Jennie Kim"},
-                {"name": "Lisa Blackpink"},
-            ],
-        }
+        entities = [
+            {"name": "Jennie Kim"},
+            {"name": "Lisa Blackpink"},
+        ]
         queries = agent._build_search_queries("K-pop drama", entities)
         assert len(queries) == 3
         assert queries[0] == "K-pop drama"
@@ -1322,27 +1320,25 @@ class TestBuildSearchQueries:
 
     def test_max_3_queries_even_with_many_entities(self):
         agent = SegmentProducerAgent()
-        entities = {
-            "entities": [
-                {"name": "A"},
-                {"name": "B"},
-                {"name": "C"},
-                {"name": "D"},
-                {"name": "E"},
-            ],
-        }
+        entities = [
+            {"name": "A"},
+            {"name": "B"},
+            {"name": "C"},
+            {"name": "D"},
+            {"name": "E"},
+        ]
         queries = agent._build_search_queries("topic", entities)
-        assert len(queries) == 3
+        assert len(queries) == 3  # topic + 2 entities
 
     def test_entity_without_name_uses_str_fallback(self):
         agent = SegmentProducerAgent()
-        entities = {"entities": ["plain_string_entity"]}
+        entities = ["plain_string_entity"]
         queries = agent._build_search_queries("topic", entities)
         assert "plain_string_entity topic" in queries
 
-    def test_non_dict_entities_treated_as_empty(self):
+    def test_non_list_entities_treated_as_empty(self):
         agent = SegmentProducerAgent()
-        queries = agent._build_search_queries("topic", "not a dict")
+        queries = agent._build_search_queries("topic", None)
         assert queries == ["topic"]
 
 

@@ -231,8 +231,9 @@ class SegmentProducerAgent(BaseAgent):
         # ── 2b. Multi-provider asset discovery (uses synthesis entities) ─
         multi_sources, provider_attempts = self._discover_multi_source_assets(
             topic=topic,
-            entities=synthesis.get("entities", {}),
+            entities=synthesis.get("entities", []),
             config=settings,
+            beats=synthesis.get("story_beats", []),
         )
         multi_candidates = self._build_asset_candidates_from_sources(multi_sources)
 
@@ -593,10 +594,37 @@ class SegmentProducerAgent(BaseAgent):
 
     # ── multi-source asset discovery ──────────────────────────────────────
 
+    @staticmethod
+    def _per_beat_queries(topic: str, beats: list[dict], max_queries: int) -> list[str]:
+        """Build per-beat search queries from beat keywords."""
+        queries: list[str] = []
+        for beat in beats:
+            if len(queries) >= max_queries - 1:
+                break
+            keywords = SegmentProducerAgent._extract_beat_keywords(beat)
+            if keywords:
+                beat_query = f"{' '.join(keywords[:3])} {topic}"
+                if beat_query not in queries:
+                    queries.append(beat_query)
+        return queries
+
+    @staticmethod
+    def _entity_list_queries(topic: str, entities: list, max_queries: int = 3) -> list[str]:
+        """Build entity-based search queries from a flat list of entities."""
+        queries: list[str] = []
+        for entity in entities[:max_queries]:
+            name = entity.get("name", "") if isinstance(entity, dict) else str(entity)
+            name = name.strip()
+            if name:
+                query = f"{name} {topic}"
+                if query not in queries:
+                    queries.append(query)
+        return queries
+
     def _build_search_queries(
         self,
         topic: str,
-        entities: dict,
+        entities: list,
         beats: list[dict] | None = None,
         max_queries: int = 5,
     ) -> list[str]:
@@ -604,40 +632,20 @@ class SegmentProducerAgent(BaseAgent):
 
         When ``beats`` is provided, generates per-beat queries from
         ``visual_must_show`` and ``spoken_point`` keywords. Falls back to
-        topic + entity name queries when ``beats`` is None (backward compat).
+        entity-based queries when ``beats`` is None (backward compat).
         """
         queries = [topic]
-
-        # Per-beat queries (preferred when beats are available)
         if beats:
-            for beat in beats:
-                if len(queries) >= max_queries:
-                    break
-                keywords = self._extract_beat_keywords(beat)
-                if keywords:
-                    beat_query = f"{' '.join(keywords[:3])} {topic}"
-                    if beat_query not in queries:
-                        queries.append(beat_query)
+            queries.extend(self._per_beat_queries(topic, beats, max_queries))
             return queries[:max_queries]
-
-        # Fallback: entity-based queries (backward compat)
-        if not isinstance(entities, dict):
-            return queries
-        entity_list = entities.get("entities", [])
-        if not isinstance(entity_list, list):
-            return queries
-        for entity in entity_list:
-            if len(queries) >= 3:
-                break
-            name = entity.get("name", "") if isinstance(entity, dict) else str(entity)
-            if name:
-                queries.append(f"{name} {topic}")
+        if isinstance(entities, list) and entities:
+            queries.extend(self._entity_list_queries(topic, entities, max_queries=2))
         return queries
 
     def _discover_multi_source_assets(
         self,
         topic: str,
-        entities: dict,
+        entities: list,
         config: Any,
         beats: list[dict] | None = None,
     ) -> tuple[list[dict], list[dict]]:
@@ -788,6 +796,43 @@ class SegmentProducerAgent(BaseAgent):
         return matched / len(keywords_lower)
 
     @staticmethod
+    def _score_and_filter_candidates(
+        global_candidates: list[dict],
+        keywords: list[str],
+        beat_id: int | str | None,
+        min_score: float,
+        max_per_beat: int,
+    ) -> list[dict]:
+        """Score candidates against beat keywords, return filtered top matches."""
+        scored: list[tuple[float, dict]] = []
+        for candidate in global_candidates:
+            score = SegmentProducerAgent._score_candidate_for_beat(candidate, keywords)
+            if score >= min_score:
+                candidate_copy = dict(candidate)
+                candidate_copy["related_beat_id"] = beat_id
+                candidate_copy["distribution_score"] = round(score, 4)
+                scored.append((score, candidate_copy))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [c for _, c in scored[:max_per_beat]]
+
+    @staticmethod
+    def _merge_candidates(
+        existing: list[dict],
+        new_assignments: list[dict],
+        max_per_beat: int,
+    ) -> list[dict]:
+        """Merge existing beat candidates with new assignments, dedup by URL."""
+        seen_urls: set[str] = {c.get("url", "") for c in existing if c.get("url")}
+        merged = list(existing)
+        for cand in new_assignments:
+            url = cand.get("url", "")
+            if url and url in seen_urls:
+                continue
+            seen_urls.add(url)
+            merged.append(cand)
+        return merged[:max_per_beat]
+
+    @staticmethod
     def _distribute_candidates_to_beats(
         story_beats: list[dict],
         global_candidates: list[dict],
@@ -808,42 +853,22 @@ class SegmentProducerAgent(BaseAgent):
         result: list[dict] = []
         for beat in story_beats:
             beat_copy = dict(beat)
-
             keywords = SegmentProducerAgent._extract_beat_keywords(beat_copy)
             if not keywords:
                 result.append(beat_copy)
                 continue
 
-            scored: list[tuple[float, dict]] = []
-            for candidate in global_candidates:
-                score = SegmentProducerAgent._score_candidate_for_beat(
-                    candidate, keywords,
-                )
-                if score >= min_score:
-                    candidate_copy = dict(candidate)
-                    candidate_copy["related_beat_id"] = beat_copy.get("beat_id")
-                    candidate_copy["distribution_score"] = round(score, 4)
-                    scored.append((score, candidate_copy))
-
-            scored.sort(key=lambda x: x[0], reverse=True)
-            new_assignments = [c for _, c in scored[:max_per_beat]]
-
+            new_assignments = SegmentProducerAgent._score_and_filter_candidates(
+                global_candidates, keywords, beat_copy.get("beat_id"),
+                min_score, max_per_beat,
+            )
             existing = beat_copy.get("asset_candidates") or []
             if existing:
-                seen_urls: set[str] = {
-                    c.get("url", "") for c in existing if c.get("url")
-                }
-                merged = list(existing)
-                for cand in new_assignments:
-                    url = cand.get("url", "")
-                    if url and url in seen_urls:
-                        continue
-                    seen_urls.add(url)
-                    merged.append(cand)
-                beat_copy["asset_candidates"] = merged[:max_per_beat]
+                beat_copy["asset_candidates"] = SegmentProducerAgent._merge_candidates(
+                    existing, new_assignments, max_per_beat,
+                )
             else:
                 beat_copy["asset_candidates"] = new_assignments
-
             result.append(beat_copy)
 
         return result
@@ -1032,6 +1057,8 @@ class SegmentProducerAgent(BaseAgent):
             "verified_facts": parsed.get("verified_facts", []),
             "unverified_claims": parsed.get("unverified_claims", []),
             "reference_style": parsed.get("reference_style"),
+            "entities": parsed.get("entities", []),
+            "risk_flags": parsed.get("risk_flags", []),
         }
 
     def _parse_synthesis_response(self, content: str) -> dict[str, Any]:

@@ -113,13 +113,11 @@ class TestBatch8MultiSourceRegression:
         """Search queries include entity names from synthesis."""
         sp = SegmentProducerAgent.__new__(SegmentProducerAgent)
 
-        entities = {
-            "entities": [
-                {"name": "Sarwendah"},
-                {"name": "Zara Adhisty"},
-                {"name": "Ruby"},
-            ],
-        }
+        entities = [
+            {"name": "Sarwendah"},
+            {"name": "Zara Adhisty"},
+            {"name": "Ruby"},
+        ]
 
         queries = sp._build_search_queries("drama terbaru", entities)
 

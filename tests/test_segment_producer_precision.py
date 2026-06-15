@@ -517,6 +517,107 @@ class TestPerBeatSearchQueries:
             for i in range(10)
         ]
         queries = agent._build_search_queries(
-            topic="artis", entities={}, beats=beats,
+            topic="artis", entities=[], beats=beats,
         )
         assert len(queries) <= 5
+
+
+# ─── Codex P1/P2 regression tests (data flow propagation) ─────────────
+
+
+class TestEntitiesRiskFlagsPropagation:
+    """Verify entities + risk_flags flow from parse → synthesize → execute.
+
+    Regression tests for Codex P1 finding: _synthesize_research() omitted
+    entities/risk_flags from its return dict, causing empty artifacts.
+    """
+
+    @staticmethod
+    def _mock_chat(content: str) -> dict:
+        return {"content": content, "model": "test", "usage": {}}
+
+    def test_synthesize_propagates_entities(self, mocker):
+        """_synthesize_research() must include entities in return dict."""
+        import json
+        payload = json.dumps({
+            "research_brief": "Brief",
+            "story_beats": [],
+            "entities": [{"name": "Artis", "type": "location"}],
+            "risk_flags": [],
+        })
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value=self._mock_chat(payload),
+        )
+        agent = SegmentProducerAgent()
+        result = agent._synthesize_research(
+            {"sources": []}, "topic", [],
+        )
+        assert result["entities"] == [{"name": "Artis", "type": "location"}]
+
+    def test_synthesize_propagates_risk_flags(self, mocker):
+        """_synthesize_research() must include risk_flags in return dict."""
+        import json
+        payload = json.dumps({
+            "research_brief": "Brief",
+            "story_beats": [],
+            "entities": [],
+            "risk_flags": [{"type": "unverified_claim", "detail": "X"}],
+        })
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value=self._mock_chat(payload),
+        )
+        agent = SegmentProducerAgent()
+        result = agent._synthesize_research(
+            {"sources": []}, "topic", [],
+        )
+        assert result["risk_flags"] == [{"type": "unverified_claim", "detail": "X"}]
+
+    def test_synthesize_defaults_entities_empty_when_missing(self, mocker):
+        """When LLM omits entities, default to empty list (not KeyError)."""
+        import json
+        payload = json.dumps({"research_brief": "Brief", "story_beats": []})
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value=self._mock_chat(payload),
+        )
+        agent = SegmentProducerAgent()
+        result = agent._synthesize_research(
+            {"sources": []}, "topic", [],
+        )
+        assert result["entities"] == []
+        assert result["risk_flags"] == []
+
+
+class TestEntitiesAsArray:
+    """Verify _build_search_queries accepts entities as list (not dict).
+
+    Regression test for Codex P2 finding: parser produces entities as
+    array but _build_search_queries expected dict shape.
+    """
+
+    def test_entities_as_list_produces_entity_queries(self):
+        """entities=[{name:...}] should produce '{name} {topic}' queries."""
+        agent = SegmentProducerAgent()
+        queries = agent._build_search_queries(
+            topic="artis",
+            entities=[{"name": " Rafi Ahmad", "type": "person"}],
+        )
+        # Should include topic + entity-based query
+        assert len(queries) >= 2
+        assert any("Rafi Ahmad" in q for q in queries)
+
+    def test_entities_as_empty_list_returns_topic_only(self):
+        """entities=[] should return just [topic]."""
+        agent = SegmentProducerAgent()
+        queries = agent._build_search_queries(topic="artis", entities=[])
+        assert queries == ["artis"]
+
+    def test_entities_as_list_of_strings(self):
+        """entities as list of plain strings should also work."""
+        agent = SegmentProducerAgent()
+        queries = agent._build_search_queries(
+            topic="artis", entities=["Rafi Ahmad", "Nagita Slavina"],
+        )
+        assert len(queries) >= 2
