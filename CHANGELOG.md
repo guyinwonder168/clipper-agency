@@ -45,6 +45,18 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - **AGENTS.md:** strengthened SonarCloud merge gate — Quality Gate passing is necessary but NOT sufficient; PR must also show zero new issues before merge.
 - Pure refactor — 1945 tests pass, no behavior change.
 
+#### Repo Hygiene (PR #55) — Untrack .codegraph
+- Removed `.codegraph/` from git tracking (was: only `.codegraph/.gitignore` tracked, rest of folder ignored locally).
+- Added `.codegraph/` to root `.gitignore`. Local Codegraph MCP data unaffected.
+
+#### PR 4 — Segment Producer Precision Upgrade
+- **Fixed:** global `asset_candidates` are now distributed to `story_beats[].asset_candidates` via keyword matching (was: SP produced 31 global candidates but VD only reads per-beat candidates → VD had nothing to inspect when LLM didn't populate per-beat candidates → fell back to text_cards).
+- New `_distribute_candidates_to_beats()` — post-hoc distribution using keyword overlap from `visual_must_show + caption_keywords + spoken_point`. Skips beats that already have LLM-provided candidates. Sets `related_beat_id` on distributed candidates.
+- New `_extract_beat_keywords()` and `_score_candidate_for_beat()` helpers.
+- **Added:** provider attempt history tracking — `_discover_multi_source_assets()` now returns `(sources, attempts)` tuple; attempts persisted as `agents/segment_producer/normalized/provider_attempts.json` artifact.
+- 24 new tests in `tests/test_segment_producer_precision.py`.
+- Step 5 (Pre-VD Qualification Boundary) deferred — investigation found VD already qualifies per-beat via `_do_inspect_and_select`; Step 4's distribution fix removes the root cause that made Step 5 seem necessary.
+
 ### Phase 25: Dead Code Removal (PR #49)
 
 Removed superseded `core/multimodal_provider.py` — 0 production consumers, deliberately excluded from wiring in Phase 23 plan (`multimodal_client.py` serves the same purpose and is wired into Visual Director). Eliminated 0.1% code duplication.

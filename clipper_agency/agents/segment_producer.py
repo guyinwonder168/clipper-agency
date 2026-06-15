@@ -229,7 +229,7 @@ class SegmentProducerAgent(BaseAgent):
         )
 
         # ── 2b. Multi-provider asset discovery (uses synthesis entities) ─
-        multi_sources = self._discover_multi_source_assets(
+        multi_sources, provider_attempts = self._discover_multi_source_assets(
             topic=topic,
             entities=synthesis.get("entities", {}),
             config=settings,
@@ -261,19 +261,26 @@ class SegmentProducerAgent(BaseAgent):
             target_duration_sec=target_dur,
         )
 
+        # ── 7. Merge global candidates + distribute to beats ───────────
+        global_candidates = self._merge_asset_candidates(
+            synthesis.get("asset_candidates", []),
+            discovered_candidates,
+            multi_candidates,
+            thumbnail_candidates,
+        )
+        story_beats_distributed = self._distribute_candidates_to_beats(
+            story_beats_raw, global_candidates,
+        )
+
         result = {
             "status": "completed",
             "research_brief": synthesis["research_brief"],
             "sources": aggregated,
             "risk_flags": [],
-            "story_beats": story_beats_raw,
+            "story_beats": story_beats_distributed,
             "format_decision": legacy_format,
-            "asset_candidates": self._merge_asset_candidates(
-                synthesis.get("asset_candidates", []),
-                discovered_candidates,
-                multi_candidates,
-                thumbnail_candidates,
-            ),
+            "asset_candidates": global_candidates,
+            "provider_attempts": provider_attempts,
             "do_not_use": synthesis.get("do_not_use", []),
             "verified_facts": synthesis.get("verified_facts", []),
             "unverified_claims": synthesis.get("unverified_claims", []),
@@ -607,9 +614,14 @@ class SegmentProducerAgent(BaseAgent):
         topic: str,
         entities: dict,
         config: Any,
-    ) -> list[dict]:
-        """Search YouTube, Tavily, Brave for additional asset candidates."""
+    ) -> tuple[list[dict], list[dict]]:
+        """Search YouTube, Tavily, Brave for additional asset candidates.
+
+        Returns ``(sources, attempts)`` where ``attempts`` records which
+        provider was queried, with what query, and how many results came back.
+        """
         sources: list[dict] = []
+        attempts: list[dict] = []
         search_queries = self._build_search_queries(topic, entities)
 
         # YouTube search (free, no API key needed)
@@ -618,8 +630,19 @@ class SegmentProducerAgent(BaseAgent):
             for query in search_queries:
                 results = ytdlp.search(query, max_results=3)
                 sources.extend(results)
+                attempts.append({
+                    "provider": "youtube",
+                    "query": query,
+                    "result_count": len(results),
+                })
         except Exception:
             logger.exception("YouTube multi-source search failed")
+            attempts.append({
+                "provider": "youtube",
+                "query": ", ".join(search_queries),
+                "result_count": 0,
+                "error": "search_failed",
+            })
 
         # Tavily search (if API key configured)
         tavily_key = getattr(config, "tavily_api_key", "")
@@ -629,8 +652,19 @@ class SegmentProducerAgent(BaseAgent):
                 for query in search_queries:
                     results = tavily.search(query, max_results=3)
                     sources.extend(results)
+                    attempts.append({
+                        "provider": "tavily",
+                        "query": query,
+                        "result_count": len(results),
+                    })
             except Exception:
                 logger.exception("Tavily multi-source search failed")
+                attempts.append({
+                    "provider": "tavily",
+                    "query": ", ".join(search_queries),
+                    "result_count": 0,
+                    "error": "search_failed",
+                })
 
         # Brave search (if API key configured)
         brave_key = getattr(config, "brave_api_key", "")
@@ -640,10 +674,21 @@ class SegmentProducerAgent(BaseAgent):
                 for query in search_queries:
                     results = brave.search_videos(query, max_results=3)
                     sources.extend(results)
+                    attempts.append({
+                        "provider": "brave",
+                        "query": query,
+                        "result_count": len(results),
+                    })
             except Exception:
                 logger.exception("Brave multi-source search failed")
+                attempts.append({
+                    "provider": "brave",
+                    "query": ", ".join(search_queries),
+                    "result_count": 0,
+                    "error": "search_failed",
+                })
 
-        return sources
+        return sources, attempts
 
     @staticmethod
     def _merge_asset_candidates(*candidate_groups: list[dict]) -> list[dict]:
@@ -659,6 +704,91 @@ class SegmentProducerAgent(BaseAgent):
                 seen_urls.add(key)
                 merged.append(candidate)
         return merged
+
+    # ── per-beat candidate distribution ───────────────────────────────────
+
+    @staticmethod
+    def _extract_beat_keywords(beat: dict) -> list[str]:
+        """Extract lowercase keywords from beat context for candidate matching.
+
+        Combines keywords from visual_must_show, caption_keywords, and
+        spoken_point. Filters words shorter than 3 characters.
+        """
+        keywords: set[str] = set()
+
+        for chunk in beat.get("visual_must_show", "").split(","):
+            for word in chunk.strip().split():
+                if len(word) >= 3:
+                    keywords.add(word.lower())
+
+        for kw in beat.get("caption_keywords", []):
+            kw_stripped = kw.strip().lower()
+            if kw_stripped:
+                keywords.add(kw_stripped)
+
+        for word in beat.get("spoken_point", "").split():
+            if len(word) >= 3:
+                keywords.add(word.lower())
+
+        return list(keywords)
+
+    @staticmethod
+    def _score_candidate_for_beat(
+        candidate: dict, keywords_lower: list[str],
+    ) -> float:
+        """Score candidate relevance to a beat via keyword overlap (0.0-1.0)."""
+        if not keywords_lower:
+            return 0.0
+
+        text = f"{candidate.get('title', '')} {candidate.get('reason', '')}".lower()
+        if not text.strip():
+            return 0.0
+
+        matched = sum(1 for kw in keywords_lower if kw in text)
+        return matched / len(keywords_lower)
+
+    @staticmethod
+    def _distribute_candidates_to_beats(
+        story_beats: list[dict],
+        global_candidates: list[dict],
+        max_per_beat: int = 5,
+    ) -> list[dict]:
+        """Distribute global asset candidates to beats lacking candidates.
+
+        Uses keyword matching to assign relevant candidates per beat.
+        Beats that already have asset_candidates are left unchanged.
+        Returns a NEW list of beat dicts (does not mutate input).
+        """
+        if not global_candidates:
+            return [dict(b) for b in story_beats]
+
+        result: list[dict] = []
+        for beat in story_beats:
+            beat_copy = dict(beat)
+            if beat_copy.get("asset_candidates"):
+                result.append(beat_copy)
+                continue
+
+            keywords = SegmentProducerAgent._extract_beat_keywords(beat_copy)
+            if not keywords:
+                result.append(beat_copy)
+                continue
+
+            scored: list[tuple[float, dict]] = []
+            for candidate in global_candidates:
+                score = SegmentProducerAgent._score_candidate_for_beat(
+                    candidate, keywords,
+                )
+                if score > 0.0:
+                    candidate_copy = dict(candidate)
+                    candidate_copy["related_beat_id"] = beat_copy.get("beat_id")
+                    scored.append((score, candidate_copy))
+
+            scored.sort(key=lambda x: x[0], reverse=True)
+            beat_copy["asset_candidates"] = [c for _, c in scored[:max_per_beat]]
+            result.append(beat_copy)
+
+        return result
 
     @staticmethod
     def _get_thumbnail_fallback_candidates(
@@ -719,6 +849,9 @@ class SegmentProducerAgent(BaseAgent):
         asset_candidates_path = base / "normalized" / "asset_candidates.json"
         write_json(asset_candidates_path, output.get("asset_candidates", []))
 
+        provider_attempts_path = base / "normalized" / "provider_attempts.json"
+        write_json(provider_attempts_path, output.get("provider_attempts", []))
+
         contract = {
             "topic": topic,
             "topic_brief_path": brief_path,
@@ -731,6 +864,9 @@ class SegmentProducerAgent(BaseAgent):
             "risk_flags": [],
             "asset_candidates": output.get("asset_candidates", []),
             "asset_candidates_path": str(asset_candidates_path),
+            "story_beats": output.get("story_beats", []),
+            "provider_attempts": output.get("provider_attempts", []),
+            "provider_attempts_path": str(provider_attempts_path),
             "cache_key": f"job_{job_id}:{topic}",
             "cache_freshness": "fresh",
         }

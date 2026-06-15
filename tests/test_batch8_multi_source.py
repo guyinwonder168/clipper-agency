@@ -61,7 +61,7 @@ class TestBatch8MultiSourceRegression:
                 mock_instance.search.return_value = youtube_results
                 MockYtdlp.return_value = mock_instance
 
-                sources = sp._discover_multi_source_assets("test topic", {}, config)
+                sources, _ = sp._discover_multi_source_assets("test topic", {}, config)
 
         assert len(sources) == 1
         assert sources[0]["source_type"] == "youtube_official"
@@ -79,7 +79,7 @@ class TestBatch8MultiSourceRegression:
             mock_instance.search.side_effect = Exception("network error")
             MockYtdlp.return_value = mock_instance
 
-            sources = sp._discover_multi_source_assets("test topic", {}, config)
+            sources, _ = sp._discover_multi_source_assets("test topic", {}, config)
 
         # Multi-source returns empty — existing ScrapeCreators/Firecrawl untouched
         assert sources == []
