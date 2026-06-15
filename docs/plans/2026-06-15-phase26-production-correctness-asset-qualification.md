@@ -80,7 +80,7 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 | **P0** | 1 | Job #8 production correctness hotfix | `phase/26-pr1-hotfix` | Low | ✅ MERGED (#51, b0e3deb) | v2.3.0 |
 | **P1** | 2 | Canonical beat timeline enforcement | `phase/26-pr2-canonical-timeline` | Medium | ✅ MERGED (#52, 85df554) | v2.3.0 |
 | **P1** | 3 | Deterministic failure-to-repair integration | `phase/26-pr3-repair-integration` | Medium | ✅ MERGED (#53, 86b37ba) | v2.3.0 |
-| **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | 🔄 IN PROGRESS | v2.3.0 |
+| **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | ✅ MERGED (#56, 8edc837) | v2.3.0 |
 | **P2** | 5 | Pre-VD asset qualification boundary | ~~`phase/26-pr5-pre-vd-qualification`~~ | ~~High~~ | ⏭️ **DEFERRED** — investigation found VD already qualifies per-beat; Step 4 removes root cause | v2.3.0 |
 | **P2** | 6 | Source transcript + clip-window selector | `phase/26-pr6-clip-window` | Medium | ⬜ Pending | v2.3.0 |
 | **P2** | 7 | Visual Director multi-shot planning | `phase/26-pr7-multishot-vd` | Medium | ⬜ Pending | v2.3.0 |
