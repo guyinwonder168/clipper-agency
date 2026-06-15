@@ -148,6 +148,10 @@ You MUST produce a JSON response with these fields:
    - "transition_style": "hard_cut" or "crossfade"
    - "visual_priority": ordered list of visual types
 
+9. "entities" — array of {{"name", "type"}} for key entities (people, places, events, brands) mentioned in the research. Type options: "person", "location", "event", "organization", "date", "quote".
+
+10. "risk_flags" — array of {{"category", "description"}} for safety/legal risks. Category options: "legal", "factual", "sensitivity", "copyright". Empty array if no risks.
+
 Rules:
 - Every beat must have a clear visual plan (asset or fallback)
 - If a claim is unconfirmed, use safe wording

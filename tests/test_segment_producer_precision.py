@@ -585,7 +585,7 @@ class TestEntitiesRiskFlagsPropagation:
             "research_brief": "Brief",
             "story_beats": [],
             "entities": [],
-            "risk_flags": [{"type": "unverified_claim", "detail": "X"}],
+            "risk_flags": [{"category": "legal", "description": "Defamation risk"}],
         })
         mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",
@@ -595,7 +595,7 @@ class TestEntitiesRiskFlagsPropagation:
         result = agent._synthesize_research(
             {"sources": []}, "topic", [],
         )
-        assert result["risk_flags"] == [{"type": "unverified_claim", "detail": "X"}]
+        assert result["risk_flags"] == [{"category": "legal", "description": "Defamation risk"}]
 
     def test_synthesize_defaults_entities_empty_when_missing(self, mocker):
         """When LLM omits entities, default to empty list (not KeyError)."""

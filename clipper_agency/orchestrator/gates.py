@@ -88,13 +88,25 @@ class GatePostResearchRisk(BaseGate):
 
     DANGER_KEYWORDS = ["ilegal", "banned", "defamation", "sara"]
 
-    def evaluate(self, risk_flags: list[str] | None = None,
+    @staticmethod
+    def _normalize_flags(flags: list) -> str:
+        """Extract searchable text from risk flags (str or dict entries)."""
+        texts: list[str] = []
+        for f in flags:
+            if isinstance(f, dict):
+                texts.append(f"{f.get('category', '')} {f.get('description', '')}")
+            else:
+                texts.append(str(f))
+        return " ".join(texts).lower()
+
+    def evaluate(self, risk_flags: list | None = None,
                  **kwargs) -> GateResult:
         flags = risk_flags or []
-        if any(kw in " ".join(flags).lower() for kw in self.DANGER_KEYWORDS):
+        combined = self._normalize_flags(flags)
+        if any(kw in combined for kw in self.DANGER_KEYWORDS):
             return GateResult(False, "hard_fail", "High-risk content detected",
                               data={"risk_flags": flags})
-        if any("unverified" in f.lower() for f in flags):
+        if "unverified" in combined:
             return GateResult(
                 True, "soft_fail",
                 "Unverified claims - use cautious wording",

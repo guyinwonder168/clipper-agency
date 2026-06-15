@@ -553,7 +553,7 @@ class TestSegmentProducerNewContract:
             "research_brief": "Brief with risks",
             "story_beats": [],
             "entities": [{"name": "Artis X", "type": "person"}],
-            "risk_flags": [{"category": "unverified_claim", "description": "Dating rumor"}],
+            "risk_flags": [{"category": "factual", "description": "Dating rumor unverified"}],
         })
         mocker.patch(
             "clipper_agency.services.firecrawl_service.FirecrawlService.search",
@@ -574,7 +574,7 @@ class TestSegmentProducerNewContract:
         agent = SegmentProducerAgent()
         result = agent.execute(job_id=1, topic="Test", output_dir=str(tmp_path))
         assert result["entities"] == [{"name": "Artis X", "type": "person"}]
-        assert result["risk_flags"] == [{"category": "unverified_claim", "description": "Dating rumor"}]
+        assert result["risk_flags"] == [{"category": "factual", "description": "Dating rumor unverified"}]
 
     def test_execute_returns_empty_lists_when_llm_plain_text(self, mocker, tmp_path):
         """When LLM returns plain text (not JSON), all new fields default to empty."""

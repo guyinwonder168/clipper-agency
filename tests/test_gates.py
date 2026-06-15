@@ -123,6 +123,51 @@ def test_g4_unverified_claim():
     assert result.severity == "soft_fail"
 
 
+def test_g4_dict_risk_flags_danger_keyword():
+    """G4 must handle list[dict] risk_flags from new SP prompt contract.
+
+    Regression: PR #58 changed SP to emit risk_flags as list[dict]
+    ({category, description}). Old gate assumed list[str] → TypeError.
+    """
+    gate = GatePostResearchRisk()
+    result = gate.evaluate(risk_flags=[
+        {"category": "legal", "description": "Potential defamation issue"},
+    ])
+    assert not result.passed
+    assert result.severity == "hard_fail"
+
+
+def test_g4_dict_risk_flags_unverified():
+    """G4 must detect 'unverified' in dict risk_flags descriptions."""
+    gate = GatePostResearchRisk()
+    result = gate.evaluate(risk_flags=[
+        {"category": "factual", "description": "Claim is unverified"},
+    ])
+    assert result.passed
+    assert result.severity == "soft_fail"
+
+
+def test_g4_dict_risk_flags_clean():
+    """G4 passes when dict risk_flags contain no danger keywords."""
+    gate = GatePostResearchRisk()
+    result = gate.evaluate(risk_flags=[
+        {"category": "sensitivity", "description": "Minor emotional topic"},
+    ])
+    assert result.passed
+    assert result.severity == "pass"
+
+
+def test_g4_mixed_str_and_dict_risk_flags():
+    """G4 handles mixed list[str] + list[dict] (backward compat)."""
+    gate = GatePostResearchRisk()
+    result = gate.evaluate(risk_flags=[
+        "existing string flag",
+        {"category": "legal", "description": "defamation risk"},
+    ])
+    assert not result.passed
+    assert result.severity == "hard_fail"
+
+
 # ── G5: Source Quality ───────────────────────────────────────────
 
 def test_g5_two_sources():
