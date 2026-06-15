@@ -31,6 +31,11 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - **Codex P2 fix:** unsupported `BeatFallback.type` values (e.g. `ken_burns_photo`) now normalized to `text_card` before action assignment — prevents `source: none` scenes.
 - AGENTS.md: Codex review gate added to git workflow (must wait for + resolve Codex review before merge).
 
+#### PR 3 — Deterministic Gate Failure → Repair Integration
+- **Fixed:** deterministic gate failures (visual_coverage, text_collision, safe_area, package_consistency, timestamp_semantic) now engage the repair loop instead of silently blocking the job (was: hard-failed reviewer had no `repair_plan`, so `_handle_repair_plan` returned None and the job was stuck with `publication=blocked, quality=failed`).
+- New `build_gate_failure_repair_plan()` in `core/repair_router.py` — maps gate failure reasons to repair patches routed to the correct agent (VD for visual/text/safe-area/timestamp issues, segment_producer for package consistency).
+- Engine `_retry_review_and_package` now falls back to `build_gate_failure_repair_plan` when `_handle_repair_plan` returns None.
+
 ### Phase 25: Dead Code Removal (PR #49)
 
 Removed superseded `core/multimodal_provider.py` — 0 production consumers, deliberately excluded from wiring in Phase 23 plan (`multimodal_client.py` serves the same purpose and is wired into Visual Director). Eliminated 0.1% code duplication.

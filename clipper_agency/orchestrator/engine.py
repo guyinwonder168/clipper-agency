@@ -1212,6 +1212,23 @@ class Orchestrator:
             current_cycle=1,
         )
 
+        if repair_routing is None:
+            # Deterministic gate failures (visual_coverage, text_collision,
+            # safe_area, package_consistency, timestamp_semantic) don't
+            # include an LLM repair_plan — synthesize one from the gate
+            # failure reason so the repair loop can engage (Bug 4).
+            from clipper_agency.core.repair_router import (
+                build_gate_failure_repair_plan,
+            )
+            repair_routing = build_gate_failure_repair_plan(review_output)
+            if repair_routing:
+                logger.info(
+                    "Deterministic gate failure '%s' → repair routed to %s "
+                    "for job #%d",
+                    review_output.get("reason"),
+                    repair_routing["target_agent"], job_id,
+                )
+
         if repair_routing:
             # Reviewer failed with repair plan
             update_job_artifact_status(conn, job_id, "rejected")
