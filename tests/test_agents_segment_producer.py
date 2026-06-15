@@ -541,6 +541,41 @@ class TestSegmentProducerNewContract:
         assert result["reference_style"]["caption_style"] == "keyword"
         assert result["reference_style"]["transition_style"] == "hard_cut"
 
+    def test_execute_propagates_entities_and_risk_flags(self, mocker, tmp_path):
+        """execute() result must include entities + risk_flags from synthesis.
+
+        Regression test: execute() result dict previously hardcoded
+        risk_flags: [] and omitted entities entirely, causing the
+        _persist_contract_artifacts fix to be a no-op.
+        """
+        import json as _json
+        payload = _json.dumps({
+            "research_brief": "Brief with risks",
+            "story_beats": [],
+            "entities": [{"name": "Artis X", "type": "person"}],
+            "risk_flags": [{"category": "factual", "description": "Dating rumor unverified"}],
+        })
+        mocker.patch(
+            "clipper_agency.services.firecrawl_service.FirecrawlService.search",
+            return_value=[],
+        )
+        mocker.patch(
+            "clipper_agency.services.scrapecreators.ScrapeCreatorsService.search_tiktok_videos",
+            return_value=[],
+        )
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={"content": payload, "model": "test", "usage": {}},
+        )
+        mocker.patch.object(
+            SegmentProducerAgent, "_discover_multi_source_assets",
+            return_value=([], []),
+        )
+        agent = SegmentProducerAgent()
+        result = agent.execute(job_id=1, topic="Test", output_dir=str(tmp_path))
+        assert result["entities"] == [{"name": "Artis X", "type": "person"}]
+        assert result["risk_flags"] == [{"category": "factual", "description": "Dating rumor unverified"}]
+
     def test_execute_returns_empty_lists_when_llm_plain_text(self, mocker, tmp_path):
         """When LLM returns plain text (not JSON), all new fields default to empty."""
         mocker.patch(
@@ -1298,22 +1333,20 @@ class TestBuildSearchQueries:
 
     def test_topic_only_returns_single_query(self):
         agent = SegmentProducerAgent()
-        queries = agent._build_search_queries("K-pop drama", {})
+        queries = agent._build_search_queries("K-pop drama", [])
         assert queries == ["K-pop drama"]
 
     def test_topic_only_with_empty_entities_list(self):
         agent = SegmentProducerAgent()
-        queries = agent._build_search_queries("K-pop drama", {"entities": []})
+        queries = agent._build_search_queries("K-pop drama", [])
         assert queries == ["K-pop drama"]
 
     def test_with_entities_adds_name_queries(self):
         agent = SegmentProducerAgent()
-        entities = {
-            "entities": [
-                {"name": "Jennie Kim"},
-                {"name": "Lisa Blackpink"},
-            ],
-        }
+        entities = [
+            {"name": "Jennie Kim"},
+            {"name": "Lisa Blackpink"},
+        ]
         queries = agent._build_search_queries("K-pop drama", entities)
         assert len(queries) == 3
         assert queries[0] == "K-pop drama"
@@ -1322,27 +1355,25 @@ class TestBuildSearchQueries:
 
     def test_max_3_queries_even_with_many_entities(self):
         agent = SegmentProducerAgent()
-        entities = {
-            "entities": [
-                {"name": "A"},
-                {"name": "B"},
-                {"name": "C"},
-                {"name": "D"},
-                {"name": "E"},
-            ],
-        }
+        entities = [
+            {"name": "A"},
+            {"name": "B"},
+            {"name": "C"},
+            {"name": "D"},
+            {"name": "E"},
+        ]
         queries = agent._build_search_queries("topic", entities)
-        assert len(queries) == 3
+        assert len(queries) == 3  # topic + 2 entities
 
     def test_entity_without_name_uses_str_fallback(self):
         agent = SegmentProducerAgent()
-        entities = {"entities": ["plain_string_entity"]}
+        entities = ["plain_string_entity"]
         queries = agent._build_search_queries("topic", entities)
         assert "plain_string_entity topic" in queries
 
-    def test_non_dict_entities_treated_as_empty(self):
+    def test_non_list_entities_treated_as_empty(self):
         agent = SegmentProducerAgent()
-        queries = agent._build_search_queries("topic", "not a dict")
+        queries = agent._build_search_queries("topic", None)
         assert queries == ["topic"]
 
 

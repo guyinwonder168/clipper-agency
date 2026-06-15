@@ -148,6 +148,10 @@ You MUST produce a JSON response with these fields:
    - "transition_style": "hard_cut" or "crossfade"
    - "visual_priority": ordered list of visual types
 
+9. "entities" — array of {{"name", "type"}} for key entities (people, places, events, brands) mentioned in the research. Type options: "person", "location", "event", "organization", "date", "quote".
+
+10. "risk_flags" — array of {{"category", "description"}} for safety/legal risks. Category options: "legal", "factual", "sensitivity", "copyright". Empty array if no risks.
+
 Rules:
 - Every beat must have a clear visual plan (asset or fallback)
 - If a claim is unconfirmed, use safe wording
@@ -231,8 +235,9 @@ class SegmentProducerAgent(BaseAgent):
         # ── 2b. Multi-provider asset discovery (uses synthesis entities) ─
         multi_sources, provider_attempts = self._discover_multi_source_assets(
             topic=topic,
-            entities=synthesis.get("entities", {}),
+            entities=synthesis.get("entities", []),
             config=settings,
+            beats=synthesis.get("story_beats", []),
         )
         multi_candidates = self._build_asset_candidates_from_sources(multi_sources)
 
@@ -276,7 +281,8 @@ class SegmentProducerAgent(BaseAgent):
             "status": "completed",
             "research_brief": synthesis["research_brief"],
             "sources": aggregated,
-            "risk_flags": [],
+            "risk_flags": synthesis.get("risk_flags", []),
+            "entities": synthesis.get("entities", []),
             "story_beats": story_beats_distributed,
             "format_decision": legacy_format,
             "asset_candidates": global_candidates,
@@ -593,36 +599,75 @@ class SegmentProducerAgent(BaseAgent):
 
     # ── multi-source asset discovery ──────────────────────────────────────
 
-    def _build_search_queries(self, topic: str, entities: dict) -> list[str]:
-        """Derive search queries from topic + entity names."""
-        queries = [topic]
-        if not isinstance(entities, dict):
-            return queries
-        entity_list = entities.get("entities", [])
-        if not isinstance(entity_list, list):
-            return queries
-        for entity in entity_list:
-            if len(queries) >= 3:
+    @staticmethod
+    def _per_beat_queries(topic: str, beats: list[dict], max_queries: int) -> list[str]:
+        """Build per-beat search queries from beat keywords."""
+        queries: list[str] = []
+        for beat in beats:
+            if len(queries) >= max_queries - 1:
                 break
+            keywords = SegmentProducerAgent._extract_beat_keywords(beat)
+            if keywords:
+                beat_query = f"{' '.join(keywords[:3])} {topic}"
+                if beat_query not in queries:
+                    queries.append(beat_query)
+        return queries
+
+    @staticmethod
+    def _entity_list_queries(topic: str, entities: list, max_queries: int = 3) -> list[str]:
+        """Build entity-based search queries from a flat list of entities."""
+        queries: list[str] = []
+        for entity in entities[:max_queries]:
             name = entity.get("name", "") if isinstance(entity, dict) else str(entity)
+            name = name.strip()
             if name:
-                queries.append(f"{name} {topic}")
+                query = f"{name} {topic}"
+                if query not in queries:
+                    queries.append(query)
+        return queries
+
+    def _build_search_queries(
+        self,
+        topic: str,
+        entities: list,
+        beats: list[dict] | None = None,
+        max_queries: int = 5,
+    ) -> list[str]:
+        """Derive search queries from topic, entities, and/or beat context.
+
+        When ``beats`` is provided, generates per-beat queries from
+        ``visual_must_show`` and ``spoken_point`` keywords. Falls back to
+        entity-based queries when ``beats`` is None (backward compat).
+        """
+        queries = [topic]
+        if beats:
+            queries.extend(self._per_beat_queries(topic, beats, max_queries))
+            if len(queries) == 1 and isinstance(entities, list) and entities:
+                queries.extend(self._entity_list_queries(topic, entities, max_queries=2))
+            return queries[:max_queries]
+        if isinstance(entities, list) and entities:
+            queries.extend(self._entity_list_queries(topic, entities, max_queries=2))
         return queries
 
     def _discover_multi_source_assets(
         self,
         topic: str,
-        entities: dict,
+        entities: list,
         config: Any,
+        beats: list[dict] | None = None,
     ) -> tuple[list[dict], list[dict]]:
         """Search YouTube, Tavily, Brave for additional asset candidates.
 
-        Returns ``(sources, attempts)`` where ``attempts`` records which
-        provider was queried, with what query, and how many results came back.
+        When ``beats`` is provided, builds per-beat search queries for more
+        targeted discovery. Returns ``(sources, attempts)`` where ``attempts``
+        records which provider was queried, with what query, and how many
+        results came back.
         """
         sources: list[dict] = []
         attempts: list[dict] = []
-        search_queries = self._build_search_queries(topic, entities)
+        search_queries = self._build_search_queries(
+            topic, entities, beats=beats,
+        )
 
         # YouTube search (free, no API key needed)
         try:
@@ -707,27 +752,37 @@ class SegmentProducerAgent(BaseAgent):
 
     # ── per-beat candidate distribution ───────────────────────────────────
 
-    @staticmethod
-    def _extract_beat_keywords(beat: dict) -> list[str]:
+    _STOP_WORDS: frozenset[str] = frozenset({
+        # Indonesian
+        "yang", "di", "ke", "dari", "dan", "atau", "ini", "itu", "ada",
+        "dengan", "untuk", "pada", "juga", "akan", "tidak", "dalam",
+        "adalah", "oleh", "agar", "sudah", "belum", "seperti", "karena",
+        # English
+        "the", "and", "with", "that", "this", "for", "from", "have",
+        "has", "are", "was", "were", "will", "would", "could", "should",
+    })
+
+    @classmethod
+    def _extract_beat_keywords(cls, beat: dict) -> list[str]:
         """Extract lowercase keywords from beat context for candidate matching.
 
         Combines keywords from visual_must_show, caption_keywords, and
-        spoken_point. Filters words shorter than 3 characters.
+        spoken_point. Filters words shorter than 3 characters and stop words.
         """
         keywords: set[str] = set()
 
         for chunk in beat.get("visual_must_show", "").split(","):
             for word in chunk.strip().split():
-                if len(word) >= 3:
+                if len(word) >= 3 and word.lower() not in cls._STOP_WORDS:
                     keywords.add(word.lower())
 
         for kw in beat.get("caption_keywords", []):
             kw_stripped = kw.strip().lower()
-            if kw_stripped:
+            if kw_stripped and kw_stripped not in cls._STOP_WORDS:
                 keywords.add(kw_stripped)
 
         for word in beat.get("spoken_point", "").split():
-            if len(word) >= 3:
+            if len(word) >= 3 and word.lower() not in cls._STOP_WORDS:
                 keywords.add(word.lower())
 
         return list(keywords)
@@ -748,15 +803,65 @@ class SegmentProducerAgent(BaseAgent):
         return matched / len(keywords_lower)
 
     @staticmethod
+    def _score_and_filter_candidates(
+        global_candidates: list[dict],
+        keywords: list[str],
+        beat_id: int | str | None,
+        min_score: float,
+        max_per_beat: int,
+    ) -> list[dict]:
+        """Score candidates against beat keywords, return filtered top matches."""
+        scored: list[tuple[float, dict]] = []
+        for candidate in global_candidates:
+            score = SegmentProducerAgent._score_candidate_for_beat(candidate, keywords)
+            if score >= min_score:
+                candidate_copy = dict(candidate)
+                candidate_copy["related_beat_id"] = beat_id
+                candidate_copy["distribution_score"] = round(score, 4)
+                scored.append((score, candidate_copy))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [c for _, c in scored[:max_per_beat]]
+
+    @staticmethod
+    def _merge_candidates(
+        existing: list[dict],
+        new_assignments: list[dict],
+        max_per_beat: int,
+    ) -> list[dict]:
+        """Merge existing beat candidates with new assignments, dedup by URL.
+
+        Interleaves existing and new candidates so global candidates
+        get slots even when existing (LLM) candidates fill the beat.
+        """
+        seen_urls: set[str] = {c.get("url", "") for c in existing if c.get("url")}
+        deduped_new: list[dict] = []
+        for cand in new_assignments:
+            url = cand.get("url", "")
+            if url and url in seen_urls:
+                continue
+            seen_urls.add(url)
+            deduped_new.append(cand)
+        merged: list[dict] = []
+        for i in range(max(len(existing), len(deduped_new))):
+            if i < len(existing):
+                merged.append(existing[i])
+            if i < len(deduped_new):
+                merged.append(deduped_new[i])
+        return merged[:max_per_beat]
+
+    @staticmethod
     def _distribute_candidates_to_beats(
         story_beats: list[dict],
         global_candidates: list[dict],
         max_per_beat: int = 5,
+        min_score: float = 0.1,
     ) -> list[dict]:
-        """Distribute global asset candidates to beats lacking candidates.
+        """Distribute global asset candidates to beats via keyword matching.
 
-        Uses keyword matching to assign relevant candidates per beat.
-        Beats that already have asset_candidates are left unchanged.
+        Beats that already have asset_candidates are MERGED with global
+        candidates (not skipped). Each distributed candidate gets a
+        ``distribution_score`` field for debugging. Candidates scoring below
+        ``min_score`` are filtered out.
         Returns a NEW list of beat dicts (does not mutate input).
         """
         if not global_candidates:
@@ -765,27 +870,22 @@ class SegmentProducerAgent(BaseAgent):
         result: list[dict] = []
         for beat in story_beats:
             beat_copy = dict(beat)
-            if beat_copy.get("asset_candidates"):
-                result.append(beat_copy)
-                continue
-
             keywords = SegmentProducerAgent._extract_beat_keywords(beat_copy)
             if not keywords:
                 result.append(beat_copy)
                 continue
 
-            scored: list[tuple[float, dict]] = []
-            for candidate in global_candidates:
-                score = SegmentProducerAgent._score_candidate_for_beat(
-                    candidate, keywords,
+            new_assignments = SegmentProducerAgent._score_and_filter_candidates(
+                global_candidates, keywords, beat_copy.get("beat_id"),
+                min_score, max_per_beat,
+            )
+            existing = beat_copy.get("asset_candidates") or []
+            if existing:
+                beat_copy["asset_candidates"] = SegmentProducerAgent._merge_candidates(
+                    existing, new_assignments, max_per_beat,
                 )
-                if score > 0.0:
-                    candidate_copy = dict(candidate)
-                    candidate_copy["related_beat_id"] = beat_copy.get("beat_id")
-                    scored.append((score, candidate_copy))
-
-            scored.sort(key=lambda x: x[0], reverse=True)
-            beat_copy["asset_candidates"] = [c for _, c in scored[:max_per_beat]]
+            else:
+                beat_copy["asset_candidates"] = new_assignments
             result.append(beat_copy)
 
         return result
@@ -843,8 +943,8 @@ class SegmentProducerAgent(BaseAgent):
         write_json(video_sources_path, scrapecreators_data)
         write_json(context_sources_path, firecrawl_data)
         write_json(music_candidates_path, [])
-        write_json(entities_path, {})
-        write_json(risk_flags_path, [])
+        write_json(entities_path, output.get("entities", []))
+        write_json(risk_flags_path, output.get("risk_flags", []))
 
         asset_candidates_path = base / "normalized" / "asset_candidates.json"
         write_json(asset_candidates_path, output.get("asset_candidates", []))
@@ -860,8 +960,8 @@ class SegmentProducerAgent(BaseAgent):
             "video_sources": scrapecreators_data,
             "context_sources": firecrawl_data,
             "music_candidates": [],
-            "entities": {},
-            "risk_flags": [],
+            "entities": output.get("entities", []),
+            "risk_flags": output.get("risk_flags", []),
             "asset_candidates": output.get("asset_candidates", []),
             "asset_candidates_path": str(asset_candidates_path),
             "story_beats": output.get("story_beats", []),
@@ -974,6 +1074,8 @@ class SegmentProducerAgent(BaseAgent):
             "verified_facts": parsed.get("verified_facts", []),
             "unverified_claims": parsed.get("unverified_claims", []),
             "reference_style": parsed.get("reference_style"),
+            "entities": parsed.get("entities", []),
+            "risk_flags": parsed.get("risk_flags", []),
         }
 
     def _parse_synthesis_response(self, content: str) -> dict[str, Any]:
@@ -1000,6 +1102,8 @@ class SegmentProducerAgent(BaseAgent):
                 "verified_facts": data.get("verified_facts", []),
                 "unverified_claims": data.get("unverified_claims", []),
                 "reference_style": data.get("reference_style"),
+                "entities": data.get("entities", []),
+                "risk_flags": data.get("risk_flags", []),
             }
         except (json.JSONDecodeError, KeyError):
             return {
@@ -1012,6 +1116,8 @@ class SegmentProducerAgent(BaseAgent):
                 "verified_facts": [],
                 "unverified_claims": [],
                 "reference_style": None,
+                "entities": [],
+                "risk_flags": [],
             }
 
     @staticmethod
