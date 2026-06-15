@@ -1,7 +1,12 @@
 """Tests for repair router (pure module)."""
 
 import pytest
-from clipper_agency.core.repair_router import route_repair, build_repair_plan
+from clipper_agency.core.repair_router import (
+    route_repair,
+    build_repair_plan,
+    build_gate_failure_repair_plan,
+    GATE_FAILURE_REPAIR_MAP,
+)
 from clipper_agency.config.schema import RepairPlan
 
 
@@ -65,3 +70,71 @@ class TestBuildRepairPlan:
     def test_respects_max_cycles(self):
         plan = build_repair_plan(decision="revise", patches=[], max_cycles=3)
         assert plan.max_repair_cycles == 3
+
+
+class TestBuildGateFailureRepairPlan:
+    """Deterministic gate failure → repair routing tests (Bug 4)."""
+
+    def test_visual_coverage_failure_routes_to_visual_director(self):
+        review = {"status": "fail", "reason": "VISUAL_COVERAGE_FAILED"}
+        routing = build_gate_failure_repair_plan(review)
+        assert routing is not None
+        assert routing["target_agent"] == "visual_director"
+        assert routing["decision"] == "revise"
+        assert len(routing["patches"]) == 1
+        assert routing["patches"][0]["reason"] == "broken_source"
+
+    def test_text_collision_failure_routes_to_visual_director(self):
+        review = {"status": "fail", "reason": "TEXT_COLLISION_FAILED"}
+        routing = build_gate_failure_repair_plan(review)
+        assert routing is not None
+        assert routing["target_agent"] == "visual_director"
+        assert routing["patches"][0]["reason"] == "text_collision"
+
+    def test_safe_area_failure_routes_to_visual_director(self):
+        review = {"status": "fail", "reason": "SAFE_AREA_FAILED"}
+        routing = build_gate_failure_repair_plan(review)
+        assert routing is not None
+        assert routing["target_agent"] == "visual_director"
+        assert routing["patches"][0]["reason"] == "text_collision"
+
+    def test_package_consistency_failure_routes_to_segment_producer(self):
+        review = {"status": "fail", "reason": "PACKAGE_CONSISTENCY_FAILED"}
+        routing = build_gate_failure_repair_plan(review)
+        assert routing is not None
+        assert routing["target_agent"] == "segment_producer"
+        assert routing["patches"][0]["reason"] == "wrong_event"
+        assert routing["patches"][0]["action"] == "redo_research"
+
+    def test_timestamp_semantic_failure_routes_to_visual_director(self):
+        review = {"status": "fail", "reason": "TIMESTAMP_SEMANTIC_FAILED"}
+        routing = build_gate_failure_repair_plan(review)
+        assert routing is not None
+        assert routing["target_agent"] == "visual_director"
+
+    def test_returns_none_for_pass_status(self):
+        review = {"status": "pass", "reason": "VISUAL_COVERAGE_FAILED"}
+        assert build_gate_failure_repair_plan(review) is None
+
+    def test_returns_none_for_unmapped_reason(self):
+        # SEMANTIC_REVIEW_FAILED is not in the map (it has its own repair_plan)
+        review = {"status": "fail", "reason": "SEMANTIC_REVIEW_FAILED"}
+        assert build_gate_failure_repair_plan(review) is None
+
+    def test_returns_none_for_unknown_reason(self):
+        review = {"status": "fail", "reason": "SOMETHING_UNEXPECTED"}
+        assert build_gate_failure_repair_plan(review) is None
+
+    def test_returns_none_for_missing_reason(self):
+        review = {"status": "fail"}
+        assert build_gate_failure_repair_plan(review) is None
+
+    def test_all_gate_failure_reasons_are_mapped(self):
+        """Every key in GATE_FAILURE_REPAIR_MAP must produce a valid routing."""
+        for reason in GATE_FAILURE_REPAIR_MAP:
+            routing = build_gate_failure_repair_plan(
+                {"status": "fail", "reason": reason})
+            assert routing is not None, f"Reason {reason} returned None"
+            assert "target_agent" in routing
+            assert "patches" in routing
+            assert len(routing["patches"]) >= 1
