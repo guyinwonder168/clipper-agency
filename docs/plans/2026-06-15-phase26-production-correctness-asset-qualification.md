@@ -1,6 +1,8 @@
 # Phase 26 — Production Correctness & Asset Qualification (v2.4.0 Roadmap)
 
 > **For Claude / Sub-agents:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` and follow strict TDD for every task.
+>
+> **(2026-06-16 — migrated to Claude Code + ECC):** `superpowers:executing-plans` does not exist here. Use **`/ecc:orch-fix-defect`** for each defect in this phase (TDD + gated commit), or `/ecc:orch-change-feature` for behavior changes. Plan first with `/ecc:plan`; review with `/ecc:python-review`.
 
 **Goal:** Fix four confirmed production-correctness defects and enforce existing architectural contracts (ADR 0020 canonical timeline, ADR 0023 repair routing) so that built-but-unenforced infrastructure actually governs pipeline behavior. Cut v2.4.0 as the release where these contracts are realized.
 
@@ -80,7 +82,7 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 | **P0** | 1 | Job #8 production correctness hotfix | `phase/26-pr1-hotfix` | Low | ✅ MERGED (#51, b0e3deb) | v2.3.0 |
 | **P1** | 2 | Canonical beat timeline enforcement | `phase/26-pr2-canonical-timeline` | Medium | ✅ MERGED (#52, 85df554) | v2.3.0 |
 | **P1** | 3 | Deterministic failure-to-repair integration | `phase/26-pr3-repair-integration` | Medium | ✅ MERGED (#53, 86b37ba) | v2.3.0 |
-| **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | 🔄 PARTIAL (#56, 8edc837) — 4c done; 4a, 4b, 4d, 4e, 4f remaining | v2.3.0 |
+| **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | ✅ COMPLETE (#58, a326936 + 4f-artifact-correctness: 4a✅, 4b✅, 4c✅, 4d⏭️deferred-confirmed, 4e✅, 4f-SP✅, 4f-VD✅, 4f-Reviewer✅) | v2.3.0 |
 | **P2** | 5 | Pre-VD asset qualification boundary | `phase/26-pr5-pre-vd-qualification` | High | ⬜ Pending (un-deferred per Job #8 evidence: 7/8 candidates rejected, all fell back to text cards, no source recovery) | v2.3.0 |
 | **P2** | 6 | Source transcript + clip-window selector | `phase/26-pr6-clip-window` | Medium | ⬜ Pending | v2.3.0 |
 | **P2** | 7 | Visual Director multi-shot planning | `phase/26-pr7-multishot-vd` | Medium | ⬜ Pending | v2.3.0 |
@@ -259,36 +261,37 @@ These tests assert the **current broken behavior** — they PASS on master today
 **Branch:** `phase/26-pr4-sp-precision`
 **Scope:** Improve existing multi-source discovery; do NOT add new providers.
 
-> **Status:** PR #56 (`8edc837`) delivered 4c (provider tracking) + partial 4e (distribution method exists but is a no-op when beats have LLM-provided candidates). Remaining work: 4a, 4b, 4d, 4e-fixes, 4f.
+> **Status:** ✅ COMPLETE. PR #56 delivered 4c (provider tracking). PR #58 delivered 4a, 4b, 4e, 4f-SP. The **4f-artifact-correctness** follow-up branch delivered the remaining 4f-VD + 4f-Reviewer. 4d deferred (confirmed correct — see 4d). Step 4 is fully complete; PR 5 (pre-VD qualification) is unblocked.
 
 **Changes:**
 
-1. **4a.** Structured entity extraction from research (event name, date, location, quoted statement, original publisher) + stop-word filtering + entity boosting in keyword extraction. ⬜
-   - **Logging bug:** SP `entities.json` currently produces empty `[]` — entity extraction not running or not persisting.
-2. **4b.** Per-beat search queries driven by `story_beats[].visual_must_show` + `spoken_point` (currently topic-level only). ⬜
+1. **4a.** Structured entity extraction from research (event name, date, location, quoted statement, original publisher) + stop-word filtering + entity boosting in keyword extraction. ✅ DONE (#58, `2904ed2`+`0699a6c`)
+   - **Logging bug FIXED:** SP `entities.json` now persists LLM-extracted entities (was empty `[]`).
+2. **4b.** Per-beat search queries driven by `story_beats[].visual_must_show` + `spoken_point` (currently topic-level only). ✅ DONE (#58, `2904ed2`)
 3. **4c.** Provider attempt history persisted (which provider returned which candidate). ✅ DONE (#56)
-4. **4d.** Source-tier escalation (if tier-1 source fails, escalate to tier-2). ⬜
+4. **4d.** Source-tier escalation (if tier-1 source fails, escalate to tier-2). ⏭️ DEFERRED-CONFIRMED — `_discover_multi_source_assets()` already queries **every provider additively** (YouTube always; Tavily/Brave when API keys exist) and unions results via `_merge_asset_candidates`, so there is no tier-1→tier-2 path to build. `SOURCE_QUALITY_TIERS` is a candidate *ranking* score, not a provider-execution tier. Job #8's root cause was candidate **rejection** at VD inspection (7/8 → all text-card fallback), not provider failure or scarcity (28 global candidates existed); literal escalation would *reduce* candidate diversity and not touch the root cause. PR 5 (source recovery) is the real fix.
 5. **4e.** Candidates grouped by beat, not globally:
-   - **Don't skip beats with existing LLM candidates** — merge + dedupe + rank instead (fixes no-op bug found in Job #8 rerun). ⬜
-   - **Persist distribution score** on each candidate for debugging. ⬜
-   - **Min score threshold** — reject candidates scoring below 0.1 to avoid noise. ⬜
+   - **Don't skip beats with existing LLM candidates** — merge + dedupe + rank instead (fixes no-op bug found in Job #8 rerun). ✅ DONE (#58, `2904ed2`+`28478c0`)
+   - **Persist distribution score** on each candidate for debugging. ✅ DONE (#58)
+   - **Min score threshold** — reject candidates scoring below 0.1 to avoid noise. ✅ DONE (#58)
 6. **4f.** Artifact/logging correctness (cross-cutting, found in Job #8 rerun):
-   - **SP:** `risk_flags.json` currently produces empty `[]` — safety risk assessment not persisting output. ⬜
-   - **VD:** `inspection_cache/` NOT invalidated on rerun — stale cache from previous run (Jun 11 files used during Jun 15 rerun). Cache must be keyed by candidate content hash + invalidated when SP produces new candidates. ⬜
-   - **VD:** `candidate_frames/` empty — no frame extraction happening for new candidates. ⬜
-   - **Reviewer:** `programmatic_checks` produces empty `{}` — the 4 programmatic checks (AV sync, caption quality, fact safety, narrative structure) either not running or not persisting. ⬜
+   - **SP:** `risk_flags.json` now persists LLM-extracted risk flags; `GatePostResearchRisk` handles `list[dict]` via `_normalize_flags()`. ✅ DONE (#58, `0699a6c`)
+   - **VD:** `inspection_cache/` NOT invalidated on rerun — stale cache from previous run (Jun 11 files used during Jun 15 rerun; confirmed: all 8 job_8 entries dated `2026-06-10T18:03`, rerun was Jun 15). FIXED: cache now keyed by candidate content identity via new `compute_asset_content_hash()` (`type`/`url`/`source_type`) passed as `asset_hash`. ✅ DONE (4f-artifact-correctness)
+   - **VD:** `candidate_frames/` empty — was a *symptom* of the stale cache (cache hits skip `_run_multimodal_inspection`→`_extract_candidate_frames`). FIXED by the content-hash keying: SP-regenerated candidates now cache-miss → frames extracted. ✅ DONE (4f-artifact-correctness)
+   - **Reviewer:** `programmatic_checks` produces empty `{}` on early gate fail — the 4 programmatic checks (AV sync, caption quality, fact safety, narrative structure) not persisted when a gate hard-fails before checks run. FIXED: `execute()` injects the computed `checks` dict into every fail-return path (6 `_fail_if_*` helpers + `_check_hard_gates` no longer own the field). ✅ DONE (4f-artifact-correctness)
 
 **Verification:**
-- Each beat has its own candidate group (distribution runs even when LLM provided candidates)
-- Entity extraction produces structured fields (`entities.json` non-empty)
-- Provider history artifact exists
-- Distribution score persisted on each candidate
-- Min threshold filters out noise candidates
-- `risk_flags.json` produces non-empty output when risks exist
-- VD `inspection_cache/` invalidated on rerun (no stale entries from previous run)
-- VD `candidate_frames/` contains extracted frames for inspected candidates
-- Reviewer `programmatic_checks` contains results for all 4 checks (not empty `{}`)
-- Job #8 rerun: VD receives >1 candidate per beat (not just LLM-provided)
+- ✅ Each beat has its own candidate group (distribution runs even when LLM provided candidates)
+- ✅ Entity extraction produces structured fields (`entities.json` non-empty)
+- ✅ Provider history artifact exists
+- ✅ Distribution score persisted on each candidate
+- ✅ Min threshold filters out noise candidates
+- ✅ `risk_flags.json` produces non-empty output when risks exist
+- ✅ Gate G4 handles `list[dict]` risk_flags without crashing (`_normalize_flags()`)
+- ✅ VD `inspection_cache/` invalidated on rerun (content-hash keying; SP-regenerated candidates cache-miss)
+- ✅ VD `candidate_frames/` populated for inspected candidates (fresh inspection on cache-miss extracts frames)
+- ✅ Reviewer `programmatic_checks` contains results for all 4 checks on every gate-fail path (not empty `{}`)
+- ✅ Job #8 rerun: VD receives >1 candidate per beat (not just LLM-provided)
 
 ---
 
@@ -423,7 +426,7 @@ PR 3 (repair integration) ──────────────────
                                                │
            ┌───────────────────────────────────┘
            │
-PR 4 (SP precision) ─────────────────────────► merge (needs PR 3; must FULLY complete 4a-4e)
+PR 4 (SP precision) ─────────────────────────► merge (needs PR 3; must FULLY complete 4a-4f)
                                                │
 PR 5 (pre-VD qual) ──────────────────────────► merge (needs PR 4 FULLY complete; highest risk)
                                                │
@@ -434,7 +437,7 @@ PR 7 (multishot VD) ────────────────────
 PR 8 (release gate + v2.4.0 bump) ──────────► merge (needs ALL prior)
 ```
 
-**Rule:** Batch 0 is the prerequisite — it must merge before PR 1. PR 4 must fully complete (all sub-items 4a-4e) before PR 5 starts. PR 5 is un-deferred — Job #8 evidence showed source recovery is needed. PR 8 is the final merge that bumps the version.
+**Rule:** Batch 0 is the prerequisite — it must merge before PR 1. PR 4 must fully complete (all sub-items 4a-4f) before PR 5 starts. PR 5 is un-deferred — Job #8 evidence showed source recovery is needed. PR 8 is the final merge that bumps the version.
 
 ---
 

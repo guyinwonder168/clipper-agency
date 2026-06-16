@@ -5,18 +5,20 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from clipper_agency.config.schema import AssetCandidate
 from clipper_agency.core.inspection_cache import (
     cache_stats,
+    compute_asset_content_hash,
     compute_cache_key,
     invalidate,
     lookup,
     store,
 )
 
-
 # ---------------------------------------------------------------------------
 # compute_cache_key
 # ---------------------------------------------------------------------------
+
 
 class TestComputeCacheKey:
     """Tests for compute_cache_key()."""
@@ -98,8 +100,104 @@ class TestComputeCacheKey:
 
 
 # ---------------------------------------------------------------------------
+# compute_asset_content_hash (4f-VD: content-aware cache invalidation)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeAssetContentHash:
+    """compute_asset_content_hash() keys the inspection cache by the asset
+    identity (type/url/source_type) so SP-regenerated candidates invalidate
+    stale entries while identical candidates stay cached.
+    """
+
+    def test_is_deterministic_hex_for_same_candidate(self) -> None:
+        cand = AssetCandidate(
+            type="tiktok_clip", url="https://x/a", reason="r", source_type="youtube_official"
+        )
+        h = compute_asset_content_hash(cand)
+        assert h == compute_asset_content_hash(cand)
+        assert len(h) == 64
+        assert all(c in "0123456789abcdef" for c in h)
+
+    def test_differs_by_url(self) -> None:
+        a = AssetCandidate(type="tiktok_clip", url="https://x/a", reason="r", source_type="s")
+        b = AssetCandidate(type="tiktok_clip", url="https://x/b", reason="r", source_type="s")
+        assert compute_asset_content_hash(a) != compute_asset_content_hash(b)
+
+    def test_differs_by_type(self) -> None:
+        a = AssetCandidate(type="tiktok_clip", url="https://x/a", reason="r")
+        b = AssetCandidate(type="photo", url="https://x/a", reason="r")
+        assert compute_asset_content_hash(a) != compute_asset_content_hash(b)
+
+    def test_differs_by_source_type(self) -> None:
+        a = AssetCandidate(
+            type="tiktok_clip", url="https://x/a", reason="r", source_type="youtube_official"
+        )
+        b = AssetCandidate(
+            type="tiktok_clip", url="https://x/a", reason="r", source_type="web_video"
+        )
+        assert compute_asset_content_hash(a) != compute_asset_content_hash(b)
+
+    def test_ignores_non_identity_metadata(self) -> None:
+        """Metadata that does not change the inspected bytes must not re-key
+        (avoids needless re-inspection across reruns for the same asset)."""
+        a = AssetCandidate(
+            type="tiktok_clip",
+            url="https://x/a",
+            reason="r",
+            source_type="s",
+            provenance="primary",
+            source="yt",
+            title="t1",
+            relevance_score=0.9,
+        )
+        b = AssetCandidate(
+            type="tiktok_clip",
+            url="https://x/a",
+            reason="r2",
+            source_type="s",
+            provenance="supporting",
+            source="tavily",
+            title="t2",
+            relevance_score=0.1,
+        )
+        assert compute_asset_content_hash(a) == compute_asset_content_hash(b)
+
+    def test_accepts_dict_candidate(self) -> None:
+        """Dict candidates (e.g. SP raw output) hash identically to the model."""
+        d = {"type": "tiktok_clip", "url": "https://x/a", "source_type": "s"}
+        obj = AssetCandidate(type="tiktok_clip", url="https://x/a", reason="r", source_type="s")
+        assert compute_asset_content_hash(d) == compute_asset_content_hash(obj)
+
+
+class TestContentHashInvalidatesCacheKey:
+    """End-to-end: a content-hash change propagates into compute_cache_key."""
+
+    @staticmethod
+    def _key(cand: AssetCandidate) -> str:
+        return compute_cache_key(
+            asset_path=cand.url,
+            asset_hash=compute_asset_content_hash(cand),
+            beat_claim="the artist performs live",
+            evidence_contract_hash="",
+            model="multimodal",
+            prompt_version="1.0",
+        )
+
+    def test_changed_candidate_changes_cache_key(self) -> None:
+        a = AssetCandidate(type="tiktok_clip", url="https://x/a", reason="r", source_type="s")
+        b = AssetCandidate(type="tiktok_clip", url="https://x/b", reason="r", source_type="s")
+        assert self._key(a) != self._key(b)
+
+    def test_identical_candidate_keeps_cache_key_resume_safe(self) -> None:
+        a = AssetCandidate(type="tiktok_clip", url="https://x/a", reason="r", source_type="s")
+        assert self._key(a) == self._key(a)
+
+
+# ---------------------------------------------------------------------------
 # lookup
 # ---------------------------------------------------------------------------
+
 
 class TestLookup:
     """Tests for lookup()."""
@@ -123,6 +221,7 @@ class TestLookup:
 # ---------------------------------------------------------------------------
 # store
 # ---------------------------------------------------------------------------
+
 
 class TestStore:
     """Tests for store()."""
@@ -163,6 +262,7 @@ class TestStore:
 # cache_stats
 # ---------------------------------------------------------------------------
 
+
 class TestCacheStats:
     """Tests for cache_stats()."""
 
@@ -189,6 +289,7 @@ class TestCacheStats:
 # invalidate
 # ---------------------------------------------------------------------------
 
+
 class TestInvalidate:
     """Tests for invalidate()."""
 
@@ -211,6 +312,7 @@ class TestInvalidate:
 # ---------------------------------------------------------------------------
 # Round-trip
 # ---------------------------------------------------------------------------
+
 
 class TestRoundTrip:
     """Integration tests: store then lookup must return same data."""

@@ -76,6 +76,13 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - **Updated:** `segment_producer.md` prompt now requests structured `entities[]` and `risk_flags[]` fields.
 - 20 new tests in `tests/test_segment_producer_precision.py` (44 total).
 
+#### PR 4 (4f artifact correctness) — Reviewer checks + inspection cache keying
+- **Fixed (4f-Reviewer):** the 4 programmatic checks (`av_sync`, `caption_quality`, `fact_safety`, `narrative_structure`) are now persisted in `programmatic_checks` even when a deterministic gate hard-fails before the LLM review runs (was: 6 early-return `_fail_if_*` paths returned `programmatic_checks: {}`, discarding the already-computed checks). `execute()` now injects `checks` into whichever fail dict it returns.
+- **Fixed (4f-VD):** the inspection cache is now keyed by candidate content identity via new `compute_asset_content_hash()` (`type`/`url`/`source_type`), passed as `asset_hash` in `compute_cache_key` (was: `asset_hash=""`, so the cache keyed only on URL+claim and was reused unchanged across reruns — Job #8 rerun on Jun 15 reused Jun 10/11 decisions, and `candidate_frames/` stayed empty because cache hits skipped frame extraction). SP-regenerated candidates now invalidate stale entries → fresh inspection → frames extracted; identical candidates (e.g. resumed runs) still hit the cache.
+- **Confirmed (4d):** source-tier escalation stays deferred — `_discover_multi_source_assets()` already queries every provider additively (YouTube always; Tavily/Brave when keys exist) and unions results, so there is no tier-1→tier-2 path to build. `SOURCE_QUALITY_TIERS` is a ranking score, not an execution tier. Job #8 root cause was candidate rejection (7/8), not provider failure/scarcity.
+- Type-honesty fix: `_fail_if_package_consistency_failed` `main_entities` param widened to `list[str] | None` (matches `main_entities or []` body + `list[str] | None` call site).
+- 10 new tests (`tests/test_agents_reviewer.py` + `tests/test_inspection_cache.py`); 1 cache test updated to the new content-hashed key.
+
 ### Phase 25: Dead Code Removal (PR #49)
 
 Removed superseded `core/multimodal_provider.py` — 0 production consumers, deliberately excluded from wiring in Phase 23 plan (`multimodal_client.py` serves the same purpose and is wired into Visual Director). Eliminated 0.1% code duplication.

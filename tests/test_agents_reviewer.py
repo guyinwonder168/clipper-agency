@@ -1,7 +1,5 @@
 """Tests for ReviewerAgent."""
 
-import pytest
-
 from clipper_agency.agents.reviewer import (
     ReviewerAgent,
     _check_av_sync,
@@ -9,7 +7,6 @@ from clipper_agency.agents.reviewer import (
     _check_fact_safety,
     _check_narrative_structure,
 )
-
 
 MOCK_REVIEW_PASS = """{
   "verdict": "pass",
@@ -283,7 +280,11 @@ class TestReviewerExecute:
     def test_execute_llm_config(self, mocker):
         mocker.patch(
             "clipper_agency.agents.reviewer.get_agent_config",
-            return_value={"model": "gemini-2.5-flash", "temperature": 0.2, "max_completion_tokens": None},
+            return_value={
+                "model": "gemini-2.5-flash",
+                "temperature": 0.2,
+                "max_completion_tokens": None,
+            },
         )
         mock_chat = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",
@@ -321,7 +322,10 @@ class TestReviewerExecute:
         )
 
         system_content = mock_chat.call_args.kwargs["messages"][0]["content"]
-        assert system_content == "File reviewer prompt: - no_defamation | - av_sync: skip\n- caption_quality: pass\n- fact_safety: pass\n- narrative_structure: skip"
+        assert (
+            system_content
+            == "File reviewer prompt: - no_defamation | - av_sync: skip\n- caption_quality: pass\n- fact_safety: pass\n- narrative_structure: skip"
+        )
 
     # --- New audio-first execute tests ---
 
@@ -395,7 +399,10 @@ class TestReviewerExecute:
         assert "programmatic_checks" in result
         checks = result["programmatic_checks"]
         assert set(checks.keys()) == {
-            "av_sync", "caption_quality", "fact_safety", "narrative_structure",
+            "av_sync",
+            "caption_quality",
+            "fact_safety",
+            "narrative_structure",
         }
         # AV drift > 0.5s → fail
         assert checks["av_sync"]["status"] == "fail"
@@ -539,7 +546,11 @@ class TestReviewerVisualCoverageGate:
             },
         )
         assert result["status"] == "fail"
-        assert "visual_coverage" in result.get("reason", "").lower() or "VISUAL_COVERAGE" in result.get("reason", "") or "visual coverage" in result.get("feedback", "").lower()
+        assert (
+            "visual_coverage" in result.get("reason", "").lower()
+            or "VISUAL_COVERAGE" in result.get("reason", "")
+            or "visual coverage" in result.get("feedback", "").lower()
+        )
         mock_chat.assert_not_called()
 
     def test_allows_llm_when_visual_coverage_passes(self, mocker):
@@ -573,6 +584,88 @@ class TestReviewerVisualCoverageGate:
             },
         )
         assert result["status"] == "pass"
+
+
+class TestReviewerProgrammaticChecksPersistedOnGateFail:
+    """4f-Reviewer: the 4 programmatic checks must be persisted even when a
+    deterministic gate hard-fails before the LLM review runs.
+
+    Regression for the bug where early-return gate-fail paths discarded the
+    already-computed checks by returning ``programmatic_checks: {}``.
+    """
+
+    _EXPECTED_CHECK_KEYS = ("av_sync", "caption_quality", "fact_safety", "narrative_structure")
+
+    @staticmethod
+    def _patch_llm(mocker):
+        mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict": "pass", "score": 90, "feedback": "Great!", "issues": []}',
+                "model": "test",
+                "usage": {},
+            },
+        )
+        mocker.patch(
+            "clipper_agency.agents.reviewer.get_agent_config",
+            return_value={"model": "test-model", "temperature": 0.3, "max_completion_tokens": 500},
+        )
+
+    def _assert_all_four_checks(self, checks: dict) -> None:
+        """All 4 programmatic checks are present and non-empty (have a status)."""
+        assert isinstance(checks, dict), f"checks must be a dict, got {type(checks)}"
+        assert checks, "programmatic_checks must be non-empty (was {})"
+        for key in self._EXPECTED_CHECK_KEYS:
+            assert key in checks, f"missing check: {key}"
+            value = checks[key]
+            assert isinstance(value, dict) and "status" in value, (
+                f"check '{key}' must be a non-empty dict with a status, got {value!r}"
+            )
+
+    def test_checks_persisted_on_visual_coverage_gate_fail(self, mocker):
+        """visual_coverage hard-fail (gate_result path) must persist checks."""
+        self._patch_llm(mocker)
+        mock_chat = mocker.patch("clipper_agency.llm.client.OpenRouterClient.chat")
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test topic",
+            script=[{"scene": 1, "text": "Hello"}],
+            caption="Nice #test",
+            context={
+                "audio_duration_sec": 21.0,
+                "visual_duration_sec": 21.0,
+            },
+            diagnostics={
+                "visual_coverage": {
+                    "status": "fail",
+                    "output_duration_sec": 21.0,
+                    "voiceover_duration_sec": 21.0,
+                    "coverage_ratio": 0.6,
+                    "issues": [{"type": "BLACK_FRAME", "severity": "hard_fail", "detail": "test"}],
+                },
+            },
+        )
+        assert result["status"] == "fail"
+        mock_chat.assert_not_called()
+        self._assert_all_four_checks(result["programmatic_checks"])
+
+    def test_checks_persisted_on_av_drift_hard_gate_fail(self, mocker):
+        """AV-drift hard gate (_check_hard_gates path) must persist checks."""
+        self._patch_llm(mocker)
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=4,
+            topic="Test topic",
+            script=[{"scene": 1, "text": "Hello"}],
+            caption="Great video #test",
+            context={
+                "audio_duration_sec": 23.25,
+                "visual_duration_sec": 21.21,
+            },
+        )
+        assert result["status"] == "fail"
+        self._assert_all_four_checks(result["programmatic_checks"])
 
 
 class TestReviewerTextCollisionGate:
@@ -793,7 +886,6 @@ class TestReviewerPackageConsistencyGate:
 
     def test_blocks_llm_on_package_consistency_failure(self, mocker):
         """Package consistency failure should skip LLM review."""
-        from clipper_agency.core.package_consistency import evaluate_package_consistency
         from clipper_agency.config.schema import PackageConsistencyResult
 
         mocker.patch(
@@ -821,7 +913,9 @@ class TestReviewerPackageConsistencyGate:
         )
 
         assert result["status"] == "fail"
-        assert "PACKAGE" in result.get("reason", "") or "package" in result.get("feedback", "").lower()
+        assert (
+            "PACKAGE" in result.get("reason", "") or "package" in result.get("feedback", "").lower()
+        )
         llm_mock.assert_not_called()
 
     def test_allows_llm_when_package_consistency_passes(self, mocker):

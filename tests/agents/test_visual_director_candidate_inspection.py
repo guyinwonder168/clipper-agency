@@ -16,7 +16,6 @@ from clipper_agency.config.schema import (
     StoryBeat,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
 # ---------------------------------------------------------------------------
@@ -148,7 +147,10 @@ class TestInspectCandidatesSelectsBest:
         mock_inspector.inspect_asset.side_effect = _inspect_side_effect
 
         updated_plan, inspections = agent._do_inspect_and_select(
-            plan, [beat], 1, "/tmp/agent_dir",
+            plan,
+            [beat],
+            1,
+            "/tmp/agent_dir",
         )
 
         action = updated_plan[0]["action"]
@@ -184,10 +186,15 @@ class TestInspectCandidatesFallbackAllRejected:
         plan = [_make_plan_item(action=original_action)]
 
         with patch.object(
-            agent, "_run_multimodal_inspection", return_value=_low_inspection(),
+            agent,
+            "_run_multimodal_inspection",
+            return_value=_low_inspection(),
         ):
             updated_plan, inspections = agent._do_inspect_and_select(
-                plan, [beat], 1, "/tmp/agent_dir",
+                plan,
+                [beat],
+                1,
+                "/tmp/agent_dir",
             )
 
         # Fallback should replace original action since all candidates rejected
@@ -216,10 +223,15 @@ class TestInspectCandidatesFallbackAllRejected:
         plan[0]["fallback"] = {"type": "ken_burns_photo", "headline": "KB Photo"}
 
         with patch.object(
-            agent, "_run_multimodal_inspection", return_value=_low_inspection(),
+            agent,
+            "_run_multimodal_inspection",
+            return_value=_low_inspection(),
         ):
             updated_plan, _ = agent._do_inspect_and_select(
-                plan, [beat], 1, "/tmp/agent_dir",
+                plan,
+                [beat],
+                1,
+                "/tmp/agent_dir",
             )
 
         assert updated_plan[0]["action"]["type"] == "text_card"
@@ -245,7 +257,10 @@ class TestInspectCandidatesSkippedOnError:
             side_effect=RuntimeError("boom"),
         ):
             updated_plan, inspections = agent._inspect_and_select_candidates(
-                plan, [beat], 1, "/tmp/agent_dir",
+                plan,
+                [beat],
+                1,
+                "/tmp/agent_dir",
             )
 
         assert updated_plan is plan
@@ -268,13 +283,19 @@ class TestInspectCandidatesUsesCache:
 
         # Pre-populate cache at the correct path (_do_inspect_and_select
         # computes cache_dir = agent_dir + "/inspection_cache")
-        from clipper_agency.core.inspection_cache import compute_cache_key, store as cache_store
+        from clipper_agency.core.inspection_cache import (
+            compute_asset_content_hash,
+            compute_cache_key,
+        )
+        from clipper_agency.core.inspection_cache import (
+            store as cache_store,
+        )
 
         agent_dir = str(tmp_path / "agent_dir")
         cache_dir = f"{agent_dir}/inspection_cache"
         cache_key = compute_cache_key(
             asset_path=cand.url,
-            asset_hash="",
+            asset_hash=compute_asset_content_hash(cand),
             beat_claim=beat.spoken_point,
             evidence_contract_hash="",
             model="multimodal",
@@ -284,10 +305,15 @@ class TestInspectCandidatesUsesCache:
         cache_store(cache_dir, cache_key, cached_result)
 
         with patch.object(
-            agent, "_run_multimodal_inspection", return_value=None,
+            agent,
+            "_run_multimodal_inspection",
+            return_value=None,
         ) as mock_run:
             updated_plan, inspections = agent._do_inspect_and_select(
-                plan, [beat], 1, agent_dir,
+                plan,
+                [beat],
+                1,
+                agent_dir,
             )
 
         # Cache should have been used, _run_multimodal_inspection NOT called
@@ -312,7 +338,10 @@ class TestInspectCandidatesEmptyBeats:
         original_action = dict(plan[0]["action"])
 
         updated_plan, inspections = agent._do_inspect_and_select(
-            plan, [beat], 1, "/tmp/agent_dir",
+            plan,
+            [beat],
+            1,
+            "/tmp/agent_dir",
         )
 
         assert updated_plan[0]["action"] == original_action
@@ -331,7 +360,8 @@ class TestOutputIncludesCandidateInspections:
         agent = _make_agent()
 
         with patch.object(
-            agent, "_run_beat_driven_planning",
+            agent,
+            "_run_beat_driven_planning",
             return_value=([_make_plan_item()], []),
         ):
             output = agent.execute(
@@ -362,10 +392,14 @@ class TestInspectionNotCalledWhenNoCandidates:
         plan = [_make_plan_item()]
 
         with patch.object(
-            agent, "_run_multimodal_inspection",
+            agent,
+            "_run_multimodal_inspection",
         ) as mock_run:
             agent._do_inspect_and_select(
-                plan, [beat], 1, "/tmp/agent_dir",
+                plan,
+                [beat],
+                1,
+                "/tmp/agent_dir",
             )
 
         mock_run.assert_not_called()
@@ -420,7 +454,8 @@ class TestExecuteInitializesInspections:
         agent._candidate_inspections = [{"stale": True}]
 
         with patch.object(
-            agent, "_run_beat_driven_planning",
+            agent,
+            "_run_beat_driven_planning",
             return_value=([_make_plan_item()], []),
         ):
             output = agent.execute(
@@ -526,7 +561,6 @@ class TestDownloadImageFrameSuccess:
     """_download_image_frame downloads and saves image."""
 
     def test_downloads_image(self, tmp_path: Any) -> None:
-        import httpx
 
         agent = _make_agent()
         frames_dir = tmp_path / "frames"
@@ -545,12 +579,14 @@ class TestDownloadImageFrameSuccess:
             mock_client_cls.return_value = mock_client
 
             paths = agent._download_image_frame(
-                "https://example.com/photo.jpg", frames_dir,
+                "https://example.com/photo.jpg",
+                frames_dir,
             )
 
         assert len(paths) == 1
         assert paths[0].endswith(".jpg")
         from pathlib import Path as P
+
         assert P(paths[0]).parent == frames_dir
 
 
@@ -575,7 +611,8 @@ class TestDownloadImageFrameError:
             mock_client_cls.return_value = mock_client
 
             paths = agent._download_image_frame(
-                "https://bad.com/photo.jpg", frames_dir,
+                "https://bad.com/photo.jpg",
+                frames_dir,
             )
 
         assert paths == []
@@ -598,19 +635,30 @@ class TestRunMultimodalInspectionUsesFramePaths:
         beat = _make_beat()
         plan_item = _make_plan_item()
 
-        with patch.object(
-            agent, "_extract_candidate_frames", return_value=["/fake/frame.jpg"],
-        ), patch(
-            "clipper_agency.llm.multimodal_client.MultimodalInspectionClient",
-        ) as mock_cls, patch(
-            "clipper_agency.llm.client.OpenRouterClient",
+        with (
+            patch.object(
+                agent,
+                "_extract_candidate_frames",
+                return_value=["/fake/frame.jpg"],
+            ),
+            patch(
+                "clipper_agency.llm.multimodal_client.MultimodalInspectionClient",
+            ) as mock_cls,
+            patch(
+                "clipper_agency.llm.client.OpenRouterClient",
+            ),
         ):
             mock_inspector = MagicMock()
             mock_inspector.inspect_asset.return_value = _high_inspection()
             mock_cls.return_value = mock_inspector
 
             agent._run_multimodal_inspection(
-                cand, beat, 1, "/tmp/cache", "key", agent_dir="/tmp/agent",
+                cand,
+                beat,
+                1,
+                "/tmp/cache",
+                "key",
+                agent_dir="/tmp/agent",
             )
 
         call_kwargs = mock_inspector.inspect_asset.call_args
