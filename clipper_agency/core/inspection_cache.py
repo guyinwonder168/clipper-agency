@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 _SEP = "::"
 
@@ -29,14 +30,47 @@ def compute_cache_key(
     prompt_version: str,
 ) -> str:
     """Return a deterministic SHA-256 hex digest for the given cache inputs."""
-    raw = _SEP.join([
-        asset_path,
-        asset_hash,
-        beat_claim,
-        evidence_contract_hash,
-        model,
-        prompt_version,
-    ])
+    raw = _SEP.join(
+        [
+            asset_path,
+            asset_hash,
+            beat_claim,
+            evidence_contract_hash,
+            model,
+            prompt_version,
+        ]
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _candidate_field(candidate: Any, name: str) -> str:
+    """Read a string field from a dict or attribute-based candidate object."""
+    if isinstance(candidate, dict):
+        value = candidate.get(name)
+    else:
+        value = getattr(candidate, name, None)
+    return str(value) if value is not None else ""
+
+
+def compute_asset_content_hash(candidate: Any) -> str:
+    """Return a SHA-256 hash over the asset-identity fields that determine
+    *what media gets inspected*: ``type``, ``url``, ``source_type``.
+
+    Metadata that does not change the downloaded bytes (``source``,
+    ``provenance``, scores, ``title``) is intentionally excluded, so
+    re-inspection is forced only when the inspected asset actually changes.
+
+    Used as ``asset_hash`` in :func:`compute_cache_key` so Segment-Producer-
+    regenerated candidates invalidate stale inspection-cache entries, while an
+    identical candidate (e.g. a resumed run) keeps hitting the cache. Accepts
+    either an :class:`AssetCandidate` model or a raw dict.
+    """
+    identity = {
+        "type": _candidate_field(candidate, "type"),
+        "url": _candidate_field(candidate, "url"),
+        "source_type": _candidate_field(candidate, "source_type"),
+    }
+    raw = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -67,7 +101,7 @@ def store(
 
     payload = {
         **inspection_result,
-        "cached_at": datetime.now(timezone.utc).isoformat(),
+        "cached_at": datetime.now(UTC).isoformat(),
         "cache_key": cache_key,
     }
     path = directory / f"{cache_key}.json"

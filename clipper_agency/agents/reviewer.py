@@ -100,9 +100,7 @@ def _check_fact_safety(unverified_claims: list[dict]) -> dict[str, Any]:
     """Verify unverified claims use safe wording."""
     if not unverified_claims:
         return {"check": "fact_safety", "status": _CHECK_PASS, "detail": "No unverified claims"}
-    missing = [
-        f"Claim {i}" for i, c in enumerate(unverified_claims) if "safe_wording" not in c
-    ]
+    missing = [f"Claim {i}" for i, c in enumerate(unverified_claims) if "safe_wording" not in c]
     if missing:
         return {
             "check": "fact_safety",
@@ -133,8 +131,7 @@ def _check_narrative_structure(
 def _format_script_text(script: list[dict] | None) -> str:
     """Build readable script text from scene list."""
     return "\n".join(
-        f"Scene {s.get('scene', i)}: {s.get('text', '')}"
-        for i, s in enumerate(script or [])
+        f"Scene {s.get('scene', i)}: {s.get('text', '')}" for i, s in enumerate(script or [])
     )
 
 
@@ -261,7 +258,6 @@ class ReviewerAgent(BaseAgent):
                         f"shorter than audio ({audio_duration_sec}s)"
                     ),
                     "issues": ["av_duration_mismatch"],
-                    "programmatic_checks": checks,
                 }
 
         # Hard gate 2: Broken tiktok_clip actions (missing source_url)
@@ -273,7 +269,6 @@ class ReviewerAgent(BaseAgent):
                         "score": 0,
                         "feedback": "Hard gate: broken tiktok_clip action (missing source_url)",
                         "issues": ["broken_tiktok_clip_action"],
-                        "programmatic_checks": checks,
                     }
 
         return None
@@ -285,7 +280,11 @@ class ReviewerAgent(BaseAgent):
         vc = diagnostics.get("visual_coverage")
         if not vc or vc.get("status") != "fail":
             return None
-        hard_fails = [i for i in vc.get("issues", []) if isinstance(i, dict) and i.get("severity") in ("hard_fail", "reject")]
+        hard_fails = [
+            i
+            for i in vc.get("issues", [])
+            if isinstance(i, dict) and i.get("severity") in ("hard_fail", "reject")
+        ]
         if hard_fails:
             return {
                 "status": "fail",
@@ -293,7 +292,6 @@ class ReviewerAgent(BaseAgent):
                 "score": 0,
                 "feedback": f"Hard gate: visual coverage failed ({len(hard_fails)} hard-fail issues)",
                 "issues": ["visual_coverage_failed"],
-                "programmatic_checks": {},
             }
         return None
 
@@ -304,7 +302,9 @@ class ReviewerAgent(BaseAgent):
         tc = diagnostics.get("text_collision")
         if not tc:
             return None
-        hard_fails = [i for i in tc if isinstance(i, dict) and i.get("severity") in ("hard_fail", "reject")]
+        hard_fails = [
+            i for i in tc if isinstance(i, dict) and i.get("severity") in ("hard_fail", "reject")
+        ]
         if hard_fails:
             return {
                 "status": "fail",
@@ -312,7 +312,6 @@ class ReviewerAgent(BaseAgent):
                 "score": 0,
                 "feedback": f"Hard gate: text collision detected ({len(hard_fails)} issues)",
                 "issues": ["text_collision_failed"],
-                "programmatic_checks": {},
             }
         return None
 
@@ -323,7 +322,9 @@ class ReviewerAgent(BaseAgent):
         sa = diagnostics.get("safe_area")
         if not sa:
             return None
-        hard_fails = [i for i in sa if isinstance(i, dict) and i.get("severity") in ("hard_fail", "reject")]
+        hard_fails = [
+            i for i in sa if isinstance(i, dict) and i.get("severity") in ("hard_fail", "reject")
+        ]
         if hard_fails:
             return {
                 "status": "fail",
@@ -331,7 +332,6 @@ class ReviewerAgent(BaseAgent):
                 "score": 0,
                 "feedback": f"Hard gate: safe area violation ({len(hard_fails)} issues)",
                 "issues": ["safe_area_failed"],
-                "programmatic_checks": {},
             }
         return None
 
@@ -356,9 +356,15 @@ class ReviewerAgent(BaseAgent):
                     "subtitle_overlap_max": quality.text_collision.subtitle_overlap_max,
                     "headline_overlap_max": quality.text_collision.headline_overlap_max,
                 }
-                collisions = detect_text_collisions(
-                    source_regions, generated_regions, thresholds,
-                ) if generated_regions else []
+                collisions = (
+                    detect_text_collisions(
+                        source_regions,
+                        generated_regions,
+                        thresholds,
+                    )
+                    if generated_regions
+                    else []
+                )
                 density = detect_source_text_density(source_regions, frame_size)
                 enriched["text_collision"] = _dump_issues(collisions + density)
             except Exception as exc:
@@ -383,7 +389,7 @@ class ReviewerAgent(BaseAgent):
         self,
         story_mode_decision: dict | None,
         thumbnail_text: str,
-        main_entities: list[str],
+        main_entities: list[str] | None,
         caption: str,
         topic: str,
         script: list[dict] | None,
@@ -406,7 +412,6 @@ class ReviewerAgent(BaseAgent):
                 "score": 0,
                 "feedback": f"Hard gate: package consistency — {result.issue}: {result.detail}",
                 "issues": ["package_consistency_failed"],
-                "programmatic_checks": {},
             }
         return None
 
@@ -450,7 +455,6 @@ class ReviewerAgent(BaseAgent):
             "feedback": f"Semantic review: {decision} ({len(repair_patches)} patches)",
             "issues": ["semantic_review_failed"],
             "repair_plan": plan.model_dump(),
-            "programmatic_checks": {},
         }
 
     def _fail_if_timestamp_semantic_failed(
@@ -463,9 +467,7 @@ class ReviewerAgent(BaseAgent):
         failed = [r for r in scene_reviews if not r.passed]
         if not failed:
             return None
-        issues_summary = "; ".join(
-            f"Scene {r.beat_id}: {r.reason}" for r in failed
-        )
+        issues_summary = "; ".join(f"Scene {r.beat_id}: {r.reason}" for r in failed)
         return {
             "status": "fail",
             "reason": _FAIL_REASON_TIMESTAMP_SEMANTIC,
@@ -476,7 +478,6 @@ class ReviewerAgent(BaseAgent):
             ),
             "issues": ["timestamp_semantic_failed"],
             "scene_semantic_reviews": [r.model_dump() for r in scene_reviews],
-            "programmatic_checks": {},
         }
 
     def _run_timestamp_semantic_review(
@@ -500,8 +501,7 @@ class ReviewerAgent(BaseAgent):
         beat_time_ranges = None
         if beat_timeline:
             beat_time_ranges = [
-                (e["start_sec"], e["end_sec"]) if isinstance(e, dict)
-                else (e.start_sec, e.end_sec)
+                (e["start_sec"], e["end_sec"]) if isinstance(e, dict) else (e.start_sec, e.end_sec)
                 for e in beat_timeline
             ]
         mappings = map_scenes_to_beats(
@@ -526,10 +526,17 @@ class ReviewerAgent(BaseAgent):
         # Merge context dict with legacy kwargs for backward compat
         ctx: dict[str, Any] = dict(context or {})
         _legacy_keys = (
-            "audio_duration_sec", "visual_duration_sec", "narrative_structure",
-            "unverified_claims", "visual_plan_actions", "story_mode_decision",
-            "thumbnail_text", "main_entities",
-            "story_beats", "word_timestamps", "rendered_scene_manifest",
+            "audio_duration_sec",
+            "visual_duration_sec",
+            "narrative_structure",
+            "unverified_claims",
+            "visual_plan_actions",
+            "story_mode_decision",
+            "thumbnail_text",
+            "main_entities",
+            "story_beats",
+            "word_timestamps",
+            "rendered_scene_manifest",
             "beat_timeline",
         )
         for key in _legacy_keys:
@@ -569,9 +576,13 @@ class ReviewerAgent(BaseAgent):
 
         # 2. Hard gates: force FAIL before expensive LLM call
         hard_gate_result = self._check_hard_gates(
-            checks, audio_duration_sec, visual_duration_sec, visual_plan_actions,
+            checks,
+            audio_duration_sec,
+            visual_duration_sec,
+            visual_plan_actions,
         )
         if hard_gate_result is not None:
+            hard_gate_result["programmatic_checks"] = checks
             return hard_gate_result
 
         # 2b. New deterministic quality gates (Batch 2)
@@ -581,7 +592,9 @@ class ReviewerAgent(BaseAgent):
 
         # 2c. Timestamp-level semantic review (programmatic, no LLM)
         scene_reviews = self._run_timestamp_semantic_review(
-            rendered_scene_manifest, story_beats, word_timestamps,
+            rendered_scene_manifest,
+            story_beats,
+            word_timestamps,
             audio_duration_sec,
             beat_timeline=ctx.get("beat_timeline"),
         )
@@ -591,12 +604,18 @@ class ReviewerAgent(BaseAgent):
             or self._fail_if_text_collision_failed(diagnostics)
             or self._fail_if_safe_area_failed(diagnostics)
             or self._fail_if_package_consistency_failed(
-                story_mode_decision, thumbnail_text, main_entities, caption, topic, script,
+                story_mode_decision,
+                thumbnail_text,
+                main_entities,
+                caption,
+                topic,
+                script,
             )
             or self._fail_if_timestamp_semantic_failed(scene_reviews)
             or self._fail_if_semantic_review_failed(diagnostics)
         )
         if gate_result is not None:
+            gate_result["programmatic_checks"] = checks
             return gate_result
 
         # 3. Build text for LLM review
@@ -609,22 +628,18 @@ class ReviewerAgent(BaseAgent):
         llm = OpenRouterClient(trace_writer=self._trace_writer)
         prompt = load_prompt("reviewer", REVIEWER_PROMPT, PROMPTS_DIR)
         messages = [
-                {
-                    "role": "system",
-                    "content": prompt.format(
-                        safety_rules_text=safety_rules_text,
-                        programmatic_results=results_text,
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Topic: {topic}\n\n"
-                        f"Script:\n{script_text}\n\n"
-                        f"Caption: {caption}"
-                    ),
-                },
-            ]
+            {
+                "role": "system",
+                "content": prompt.format(
+                    safety_rules_text=safety_rules_text,
+                    programmatic_results=results_text,
+                ),
+            },
+            {
+                "role": "user",
+                "content": (f"Topic: {topic}\n\nScript:\n{script_text}\n\nCaption: {caption}"),
+            },
+        ]
         if self._trace_writer:
             response = llm.chat_traced(
                 model=agent_cfg["model"],
@@ -640,13 +655,15 @@ class ReviewerAgent(BaseAgent):
             response = llm.chat(
                 model=agent_cfg["model"],
                 messages=messages,
-            temperature=agent_cfg["temperature"],
-            max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                temperature=agent_cfg["temperature"],
+                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
             )
         review = self._parse_review_response(response["content"])
         logger.info(
             "Reviewer: verdict=%s score=%d issues=%d",
-            review["verdict"], review["score"], len(review["issues"]),
+            review["verdict"],
+            review["score"],
+            len(review["issues"]),
         )
 
         # 5. Return combined output
@@ -658,9 +675,7 @@ class ReviewerAgent(BaseAgent):
             "programmatic_checks": checks,
         }
         if scene_reviews:
-            output["scene_semantic_reviews"] = [
-                r.model_dump() for r in scene_reviews
-            ]
+            output["scene_semantic_reviews"] = [r.model_dump() for r in scene_reviews]
         return output
 
     def _parse_review_response(self, content: str) -> dict[str, Any]:

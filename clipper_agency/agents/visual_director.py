@@ -18,18 +18,22 @@ from clipper_agency.agents.base import BaseAgent
 from clipper_agency.config.schema import StoryBeat, WordTimestamp
 from clipper_agency.core.artifacts import write_json
 from clipper_agency.core.candidate_semantic_ranker import rank_candidates, select_best_candidate
-from clipper_agency.core.inspection_cache import compute_cache_key, lookup, store
+from clipper_agency.core.frame_inspection_pipeline import run_frame_inspection_pipeline
+from clipper_agency.core.inspection_cache import (
+    compute_asset_content_hash,
+    compute_cache_key,
+    lookup,
+    store,
+)
+from clipper_agency.core.media_probe import probe_video
 from clipper_agency.core.paths import (
     agent_input_file,
     agent_output_file,
     ensure_agent_dir,
-    visual_scene_file,
 )
 from clipper_agency.core.semantic_visual_review import score_visual_relevance
 from clipper_agency.services.pexels import PexelsService
 from clipper_agency.services.ytdlp import YtDlpService
-from clipper_agency.core.media_probe import probe_video
-from clipper_agency.core.frame_inspection_pipeline import run_frame_inspection_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +46,14 @@ _PRIORITY_STOCK = "stock"
 _PUNCTUATION_CHARS = ".,!?;:"
 
 # Action types handled by _execute_action — used to normalize fallback types.
-_EXECUTABLE_ACTION_TYPES = frozenset({
-    "tiktok_clip", "pexels_video", "pexels_image", "text_card",
-})
+_EXECUTABLE_ACTION_TYPES = frozenset(
+    {
+        "tiktok_clip",
+        "pexels_video",
+        "pexels_image",
+        "text_card",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -55,12 +64,14 @@ _EXECUTABLE_ACTION_TYPES = frozenset({
 def _is_ocr_enabled() -> bool:
     """Check whether OCR inspection is enabled in quality config."""
     from clipper_agency.config.loader import load_settings
+
     return load_settings().quality.ocr.enabled
 
 
 def _is_face_enabled() -> bool:
     """Check whether face detection is enabled in quality config."""
     from clipper_agency.config.loader import load_settings
+
     return load_settings().quality.face_detection.enabled
 
 
@@ -149,14 +160,22 @@ class VisualDirectorAgent(BaseAgent):
                 pexels_videos: list[dict] = []
             elif research_contract_path:
                 plan, assets = self._run_llm_planning(
-                    scenes, job_id, output_dir,
-                    research_contract_path, research_brief_path,
+                    scenes,
+                    job_id,
+                    output_dir,
+                    research_contract_path,
+                    research_brief_path,
                     agent_dir,
                 )
                 pexels_videos = []
             else:
                 plan, assets, pexels_videos = self._run_legacy_planning(
-                    scenes, job_id, topic, output_dir, source_urls, agent_dir,
+                    scenes,
+                    job_id,
+                    topic,
+                    output_dir,
+                    source_urls,
+                    agent_dir,
                 )
 
             output = {
@@ -165,9 +184,17 @@ class VisualDirectorAgent(BaseAgent):
                 "candidate_inspections": getattr(self, "_candidate_inspections", []),
             }
             self._write_artifacts(
-                assets_cache, job_id, agent_dir, topic, plan, assets,
-                output, beat_driven, research_contract_path,
-                pexels_videos, source_urls,
+                assets_cache,
+                job_id,
+                agent_dir,
+                topic,
+                plan,
+                assets,
+                output,
+                beat_driven,
+                research_contract_path,
+                pexels_videos,
+                source_urls,
             )
 
             logger.info("Visual: completed %d assets", len(assets))
@@ -231,14 +258,13 @@ class VisualDirectorAgent(BaseAgent):
 
         if beat_timeline:
             from clipper_agency.core.beat_timeline import timeline_to_duration_map
+
             beat_durations = timeline_to_duration_map(beat_timeline)
         else:
             beat_durations = self._calculate_beat_durations(parsed_beats, parsed_ts)
 
         scenes_dir = (
-            f"{agent_dir}/scenes"
-            if agent_dir
-            else f"{output_dir or 'outputs'}/job_{job_id}"
+            f"{agent_dir}/scenes" if agent_dir else f"{output_dir or 'outputs'}/job_{job_id}"
         )
         Path(scenes_dir).mkdir(parents=True, exist_ok=True)
 
@@ -255,7 +281,9 @@ class VisualDirectorAgent(BaseAgent):
             plan = llm_plan
         else:
             plan = self._plan_beats_fallback(
-                parsed_beats, beat_durations, do_not_use,
+                parsed_beats,
+                beat_durations,
+                do_not_use,
             )
 
         allowed_beat_ids = [beat.beat_id for beat in parsed_beats]
@@ -263,7 +291,10 @@ class VisualDirectorAgent(BaseAgent):
         plan = self._deduplicate_llm_plan_urls(plan, do_not_use)
 
         plan, self._candidate_inspections = self._inspect_and_select_candidates(
-            plan, parsed_beats, job_id, agent_dir,
+            plan,
+            parsed_beats,
+            job_id,
+            agent_dir,
         )
 
         assets = self._execute_beat_plan(plan, scenes_dir)
@@ -284,9 +315,7 @@ class VisualDirectorAgent(BaseAgent):
 
         Falls back to evenly distributed duration when word ranges don't align.
         """
-        total_ts_duration = (
-            timestamps[-1].end - timestamps[0].start if timestamps else 0.0
-        )
+        total_ts_duration = timestamps[-1].end - timestamps[0].start if timestamps else 0.0
         durations: dict[int, float] = {}
 
         for beat in beats:
@@ -295,7 +324,9 @@ class VisualDirectorAgent(BaseAgent):
                 first_word = beat_words[0].lower().strip(_PUNCTUATION_CHARS)
                 last_word = beat_words[-1].lower().strip(_PUNCTUATION_CHARS)
                 start_time, end_time = self._find_word_range_timestamps(
-                    first_word, last_word, timestamps,
+                    first_word,
+                    last_word,
+                    timestamps,
                 )
                 if start_time is not None and end_time is not None:
                     durations[beat.beat_id] = round(end_time - start_time, 3)
@@ -366,24 +397,26 @@ class VisualDirectorAgent(BaseAgent):
                     {"type": a.type, "url": a.url, "reason": a.reason}
                     for a in beat.asset_candidates
                 ]
-                beats_payload.append({
-                    "beat_id": beat.beat_id,
-                    "role": beat.role,
-                    "narration_goal": beat.narration_goal,
-                    "spoken_point": beat.spoken_point,
-                    "visual_must_show": beat.visual_must_show,
-                    "visual_must_not_show": beat.visual_must_not_show,
-                    "overlay_text": beat.overlay_text,
-                    "caption_keywords": beat.caption_keywords,
-                    "duration_sec": duration,
-                    "asset_candidates": assets_info,
-                    "fallback": {
-                        "type": beat.fallback.type,
-                        "headline": beat.fallback.headline,
-                        "image_search": beat.fallback.image_search,
-                    },
-                    "risk_note": beat.risk_note,
-                })
+                beats_payload.append(
+                    {
+                        "beat_id": beat.beat_id,
+                        "role": beat.role,
+                        "narration_goal": beat.narration_goal,
+                        "spoken_point": beat.spoken_point,
+                        "visual_must_show": beat.visual_must_show,
+                        "visual_must_not_show": beat.visual_must_not_show,
+                        "overlay_text": beat.overlay_text,
+                        "caption_keywords": beat.caption_keywords,
+                        "duration_sec": duration,
+                        "asset_candidates": assets_info,
+                        "fallback": {
+                            "type": beat.fallback.type,
+                            "headline": beat.fallback.headline,
+                            "image_search": beat.fallback.image_search,
+                        },
+                        "risk_note": beat.risk_note,
+                    }
+                )
 
             user_content = json.dumps(
                 {
@@ -398,16 +431,16 @@ class VisualDirectorAgent(BaseAgent):
             )
 
             messages = [
-                    {
-                        "role": "system",
-                        "content": prompt_text.format(
-                            content_angle="TikTok infotainment",
-                            language="Indonesian",
-                            safety_rules_text=safety_rules_text,
-                        ),
-                    },
-                    {"role": "user", "content": user_content},
-                ]
+                {
+                    "role": "system",
+                    "content": prompt_text.format(
+                        content_angle="TikTok infotainment",
+                        language="Indonesian",
+                        safety_rules_text=safety_rules_text,
+                    ),
+                },
+                {"role": "user", "content": user_content},
+            ]
             if self._trace_writer:
                 response = llm.chat_traced(
                     model=agent_cfg["model"],
@@ -423,17 +456,11 @@ class VisualDirectorAgent(BaseAgent):
                 response = llm.chat(
                     model=agent_cfg["model"],
                     messages=messages,
-                temperature=agent_cfg["temperature"],
-                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                    temperature=agent_cfg["temperature"],
+                    max_completion_tokens=agent_cfg.get("max_completion_tokens"),
                 )
 
-            parsed = json.loads(
-                response["content"]
-                .strip()
-                .strip("```json")
-                .strip("```")
-                .strip()
-            )
+            parsed = json.loads(response["content"].strip().strip("```json").strip("```").strip())
             return parsed.get("scenes", [])
 
         except Exception as e:
@@ -455,27 +482,33 @@ class VisualDirectorAgent(BaseAgent):
             source_url = action.get("source_url", "")
             if source_url:
                 used_urls.add(source_url)
-            plan.append({
-                "scene_number": beat.beat_id,
-                "beat_id": beat.beat_id,
-                "role": beat.role,
-                "reasoning": f"Fallback plan for beat {beat.beat_id} ({beat.role})",
-                "treatment": self._default_treatment_for_role(beat.role),
-                "target_duration": duration,
-                "transition_in": "crossfade",
-                "transition_out": "crossfade",
-                "action": action,
-                "fallback": {
-                    "type": "text_card",
-                    "headline": beat.overlay_text[:50] if beat.overlay_text else f"Beat {beat.beat_id}",
-                    "style": "news_card",
-                    "image_search": beat.fallback.image_search or topic_safe_query(beat),
-                },
-            })
+            plan.append(
+                {
+                    "scene_number": beat.beat_id,
+                    "beat_id": beat.beat_id,
+                    "role": beat.role,
+                    "reasoning": f"Fallback plan for beat {beat.beat_id} ({beat.role})",
+                    "treatment": self._default_treatment_for_role(beat.role),
+                    "target_duration": duration,
+                    "transition_in": "crossfade",
+                    "transition_out": "crossfade",
+                    "action": action,
+                    "fallback": {
+                        "type": "text_card",
+                        "headline": beat.overlay_text[:50]
+                        if beat.overlay_text
+                        else f"Beat {beat.beat_id}",
+                        "style": "news_card",
+                        "image_search": beat.fallback.image_search or topic_safe_query(beat),
+                    },
+                }
+            )
         return plan
 
     def _select_visual_for_beat(
-        self, beat: StoryBeat, do_not_use: list[str],
+        self,
+        beat: StoryBeat,
+        do_not_use: list[str],
     ) -> dict:
         """Select visual action for a beat using the priority hierarchy.
 
@@ -490,14 +523,18 @@ class VisualDirectorAgent(BaseAgent):
 
         # Tier 1: Direct source clip
         clip = self._find_candidate_by_type(
-            beat.asset_candidates, "tiktok_clip", do_not_use_set,
+            beat.asset_candidates,
+            "tiktok_clip",
+            do_not_use_set,
         )
         if clip:
             return {"type": "tiktok_clip", "source_url": clip.url}
 
         # Tier 2: Official screenshot
         screenshot = self._find_candidate_by_type(
-            beat.asset_candidates, "screenshot", do_not_use_set,
+            beat.asset_candidates,
+            "screenshot",
+            do_not_use_set,
         )
         if screenshot:
             return {
@@ -508,9 +545,7 @@ class VisualDirectorAgent(BaseAgent):
 
         # Tier 3: Subject portrait with Ken Burns (Pexels search)
         search_query = (
-            beat.fallback.image_search
-            or beat.visual_must_show[:60]
-            or beat.spoken_point[:50]
+            beat.fallback.image_search or beat.visual_must_show[:60] or beat.spoken_point[:50]
         )
         if search_query and not _is_abstract_beat(beat):
             return {
@@ -530,7 +565,9 @@ class VisualDirectorAgent(BaseAgent):
 
     @staticmethod
     def _find_candidate_by_type(
-        candidates: list, candidate_type: str, do_not_use_set: set[str],
+        candidates: list,
+        candidate_type: str,
+        do_not_use_set: set[str],
     ):
         """Find first asset candidate matching type not in do_not_use set."""
         for candidate in candidates:
@@ -541,7 +578,9 @@ class VisualDirectorAgent(BaseAgent):
         return None
 
     def _execute_beat_plan(
-        self, plan: list[dict], scenes_dir: str,
+        self,
+        plan: list[dict],
+        scenes_dir: str,
     ) -> list[dict]:
         """Execute beat-driven plan, producing assets compatible with composer."""
         pexels = PexelsService()
@@ -554,13 +593,21 @@ class VisualDirectorAgent(BaseAgent):
             action = item.get("action", {})
             fallback = item.get("fallback")
             result = self._execute_action(
-                action, scene_id, scenes_dir, pexels, ytdlp,
+                action,
+                scene_id,
+                scenes_dir,
+                pexels,
+                ytdlp,
             )
 
             if result is None and fallback:
                 logger.info("Beat %d: primary failed, using fallback", scene_id)
                 result = self._execute_action(
-                    fallback, scene_id, scenes_dir, pexels, ytdlp,
+                    fallback,
+                    scene_id,
+                    scenes_dir,
+                    pexels,
+                    ytdlp,
                 )
 
             if result:
@@ -570,9 +617,14 @@ class VisualDirectorAgent(BaseAgent):
 
             # Pass through beat metadata for composer compatibility
             for field in (
-                "treatment", "target_duration", "transition_in",
-                "transition_out", "beat_id", "role",
-                "start_time", "duration",
+                "treatment",
+                "target_duration",
+                "transition_in",
+                "transition_out",
+                "beat_id",
+                "role",
+                "start_time",
+                "duration",
             ):
                 if field in item:
                     asset[field] = item[field]
@@ -594,10 +646,7 @@ class VisualDirectorAgent(BaseAgent):
     @staticmethod
     def _normalize_beat_plan(plan: list[dict], allowed_beat_ids: list[int]) -> list[dict]:
         """Keep only allowed beat IDs and preserve narrative beat order."""
-        by_beat_id = {
-            item.get("beat_id", item.get("scene_number")): item
-            for item in plan
-        }
+        by_beat_id = {item.get("beat_id", item.get("scene_number")): item for item in plan}
         normalized: list[dict] = []
         for beat_id in allowed_beat_ids:
             item = dict(by_beat_id.get(beat_id, {}))
@@ -660,7 +709,12 @@ class VisualDirectorAgent(BaseAgent):
                 continue
 
             candidates = self._collect_candidate_scores(
-                beat, plan_item, job_id, cache_dir, agent_dir, all_inspections,
+                beat,
+                plan_item,
+                job_id,
+                cache_dir,
+                agent_dir,
+                all_inspections,
             )
             self._apply_best_candidate(plan_item, beat, candidates)
 
@@ -679,7 +733,12 @@ class VisualDirectorAgent(BaseAgent):
         candidates: list[dict] = []
         for candidate in beat.asset_candidates:
             scored = self._score_one_candidate(
-                candidate, beat, plan_item, job_id, cache_dir, agent_dir,
+                candidate,
+                beat,
+                plan_item,
+                job_id,
+                cache_dir,
+                agent_dir,
             )
             if scored:
                 candidates.append(scored)
@@ -698,13 +757,20 @@ class VisualDirectorAgent(BaseAgent):
         """Score a single candidate using cache or multimodal inspection."""
         asset_id = f"{candidate.type}_{candidate.url[:40]}"
         cache_key = compute_cache_key(
-            asset_path=candidate.url, asset_hash="",
-            beat_claim=beat.spoken_point, evidence_contract_hash="",
-            model="multimodal", prompt_version="1.0",
+            asset_path=candidate.url,
+            asset_hash=compute_asset_content_hash(candidate),
+            beat_claim=beat.spoken_point,
+            evidence_contract_hash="",
+            model="multimodal",
+            prompt_version="1.0",
         )
         cached = lookup(cache_dir, cache_key) if cache_dir else None
         inspection = cached or self._run_multimodal_inspection(
-            candidate, beat, job_id, cache_dir, cache_key,
+            candidate,
+            beat,
+            job_id,
+            cache_dir,
+            cache_key,
             agent_dir=agent_dir,
         )
         if inspection is None:
@@ -715,17 +781,22 @@ class VisualDirectorAgent(BaseAgent):
             asset_inspection=inspection,
         )
         return {
-            "asset_id": asset_id, "beat_id": str(beat.beat_id),
-            "role": beat.role, "treatment": plan_item.get("treatment", ""),
+            "asset_id": asset_id,
+            "beat_id": str(beat.beat_id),
+            "role": beat.role,
+            "treatment": plan_item.get("treatment", ""),
             "inspection": inspection,
             "visual_relevance": {
-                "person_match": rel.person_match, "event_match": rel.event_match,
-                "claim_support": rel.claim_support, "visual_quality": rel.visual_quality,
+                "person_match": rel.person_match,
+                "event_match": rel.event_match,
+                "claim_support": rel.claim_support,
+                "visual_quality": rel.visual_quality,
             },
             "cleanliness_score": self._compute_cleanliness_score(candidate, inspection),
             "candidate": candidate,
             "inspection_diag": {
-                "beat_id": beat.beat_id, "asset_id": asset_id,
+                "beat_id": beat.beat_id,
+                "asset_id": asset_id,
                 "decision": inspection.get("decision", "unknown"),
                 "from_cache": cached is not None,
             },
@@ -763,7 +834,9 @@ class VisualDirectorAgent(BaseAgent):
             )
             return result.get("cleanliness_score", inspection.get("visual_quality", 0.5))
         except Exception:
-            logger.debug("cleanliness scoring failed for %s", getattr(candidate, "url", ""), exc_info=True)
+            logger.debug(
+                "cleanliness scoring failed for %s", getattr(candidate, "url", ""), exc_info=True
+            )
             return inspection.get("visual_quality", 0.5)
 
     def _run_ocr_and_face_on_frames(
@@ -805,14 +878,15 @@ class VisualDirectorAgent(BaseAgent):
                 detector = MediaPipeFaceDetector()
                 for frame_path in frame_paths:
                     result = detector.detect(frame_path, 0.0)
-                    face_results.append({
-                        "frame_path": frame_path,
-                        "faces": [
-                            {"bbox": f.bbox, "confidence": f.confidence}
-                            for f in result.faces
-                        ],
-                        "provider": result.provider,
-                    })
+                    face_results.append(
+                        {
+                            "frame_path": frame_path,
+                            "faces": [
+                                {"bbox": f.bbox, "confidence": f.confidence} for f in result.faces
+                            ],
+                            "provider": result.provider,
+                        }
+                    )
             except Exception:
                 logger.debug("Face detection failed", exc_info=True)
 
@@ -829,14 +903,17 @@ class VisualDirectorAgent(BaseAgent):
     ) -> dict | None:
         """Attempt multimodal inspection; return inspection dict or None."""
         try:
-            from clipper_agency.llm.multimodal_client import MultimodalInspectionClient
             from clipper_agency.llm.client import OpenRouterClient
+            from clipper_agency.llm.multimodal_client import MultimodalInspectionClient
 
             frame_paths = self._extract_candidate_frames(candidate, agent_dir)
 
             # --- Enhanced frame inspection pipeline (config-gated) ---
             enhanced_paths = self._try_enhanced_frame_inspection(
-                candidate, beat, job_id, agent_dir,
+                candidate,
+                beat,
+                job_id,
+                agent_dir,
             )
             if enhanced_paths is not None:
                 frame_paths = enhanced_paths
@@ -920,7 +997,8 @@ class VisualDirectorAgent(BaseAgent):
         except Exception as exc:
             logger.debug(
                 "Enhanced frame inspection failed for %s: %s",
-                candidate.url, exc,
+                candidate.url,
+                exc,
             )
             return None
 
@@ -1025,7 +1103,8 @@ class VisualDirectorAgent(BaseAgent):
         best = select_best_candidate(ranked)
         if best and best.decision == "accept" and best.asset_id != "fallback":
             matched = next(
-                (c for c in candidates if c.get("asset_id") == best.asset_id), None,
+                (c for c in candidates if c.get("asset_id") == best.asset_id),
+                None,
             )
             if matched:
                 cand = matched.get("candidate")
@@ -1070,7 +1149,9 @@ class VisualDirectorAgent(BaseAgent):
         return {"type": "text_card", "headline": beat.overlay_text[:60]}
 
     def _resolve_beat_plan_assets(
-        self, plan: list[dict], do_not_use: list[str],
+        self,
+        plan: list[dict],
+        do_not_use: list[str],
     ) -> list[dict]:
         """Resolve source_urls for each beat, replacing duplicates/missing with candidates.
 
@@ -1165,7 +1246,9 @@ class VisualDirectorAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     def _resolve_scene_data(
-        self, script: list[dict] | None, timeline_data: list[dict] | None = None,
+        self,
+        script: list[dict] | None,
+        timeline_data: list[dict] | None = None,
     ) -> list[dict]:
         """Merge script scenes with reconciled timeline data.
 
@@ -1194,18 +1277,21 @@ class VisualDirectorAgent(BaseAgent):
         ]
 
     def _run_llm_planning(
-        self, scenes: list[dict], job_id: int, output_dir: str,
-        research_contract_path: str, research_brief_path: str,
+        self,
+        scenes: list[dict],
+        job_id: int,
+        output_dir: str,
+        research_contract_path: str,
+        research_brief_path: str,
         agent_dir: str,
     ) -> tuple[list[dict], list[dict]]:
         """LLM-driven planning path. Returns (plan, assets)."""
         compact_data = self._compact_research_data(
-            research_contract_path, research_brief_path,
+            research_contract_path,
+            research_brief_path,
         )
         scenes_dir = (
-            f"{agent_dir}/scenes"
-            if agent_dir
-            else f"{output_dir or 'outputs'}/job_{job_id}"
+            f"{agent_dir}/scenes" if agent_dir else f"{output_dir or 'outputs'}/job_{job_id}"
         )
         Path(scenes_dir).mkdir(parents=True, exist_ok=True)
 
@@ -1224,8 +1310,12 @@ class VisualDirectorAgent(BaseAgent):
         return plan, assets
 
     def _run_legacy_planning(
-        self, scenes: list[dict], job_id: int, topic: str,
-        output_dir: str, source_urls: list[str] | None,
+        self,
+        scenes: list[dict],
+        job_id: int,
+        topic: str,
+        output_dir: str,
+        source_urls: list[str] | None,
         agent_dir: str,
     ) -> tuple[list[dict], list[dict], list[dict]]:
         """Legacy sequential planning. Returns (plan, assets, pexels_videos)."""
@@ -1236,9 +1326,7 @@ class VisualDirectorAgent(BaseAgent):
             write_json(f"{agent_dir}/scene_plan.json", plan)
 
         scenes_dir = (
-            f"{agent_dir}/scenes"
-            if agent_dir
-            else f"{output_dir or 'outputs'}/job_{job_id}"
+            f"{agent_dir}/scenes" if agent_dir else f"{output_dir or 'outputs'}/job_{job_id}"
         )
         Path(scenes_dir).mkdir(parents=True, exist_ok=True)
         assets = self._download_assets(plan, job_id, scenes_dir)
@@ -1258,34 +1346,40 @@ class VisualDirectorAgent(BaseAgent):
             if path and os.path.isfile(path):
                 info = probe_video(path, Path(path).parent)
                 if info is not None:
-                    clip_data.update({
-                        "original_width": info.width,
-                        "original_height": info.height,
-                        "codec": info.codec,
-                        "duration": info.duration,
-                        "file_size": info.file_size,
-                        "probed": True,
-                        "probe_error": None,
-                    })
+                    clip_data.update(
+                        {
+                            "original_width": info.width,
+                            "original_height": info.height,
+                            "codec": info.codec,
+                            "duration": info.duration,
+                            "file_size": info.file_size,
+                            "probed": True,
+                            "probe_error": None,
+                        }
+                    )
                 else:
-                    clip_data.update({
-                        "probed": False,
-                        "probe_error": "ffprobe returned no data",
-                        "file_size": os.path.getsize(path),
-                    })
+                    clip_data.update(
+                        {
+                            "probed": False,
+                            "probe_error": "ffprobe returned no data",
+                            "file_size": os.path.getsize(path),
+                        }
+                    )
             else:
-                clip_data.update({
-                    "probed": False,
-                    "probe_error": "No file path available",
-                })
-            clip_data["downloaded_at"] = (
-                datetime.datetime.now(datetime.timezone.utc).isoformat()
-            )
+                clip_data.update(
+                    {
+                        "probed": False,
+                        "probe_error": "No file path available",
+                    }
+                )
+            clip_data["downloaded_at"] = datetime.datetime.now(datetime.UTC).isoformat()
             clips[scene_id] = clip_data
         return clips
 
     def _compact_research_data(
-        self, contract_path: str, brief_path: str,
+        self,
+        contract_path: str,
+        brief_path: str,
     ) -> dict[str, Any]:
         """Strip noise, keep signal for LLM planning prompt."""
         try:
@@ -1295,18 +1389,14 @@ class VisualDirectorAgent(BaseAgent):
 
         compact_videos = []
         for v in contract.get("video_sources", []):
-            compact_videos.append({
-                k: v[k] for k in ("url", "desc", "plays", "likes", "shares", "author")
-                if k in v
-            })
+            compact_videos.append(
+                {k: v[k] for k in ("url", "desc", "plays", "likes", "shares", "author") if k in v}
+            )
         compact_videos.sort(key=lambda x: x.get("plays", 0), reverse=True)
 
         compact_contexts = []
         for c in contract.get("context_sources", []):
-            compact_contexts.append({
-                k: c[k] for k in ("title", "description")
-                if k in c
-            })
+            compact_contexts.append({k: c[k] for k in ("title", "description") if k in c})
 
         result: dict[str, Any] = {
             "video_sources": compact_videos,
@@ -1324,7 +1414,10 @@ class VisualDirectorAgent(BaseAgent):
         return result
 
     def _plan_with_llm(
-        self, scenes: list[dict], compact_data: dict, job_id: int = 0,
+        self,
+        scenes: list[dict],
+        compact_data: dict,
+        job_id: int = 0,
     ) -> list[dict] | None:
         """LLM plans per-scene visual strategy. Returns None on failure."""
         try:
@@ -1337,22 +1430,25 @@ class VisualDirectorAgent(BaseAgent):
             prompt_text = load_prompt("visual_director", "", PROMPTS_DIR)
             safety_rules_text = "None"
 
-            user_content = json.dumps({
-                "scenes": scenes,
-                "research": compact_data,
-            }, ensure_ascii=False)
+            user_content = json.dumps(
+                {
+                    "scenes": scenes,
+                    "research": compact_data,
+                },
+                ensure_ascii=False,
+            )
 
             messages = [
-                    {
-                        "role": "system",
-                        "content": prompt_text.format(
-                            content_angle="TikTok infotainment",
-                            language="Indonesian",
-                            safety_rules_text=safety_rules_text,
-                        ),
-                    },
-                    {"role": "user", "content": user_content},
-                ]
+                {
+                    "role": "system",
+                    "content": prompt_text.format(
+                        content_angle="TikTok infotainment",
+                        language="Indonesian",
+                        safety_rules_text=safety_rules_text,
+                    ),
+                },
+                {"role": "user", "content": user_content},
+            ]
             if self._trace_writer:
                 response = llm.chat_traced(
                     model=agent_cfg["model"],
@@ -1368,13 +1464,11 @@ class VisualDirectorAgent(BaseAgent):
                 response = llm.chat(
                     model=agent_cfg["model"],
                     messages=messages,
-                temperature=agent_cfg["temperature"],
-                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                    temperature=agent_cfg["temperature"],
+                    max_completion_tokens=agent_cfg.get("max_completion_tokens"),
                 )
 
-            parsed = json.loads(
-                response["content"].strip().strip("```json").strip("```").strip()
-            )
+            parsed = json.loads(response["content"].strip().strip("```json").strip("```").strip())
             return parsed.get("scenes", [])
 
         except Exception as e:
@@ -1393,39 +1487,44 @@ class VisualDirectorAgent(BaseAgent):
 
         for scene in scenes:
             if url_idx < len(source_urls):
-                plan.append({
-                    "scene": scene["scene"],
-                    "source": "tiktok",
-                    "url": source_urls[url_idx],
-                    "duration": scene.get("duration", 5),
-                })
+                plan.append(
+                    {
+                        "scene": scene["scene"],
+                        "source": "tiktok",
+                        "url": source_urls[url_idx],
+                        "duration": scene.get("duration", 5),
+                    }
+                )
                 url_idx += 1
             elif pexels_idx < len(pexels_videos):
                 video = pexels_videos[pexels_idx]
-                video_url = (
-                    video["video_files"][0]["link"]
-                    if video.get("video_files")
-                    else ""
+                video_url = video["video_files"][0]["link"] if video.get("video_files") else ""
+                plan.append(
+                    {
+                        "scene": scene["scene"],
+                        "source": "pexels",
+                        "url": video_url,
+                        "duration": scene.get("duration", 5),
+                    }
                 )
-                plan.append({
-                    "scene": scene["scene"],
-                    "source": "pexels",
-                    "url": video_url,
-                    "duration": scene.get("duration", 5),
-                })
                 pexels_idx += 1
             else:
-                plan.append({
-                    "scene": scene["scene"],
-                    "source": "none",
-                    "url": "",
-                    "duration": scene.get("duration", 5),
-                })
+                plan.append(
+                    {
+                        "scene": scene["scene"],
+                        "source": "none",
+                        "url": "",
+                        "duration": scene.get("duration", 5),
+                    }
+                )
 
         return plan
 
     def _download_assets(
-        self, plan: list[dict], _job_id: int, scenes_dir: str,
+        self,
+        plan: list[dict],
+        _job_id: int,
+        scenes_dir: str,
     ) -> list[dict]:
         assets: list[dict] = []
         pexels = PexelsService()
@@ -1440,31 +1539,41 @@ class VisualDirectorAgent(BaseAgent):
                 output_path = f"{scenes_dir}/scene_{scene_id}.mp4"
                 result = ytdlp.download(url, output_path)
                 file_path = result.path if result else ""
-                assets.append({
-                    "scene": scene_id,
-                    "source": source,
-                    "path": file_path,
-                })
+                assets.append(
+                    {
+                        "scene": scene_id,
+                        "source": source,
+                        "path": file_path,
+                    }
+                )
             elif source == "pexels":
                 path = pexels.download_video(
-                    url, scenes_dir, f"scene_{scene_id}.mp4",
+                    url,
+                    scenes_dir,
+                    f"scene_{scene_id}.mp4",
                 )
-                assets.append({
-                    "scene": scene_id,
-                    "source": source,
-                    "path": path,
-                })
+                assets.append(
+                    {
+                        "scene": scene_id,
+                        "source": source,
+                        "path": path,
+                    }
+                )
             else:
-                assets.append({
-                    "scene": scene_id,
-                    "source": source,
-                    "path": "",
-                })
+                assets.append(
+                    {
+                        "scene": scene_id,
+                        "source": source,
+                        "path": "",
+                    }
+                )
 
         return assets
 
     def _execute_plan(
-        self, plan: list[dict], scenes_dir: str,
+        self,
+        plan: list[dict],
+        scenes_dir: str,
     ) -> list[dict]:
         """Execute the LLM-generated visual plan with fallback chain."""
         pexels = PexelsService()
@@ -1477,13 +1586,21 @@ class VisualDirectorAgent(BaseAgent):
             action = item.get("action", {})
             fallback = item.get("fallback")
             result = self._execute_action(
-                action, scene_id, scenes_dir, pexels, ytdlp,
+                action,
+                scene_id,
+                scenes_dir,
+                pexels,
+                ytdlp,
             )
 
             if result is None and fallback:
                 logger.info("Scene %d: primary failed, using fallback", scene_id)
                 result = self._execute_action(
-                    fallback, scene_id, scenes_dir, pexels, ytdlp,
+                    fallback,
+                    scene_id,
+                    scenes_dir,
+                    pexels,
+                    ytdlp,
                 )
 
             if result:
@@ -1492,8 +1609,10 @@ class VisualDirectorAgent(BaseAgent):
                 asset = {"scene": scene_id, "source": "none", "path": ""}
 
             for field in (
-                "treatment", "target_duration",
-                "transition_in", "transition_out",
+                "treatment",
+                "target_duration",
+                "transition_in",
+                "transition_out",
             ):
                 if field in item:
                     asset[field] = item[field]
@@ -1528,8 +1647,12 @@ class VisualDirectorAgent(BaseAgent):
         return asset
 
     def _execute_action(
-        self, action: dict, scene_id: int, scenes_dir: str,
-        pexels: PexelsService, ytdlp: YtDlpService,
+        self,
+        action: dict,
+        scene_id: int,
+        scenes_dir: str,
+        pexels: PexelsService,
+        ytdlp: YtDlpService,
     ) -> dict | None:
         """Execute a single action. Returns {source, path} or None on failure."""
         action_type = action.get("type", "none")
@@ -1545,8 +1668,12 @@ class VisualDirectorAgent(BaseAgent):
         return None
 
     def _exec_tiktok_clip(
-        self, action: dict, scene_id: int, scenes_dir: str,
-        _pexels: PexelsService, ytdlp: YtDlpService,
+        self,
+        action: dict,
+        scene_id: int,
+        scenes_dir: str,
+        _pexels: PexelsService,
+        ytdlp: YtDlpService,
     ) -> dict | None:
         url = action.get("source_url", "")
         if not url:
@@ -1556,8 +1683,12 @@ class VisualDirectorAgent(BaseAgent):
         return {"source": "tiktok_clip", "path": result.path} if result else None
 
     def _exec_pexels_video(
-        self, action: dict, scene_id: int, scenes_dir: str,
-        pexels: PexelsService, _ytdlp: YtDlpService,
+        self,
+        action: dict,
+        scene_id: int,
+        scenes_dir: str,
+        pexels: PexelsService,
+        _ytdlp: YtDlpService,
     ) -> dict | None:
         query = action.get("search_query", "")
         if not query:
@@ -1567,7 +1698,9 @@ class VisualDirectorAgent(BaseAgent):
             if videos and videos[0].get("video_files"):
                 video_url = videos[0]["video_files"][0]["link"]
                 path = pexels.download_video(
-                    video_url, scenes_dir, f"scene_{scene_id}.mp4",
+                    video_url,
+                    scenes_dir,
+                    f"scene_{scene_id}.mp4",
                 )
                 return {"source": "pexels_video", "path": path} if path else None
         except Exception:
@@ -1575,15 +1708,23 @@ class VisualDirectorAgent(BaseAgent):
         return None
 
     def _exec_pexels_image(
-        self, action: dict, scene_id: int, scenes_dir: str,
-        pexels: PexelsService, _ytdlp: YtDlpService,
+        self,
+        action: dict,
+        scene_id: int,
+        scenes_dir: str,
+        pexels: PexelsService,
+        _ytdlp: YtDlpService,
     ) -> dict | None:
         query = action.get("search_query", "")
         return self._fetch_image(query, scene_id, scenes_dir, pexels)
 
     def _exec_text_card(
-        self, action: dict, scene_id: int, scenes_dir: str,
-        pexels: PexelsService, _ytdlp: YtDlpService,
+        self,
+        action: dict,
+        scene_id: int,
+        scenes_dir: str,
+        pexels: PexelsService,
+        _ytdlp: YtDlpService,
     ) -> dict | None:
         from clipper_agency.core.card_generator import CardGenerator, CardType
 
@@ -1613,7 +1754,10 @@ class VisualDirectorAgent(BaseAgent):
         }
 
     def _fetch_image(
-        self, query: str, scene_id: int, scenes_dir: str,
+        self,
+        query: str,
+        scene_id: int,
+        scenes_dir: str,
         pexels: PexelsService,
     ) -> dict | None:
         """3-tier image fallback: Pexels photos -> Firecrawl -> None."""
