@@ -26,6 +26,7 @@ from typing import Any
 from clipper_agency.agents.segment_producer import SegmentProducerAgent
 from clipper_agency.config.schema import AssetCandidate, BeatFallback, StoryBeat
 from clipper_agency.core import inspection_cache
+from clipper_agency.core.clip_window import ClipWindow
 from clipper_agency.core.inspection_cache import compute_cache_key
 from clipper_agency.core.paths import ensure_agent_dir, job_cache_dir
 from clipper_agency.orchestrator.engine import Orchestrator
@@ -189,6 +190,76 @@ class TestApplyAssetQualificationSeam:
         assert qualified_beats == []
         assert qualified_flat == []
         assert (Path(job_cache_dir(str(tmp_path), 1)) / "qualification_report.json").exists()
+
+    def test_clip_window_attached_to_kept_video_candidate(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """PR 6 — the window selector's window is attached to each kept video candidate."""
+        assets_cache = str(tmp_path)
+        job_id = 9
+        vd_dir = ensure_agent_dir(assets_cache, job_id, "visual_director")
+        cache_dir = f"{vd_dir}/inspection_cache"
+        accept = _candidate("https://a.com/win.mp4", ctype="tiktok_clip")
+        beat = _beat_dict(1, [accept])
+        _store(cache_dir, accept, "Point 1", _high())
+        monkeypatch.setattr(
+            SegmentProducerAgent,
+            "_discover_multi_source_assets",
+            lambda self, t, e, c, beats=None: ([], []),
+        )
+        stub_selector = _StubSelector(ClipWindow(2.0, 5.0))
+        research = {"story_beats": [beat], "asset_candidates": [accept], "entities": []}
+        before = _deep_copy(research)
+
+        qualified_beats, _qualified_flat = Orchestrator._apply_asset_qualification(
+            SimpleNamespace(_trace_writer=None),
+            research,
+            job_id,
+            "TOPIC",
+            assets_cache,
+            window_selector=stub_selector,
+        )
+
+        kept = qualified_beats[0]["asset_candidates"]
+        assert len(kept) == 1
+        # The selector's window rides the qualified candidate through to VD.
+        assert kept[0]["source_start_sec"] == 2.0
+        assert kept[0]["source_end_sec"] == 5.0
+        # Immutability: the original candidate dicts are untouched (new dicts per kept).
+        assert research == before
+
+    def test_default_selector_attaches_full_clip_window(self, tmp_path: Path) -> None:
+        """PR 6 — without an injected selector, the default attaches the safe full-clip window."""
+        assets_cache = str(tmp_path)
+        job_id = 10
+        vd_dir = ensure_agent_dir(assets_cache, job_id, "visual_director")
+        cache_dir = f"{vd_dir}/inspection_cache"
+        accept = _candidate("https://a.com/default.mp4", ctype="tiktok_clip")
+        beat = _beat_dict(1, [accept])
+        _store(cache_dir, accept, "Point 1", _high())
+
+        qualified_beats, _ = Orchestrator._apply_asset_qualification(
+            SimpleNamespace(_trace_writer=None),
+            {"story_beats": [beat], "asset_candidates": [accept], "entities": []},
+            job_id,
+            "TOPIC",
+            assets_cache,
+        )
+        kept = qualified_beats[0]["asset_candidates"]
+        assert kept[0]["source_start_sec"] == 0.0
+        assert kept[0]["source_end_sec"] is None
+
+
+class _StubSelector:
+    """Test double WindowSelector returning a fixed window."""
+
+    def __init__(self, window: ClipWindow) -> None:
+        self._window = window
+
+    def select_window(
+        self, candidate: dict, beat: Any, source_duration_sec: float | None
+    ) -> ClipWindow:
+        return self._window
 
 
 def _deep_copy(obj: Any) -> Any:

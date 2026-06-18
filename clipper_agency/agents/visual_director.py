@@ -297,11 +297,45 @@ class VisualDirectorAgent(BaseAgent):
             agent_dir,
         )
 
+        # PR 6: re-attach each action's clip window from its beat's matching candidate
+        # (by source_url). Works for both the LLM plan and the fallback plan — the LLM
+        # generates actions from scratch and does not carry candidate metadata, so this
+        # post-pass restores source_start_sec/source_end_sec before execution.
+        plan = self._attach_candidate_windows(plan, parsed_beats)
+
         assets = self._execute_beat_plan(plan, scenes_dir)
 
         if agent_dir:
             write_json(f"{agent_dir}/scene_plan.json", plan)
         return plan, assets
+
+    def _attach_candidate_windows(
+        self, plan: list[dict], parsed_beats: list[StoryBeat]
+    ) -> list[dict]:
+        """PR 6 — copy source_start_sec/source_end_sec from each beat's matching candidate
+        (by ``source_url``) onto the planned action.
+
+        The LLM plan and ``_apply_best_candidate`` rebuild actions from ``source_url`` and do
+        not carry candidate-level window metadata, so this post-pass restores the clip window
+        the qualification boundary (PR 5) attached to each qualified candidate. Beats whose
+        action has no matching candidate url are left unchanged (default 0.0/None downstream).
+        """
+        beats_by_id = {b.beat_id: b for b in parsed_beats}
+        for item in plan:
+            bid = item.get("beat_id")
+            beat = beats_by_id.get(bid) if isinstance(bid, int) else None
+            action = item.get("action") if isinstance(item, dict) else None
+            if not beat or not isinstance(action, dict):
+                continue
+            url = action.get("source_url", "")
+            if not url:
+                continue
+            match = next((c for c in beat.asset_candidates if c.url == url), None)
+            if match is None:
+                continue
+            action["source_start_sec"] = match.source_start_sec
+            action["source_end_sec"] = match.source_end_sec
+        return plan
 
     def _calculate_beat_durations(
         self,
@@ -1680,7 +1714,15 @@ class VisualDirectorAgent(BaseAgent):
             return None
         output_path = f"{scenes_dir}/scene_{scene_id}.mp4"
         result = ytdlp.download(url, output_path)
-        return {"source": "tiktok_clip", "path": result.path} if result else None
+        if not result:
+            return None
+        # PR 6: carry the clip window (attached by _attach_candidate_windows) to Composer.
+        asset: dict = {"source": "tiktok_clip", "path": result.path}
+        if "source_start_sec" in action:
+            asset["source_start_sec"] = action["source_start_sec"]
+        if "source_end_sec" in action:
+            asset["source_end_sec"] = action["source_end_sec"]
+        return asset
 
     def _exec_pexels_video(
         self,

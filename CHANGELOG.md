@@ -95,6 +95,14 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - 2031 offline tests pass, 18 deselected; ruff clean; 93%+ coverage. Existing 69 VD tests pass UNMODIFIED (VD source untouched — blast-radius contained).
 - Version stays 2.3.0 (PR 8 owns the 2.4.0 bump).
 
+#### PR 6 — Source Transcript & Clip-Window Selector (Minimal, Contract-First)
+- **Added:** new `core/clip_window.py` module — frozen `ClipWindow` dataclass + pluggable `WindowSelector` Protocol + `KeywordOverlapWindowSelector` (PR 6 v1 default, conservative: returns the full-clip window `ClipWindow(0.0, None)` for every candidate because keyword overlap cannot localize a spoken point to a timestamp). Contract-first: the data-flow shape is frozen now, the localizing backend is deferred.
+- **Added:** `AssetCandidate` (`config/schema.py`) gained optional `source_start_sec: float = 0.0` and `source_end_sec: float | None = None`. Additive — defaults preserve today's from-zero trim. Excluded from the inspection content hash, so PR 5's cache-key parity holds (no VLM double-spend).
+- **Added:** end-to-end propagation — qualification seam (`Orchestrator._apply_asset_qualification` invokes the selector + attaches the window to kept candidates) → Visual Director (`_attach_candidate_windows` re-attaches by `source_url`; `_exec_tiktok_clip` carries it into the asset dict) → Composer (`_smart_trim` clamps the window to source bounds — degenerate ⇒ full clip — and `_trim_long_clip`/`_stretch_short_clip` emit `-ss <start>`).
+- **Deferred (post-v2.4.0):** the transcript/whisper backend (faster-whisper behind a config flag), yt-dlp auto-caption extraction, and keyframe-precise snapping. Blocked by ADR 0026 (do-not-rebuild), the GPU-forbidden constraint, no existing transcript infra, and the fact that the v2.4.0 release gate does NOT require clip-windowing. The "trimmed segment matches beat's spoken point" verification criterion waits for this backend (documented honestly).
+- ADR 0026 — Contract Enforcement Over Rebuild (pure orchestration: NO new agent, NO new gate, NO state-machine change).
+- 2054 offline tests pass, 18 deselected; ruff clean; 93%+ coverage. Version stays 2.3.0 (PR 8 owns the 2.4.0 bump).
+
 ### Phase 25: Dead Code Removal (PR #49)
 
 Removed superseded `core/multimodal_provider.py` — 0 production consumers, deliberately excluded from wiring in Phase 23 plan (`multimodal_client.py` serves the same purpose and is wired into Visual Director). Eliminated 0.1% code duplication.

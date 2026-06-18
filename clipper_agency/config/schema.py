@@ -223,7 +223,7 @@ class AppSettings(BaseSettings):
     log_level: str = "INFO"
 
     # TTS provider configuration (Fish Audio or ElevenLabs)
-    fish_audio_voice_id: str = ""   # Fish Audio reference_id (voice model)
+    fish_audio_voice_id: str = ""  # Fish Audio reference_id (voice model)
     elevenlabs_voice_id: str = "JBFqnCBsd6RMkjVDRZzb"
     gemini_tts_voice_name: str = "Kore"
 
@@ -280,7 +280,13 @@ class AssetCandidate(BaseModel):
     related_beat_id: int | None = None
     story_id: str = ""
     license_status: str = "unknown"
-    source_type: str = ""  # "youtube_official", "web_video", "tiktok_clip", "image", "article", "firecrawl"
+    source_type: str = (
+        ""  # "youtube_official", "web_video", "tiktok_clip", "image", "article", "firecrawl"
+    )
+    # PR 6 clip-window (design §2). Optional; defaults preserve today's from-zero trim.
+    # Excluded from the inspection content hash (see inspection_cache) — PR 5 parity.
+    source_start_sec: float = 0.0
+    source_end_sec: float | None = None  # None => to end of source
 
 
 class BeatFallback(BaseModel):
@@ -409,7 +415,9 @@ class QualityCheckResult(BaseModel):
 class VisualCoverageIssue(BaseModel):
     """A single visual coverage defect detected in rendered output."""
 
-    type: str  # BLACK_FRAME, EMPTY_FRAME, FREEZE_FRAME, MISSING_SCENE, FINAL_VISUAL_GAP, DECODE_FAILURE
+    # Diagnostic event kind: BLACK_FRAME, EMPTY_FRAME, FREEZE_FRAME,
+    # MISSING_SCENE, FINAL_VISUAL_GAP, or DECODE_FAILURE.
+    type: str
     start_sec: float
     end_sec: float
     severity: str  # "hard_fail", "warning", "info"
