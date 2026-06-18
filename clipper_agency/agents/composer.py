@@ -10,19 +10,28 @@ from pathlib import Path
 from typing import Any
 
 from clipper_agency.agents.base import BaseAgent
+from clipper_agency.config.schema import VisualCoverageResult
 from clipper_agency.core.artifacts import write_json
 from clipper_agency.core.card_generator import CardGenerator, CardType
 from clipper_agency.core.card_to_video import card_to_video
 from clipper_agency.core.ffmpeg_preflight import FFmpegPreflight
 from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
+from clipper_agency.core.generated_text_manifest import build_generated_text_regions
+from clipper_agency.core.media_detectors import (
+    MediaDetectionError,
+    detect_black_segments,
+    detect_freeze_segments,
+)
 from clipper_agency.core.media_probe import probe_video
 from clipper_agency.core.paths import (
     agent_input_file,
     agent_output_file,
     ensure_agent_dir,
 )
+from clipper_agency.core.rendered_scene_manifest import build_rendered_scene_manifest
 from clipper_agency.core.scene_normalizer import SceneNormalizer
 from clipper_agency.core.scene_validator import SceneValidator
+from clipper_agency.core.visual_coverage import evaluate_visual_coverage
 from clipper_agency.rendering.audio_sequencer import build_audio_video_concat
 from clipper_agency.rendering.engine import render_plan
 from clipper_agency.rendering.primitives import escape_drawtext
@@ -30,19 +39,9 @@ from clipper_agency.rendering.renderers.b_roll_narration import build_b_roll_nar
 from clipper_agency.rendering.renderers.news_card import build_news_card_plan
 from clipper_agency.rendering.renderers.rapid_update import build_rapid_update_plan
 from clipper_agency.rendering.subtitle_engine import (
-    build_keyword_captions,
     build_subtitle_overlays,
     build_word_subtitle_captions,
 )
-from clipper_agency.core.media_detectors import (
-    MediaDetectionError,
-    detect_black_segments,
-    detect_freeze_segments,
-)
-from clipper_agency.config.schema import VisualCoverageResult
-from clipper_agency.core.visual_coverage import evaluate_visual_coverage
-from clipper_agency.core.generated_text_manifest import build_generated_text_regions
-from clipper_agency.core.rendered_scene_manifest import build_rendered_scene_manifest
 from clipper_agency.rendering.templates import load_render_template
 
 logger = logging.getLogger(__name__)
@@ -61,20 +60,20 @@ _MIN_TRANSITION_DUR = 0.05
 _OUTV = "[outv]"
 
 # Audio-first smart trim constants
-_BOUNDARY_TOLERANCE = 0.15       # ±15% tolerance for boundary match
-_MAX_SLOWDOWN = 0.30             # Max 30% speed reduction
-_DURATION_CLOSE_ENOUGH = 0.05    # 50ms tolerance for duration match
+_BOUNDARY_TOLERANCE = 0.15  # ±15% tolerance for boundary match
+_MAX_SLOWDOWN = 0.30  # Max 30% speed reduction
+_DURATION_CLOSE_ENOUGH = 0.05  # 50ms tolerance for duration match
 
 # Visual coverage detector defaults
-_BLACK_MIN_DURATION_SEC = 0.1     # minimum black segment length to report
-_BLACK_PIXEL_THRESHOLD = 0.10     # pixel intensity threshold for blackdetect
-_FREEZE_MIN_DURATION_SEC = 0.1   # minimum freeze segment length to report
+_BLACK_MIN_DURATION_SEC = 0.1  # minimum black segment length to report
+_BLACK_PIXEL_THRESHOLD = 0.10  # pixel intensity threshold for blackdetect
+_FREEZE_MIN_DURATION_SEC = 0.1  # minimum freeze segment length to report
 _FREEZE_NOISE_THRESHOLD = -30.0  # dB threshold for freezedetect
 
 # Keyword caption drawtext style
-_KEYWORD_FONTSIZE = 48           # Large font for mobile readability
-_KEYWORD_BORDERW = 3             # Thick dark outline
-_KEYWORD_Y_OFFSET = 40          # Bottom margin (closer to bottom than subtitles)
+_KEYWORD_FONTSIZE = 48  # Large font for mobile readability
+_KEYWORD_BORDERW = 3  # Thick dark outline
+_KEYWORD_Y_OFFSET = 40  # Bottom margin (closer to bottom than subtitles)
 
 
 def _get_treatment_builder():
@@ -83,6 +82,7 @@ def _get_treatment_builder():
     if _treatment_builder is None:
         from clipper_agency.rendering.treatment_config import TreatmentConfig
         from clipper_agency.rendering.treatment_filters import TreatmentFilterBuilder
+
         _treatment_builder = TreatmentFilterBuilder(TreatmentConfig())
     return _treatment_builder
 
@@ -92,6 +92,7 @@ def _get_treatment_config():
     global _treatment_config
     if _treatment_config is None:
         from clipper_agency.rendering.treatment_config import TreatmentConfig
+
         _treatment_config = TreatmentConfig()
     return _treatment_config
 
@@ -105,7 +106,9 @@ def _safe_detect_black(
         return []
     try:
         return detect_fn(
-            video_path, _BLACK_MIN_DURATION_SEC, _BLACK_PIXEL_THRESHOLD,
+            video_path,
+            _BLACK_MIN_DURATION_SEC,
+            _BLACK_PIXEL_THRESHOLD,
         )
     except MediaDetectionError:
         logger.warning("Composer: black detection failed for %s", video_path)
@@ -121,7 +124,9 @@ def _safe_detect_freeze(
         return []
     try:
         return detect_fn(
-            video_path, _FREEZE_MIN_DURATION_SEC, _FREEZE_NOISE_THRESHOLD,
+            video_path,
+            _FREEZE_MIN_DURATION_SEC,
+            _FREEZE_NOISE_THRESHOLD,
         )
     except MediaDetectionError:
         logger.warning("Composer: freeze detection failed for %s", video_path)
@@ -148,11 +153,12 @@ def _run_empty_frame_detection(video_path: str) -> list[tuple[float, float]]:
     """Core empty-frame detection: probe → extract → variance → merge."""
     from pathlib import Path as _Path  # noqa: F811
 
+    from PIL import Image as PILImage
+
+    from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
     from clipper_agency.core.frame_extractor import extract_frames
     from clipper_agency.core.frame_quality import detect_empty_segments
     from clipper_agency.core.media_probe import probe_video
-    from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
-    from PIL import Image as PILImage
 
     info = probe_video(video_path, str(Path(video_path).parent))
     if info is None or info.duration is None or info.duration <= 0:
@@ -208,18 +214,25 @@ def _build_scene_manifest(
 
     if assets:
         scene_list = [
-            {**s, **{
-                "beat_id": assets[i].get("beat_id", s.get("beat_id", i + 1)),
-                "selected_asset_id": assets[i].get("asset_id", ""),
-            }}
-            if i < len(assets) else dict(s)
+            {
+                **s,
+                **{
+                    "beat_id": assets[i].get("beat_id", s.get("beat_id", i + 1)),
+                    "selected_asset_id": assets[i].get("asset_id", ""),
+                },
+            }
+            if i < len(assets)
+            else dict(s)
             for i, s in enumerate(scenes)
         ]
     else:
         scene_list = [dict(s) for s in scenes]
 
     return build_rendered_scene_manifest(
-        scene_list, text_regions, output_dur, video_path,
+        scene_list,
+        text_regions,
+        output_dur,
+        video_path,
     ).model_dump()
 
 
@@ -235,10 +248,7 @@ def _build_text_regions_from_captions(
     if not captions:
         return []
     # Convert pydantic CaptionOverlay objects to plain dicts
-    caption_dicts = [
-        c.model_dump() if hasattr(c, "model_dump") else dict(c)
-        for c in captions
-    ]
+    caption_dicts = [c.model_dump() if hasattr(c, "model_dump") else dict(c) for c in captions]
     render_plan = {"scenes": [{"captions": caption_dicts}]}
     return build_generated_text_regions(render_plan, frame_size)
 
@@ -280,9 +290,7 @@ def _build_transition_chain(
     config = _get_treatment_config()
     transition_parts: list[str] = []
     current_label = video_labels[0]
-    cumulative_duration = float(
-        normalized_assets[0].get("target_duration", 5)
-    )
+    cumulative_duration = float(normalized_assets[0].get("target_duration", 5))
 
     for i in range(1, num_videos):
         prev_asset = normalized_assets[i - 1]
@@ -296,30 +304,21 @@ def _build_transition_chain(
             trans_def = config.get_transition(_DEFAULT_TRANSITION)
 
         # Per-asset override for transition duration.
-        trans_duration = float(
-            prev_asset.get("transition_duration", trans_def.default_duration)
-        )
+        trans_duration = float(prev_asset.get("transition_duration", trans_def.default_duration))
 
         if trans_def.ffmpeg_filter is not None:
             # ── xfade transition ──
             prev_dur = float(prev_asset.get("target_duration", 5))
             max_dur = min(prev_dur, next_dur) - _MIN_CLIP_HEADROOM
-            trans_duration = min(
-                trans_duration, max(_MIN_TRANSITION_DUR, max_dur)
-            )
-            offset = max(
-                0.0, cumulative_duration - trans_duration - _SAFETY_MARGIN
-            )
+            trans_duration = min(trans_duration, max(_MIN_TRANSITION_DUR, max_dur))
+            offset = max(0.0, cumulative_duration - trans_duration - _SAFETY_MARGIN)
 
-            filter_str = (
-                trans_def.ffmpeg_filter
-                .replace("{duration}", f"{trans_duration}")
-                .replace("{offset}", f"{offset}")
+            filter_str = trans_def.ffmpeg_filter.replace("{duration}", f"{trans_duration}").replace(
+                "{offset}", f"{offset}"
             )
             out_label = "outv" if is_last else f"x{i}"
             transition_parts.append(
-                f"[{current_label}][{video_labels[i]}]"
-                f"{filter_str}[{out_label}]"
+                f"[{current_label}][{video_labels[i]}]{filter_str}[{out_label}]"
             )
             current_label = out_label
             cumulative_duration += next_dur - trans_duration
@@ -327,8 +326,7 @@ def _build_transition_chain(
             # ── hard cut → concat ──
             out_label = "outv" if is_last else f"c{i}"
             transition_parts.append(
-                f"[{current_label}][{video_labels[i]}]"
-                f"concat=n=2:v=1[{out_label}]"
+                f"[{current_label}][{video_labels[i]}]concat=n=2:v=1[{out_label}]"
             )
             current_label = out_label
             cumulative_duration += next_dur
@@ -434,8 +432,10 @@ class ComposerAgent(BaseAgent):
 
             assets_cache = kwargs.get("assets_cache", "")
             agent_dir = self._record_input(
-                assets_cache, job_id,
-                len(assets or []), 1,
+                assets_cache,
+                job_id,
+                len(assets or []),
+                1,
             )
             return self._execute_audio_first(
                 job_id=job_id,
@@ -466,12 +466,16 @@ class ComposerAgent(BaseAgent):
 
         assets_cache = kwargs.get("assets_cache", "")
         agent_dir = self._record_input(
-            assets_cache, job_id, len(video_assets), len(voice_files),
+            assets_cache,
+            job_id,
+            len(video_assets),
+            len(voice_files),
         )
 
         logger.info(
             "Composer: %d video assets, %d audio files",
-            len(video_assets), len(voice_files),
+            len(video_assets),
+            len(voice_files),
         )
 
         # ── Template rendering path ──
@@ -489,8 +493,13 @@ class ComposerAgent(BaseAgent):
             )
 
         return self._execute_assembly(
-            video_assets, voice_files, output_dir, assets_cache,
-            job_id, agent_dir, script_scenes=script_scenes,
+            video_assets,
+            voice_files,
+            output_dir,
+            assets_cache,
+            job_id,
+            agent_dir,
+            script_scenes=script_scenes,
             voiceover_duration_sec=voiceover_duration_sec,
         )
 
@@ -521,8 +530,13 @@ class ComposerAgent(BaseAgent):
 
         try:
             return self._try_assemble(
-                video_assets, voice_files, video_path, thumbnail_path,
-                assets_cache, job_id, agent_dir,
+                video_assets,
+                voice_files,
+                video_path,
+                thumbnail_path,
+                assets_cache,
+                job_id,
+                agent_dir,
                 script_scenes=script_scenes,
                 voiceover_duration_sec=voiceover_duration_sec,
             )
@@ -551,12 +565,15 @@ class ComposerAgent(BaseAgent):
     ) -> dict[str, Any]:
         """Attempt assembly. Raises on FFmpeg or unexpected errors."""
         assemble_result = self._assemble_video(
-            video_assets, voice_files, video_path,
+            video_assets,
+            voice_files,
+            video_path,
             script_scenes=script_scenes,
         )
         ffmpeg_cmd = assemble_result["cmd"]
         card_fallback_scenes = assemble_result.get(
-            "card_fallback_scenes", [],
+            "card_fallback_scenes",
+            [],
         )
         if not ffmpeg_cmd:
             logger.error(
@@ -582,7 +599,10 @@ class ComposerAgent(BaseAgent):
 
         logger.info(
             "Composer: completed — video=%s thumbnail=%s cards=%d dur=%.2fs",
-            video_path, thumbnail_path, len(card_fallback_scenes), output_dur,
+            video_path,
+            thumbnail_path,
+            len(card_fallback_scenes),
+            output_dur,
         )
 
         output: dict[str, Any] = {
@@ -595,10 +615,7 @@ class ComposerAgent(BaseAgent):
         }
 
         # Duration guard: output must not be shorter than voiceover
-        if (
-            voiceover_duration_sec is not None
-            and output_dur < voiceover_duration_sec
-        ):
+        if voiceover_duration_sec is not None and output_dur < voiceover_duration_sec:
             output["status"] = "failed"
             output["error"] = (
                 f"Output duration ({output_dur:.2f}s) "
@@ -607,15 +624,18 @@ class ComposerAgent(BaseAgent):
 
         if agent_dir:
             self._persist_diagnostics(agent_dir, ffmpeg_cmd, "")
-            write_json(agent_output_file(assets_cache, job_id, "composer"),
-                        output)
+            write_json(agent_output_file(assets_cache, job_id, "composer"), output)
         output = self._attach_visual_coverage_diagnostics(
-            output, voiceover_duration_sec,
+            output,
+            voiceover_duration_sec,
         )
 
         # Build rendered scene manifest from video_assets
         output["rendered_scene_manifest"] = _build_scene_manifest(
-            video_assets, [], output_dur, video_path,
+            video_assets,
+            [],
+            output_dur,
+            video_path,
         )
 
         return output
@@ -633,7 +653,7 @@ class ComposerAgent(BaseAgent):
             stderr_text = stderr_text.decode()
         logger.error("Composer: FFmpeg failed — %s", stderr_text[:500])
         if agent_dir:
-            self._persist_diagnostics(agent_dir, getattr(error, 'cmd', []), stderr_text)
+            self._persist_diagnostics(agent_dir, getattr(error, "cmd", []), stderr_text)
         return {
             "status": "failed",
             "error": stderr_text or str(error),
@@ -672,7 +692,8 @@ class ComposerAgent(BaseAgent):
         freeze_segs = _safe_detect_freeze(freeze_fn, video_path)
         empty_segs = empty_fn(video_path)
         scene_segs = _compute_scene_segments(
-            output.get("scene_count", 0), output_dur,
+            output.get("scene_count", 0),
+            output_dur,
         )
 
         result = evaluate_visual_coverage(
@@ -758,7 +779,8 @@ class ComposerAgent(BaseAgent):
 
         logger.info(
             "Composer: template render completed — template=%s video=%s",
-            template_name, result.video_path,
+            template_name,
+            result.video_path,
         )
 
         return output
@@ -773,9 +795,7 @@ class ComposerAgent(BaseAgent):
                 "status": "failed",
                 "error": "FFmpeg preflight probe failed",
             }
-        preflight_dir = (
-            Path(output_dir) / f"job_{job_id}" / "agents" / "composer"
-        )
+        preflight_dir = Path(output_dir) / f"job_{job_id}" / "agents" / "composer"
         preflight_dir.mkdir(parents=True, exist_ok=True)
         write_json(
             preflight_dir / "preflight.json",
@@ -783,8 +803,7 @@ class ComposerAgent(BaseAgent):
         )
         if not preflight.all_ok():
             logger.error(
-                "Composer: FFmpeg preflight failed — ffmpeg=%s ffprobe=%s "
-                "libx264=%s aac=%s mp3=%s",
+                "Composer: FFmpeg preflight failed — ffmpeg=%s ffprobe=%s libx264=%s aac=%s mp3=%s",
                 preflight.ffmpeg_found,
                 preflight.ffprobe_found,
                 preflight.libx264_available,
@@ -810,15 +829,19 @@ class ComposerAgent(BaseAgent):
             return ""
 
         agent_dir = ensure_agent_dir(assets_cache, job_id, "composer")
-        write_json(agent_input_file(assets_cache, job_id, "composer"), {
-            "job_id": job_id,
-            "video_asset_count": video_asset_count,
-            "audio_file_count": audio_file_count,
-        })
+        write_json(
+            agent_input_file(assets_cache, job_id, "composer"),
+            {
+                "job_id": job_id,
+                "video_asset_count": video_asset_count,
+                "audio_file_count": audio_file_count,
+            },
+        )
         return agent_dir
 
-    def _persist_diagnostics(self, agent_dir: str, ffmpeg_cmd: list | str,
-                              stderr_text: str) -> None:
+    def _persist_diagnostics(
+        self, agent_dir: str, ffmpeg_cmd: list | str, stderr_text: str
+    ) -> None:
         """Save FFmpeg command and stderr to agent artifact directory."""
         cmd_str = " ".join(ffmpeg_cmd) if isinstance(ffmpeg_cmd, list) else str(ffmpeg_cmd)
         cmd_file = Path(agent_dir) / "ffmpeg_command.txt"
@@ -849,31 +872,39 @@ class ComposerAgent(BaseAgent):
                 return str(result.path), False
             logger.warning(
                 "Composer: normalize failed scene %d — card fallback: %s",
-                scene_num, result.error,
+                scene_num,
+                result.error,
             )
         else:
             logger.info(
                 "Composer: scene %d invalid (%s) — card fallback",
-                scene_num, "; ".join(validation.issues[:2]),
+                scene_num,
+                "; ".join(validation.issues[:2]),
             )
 
         # Generate card fallback
         card_mp4 = temp_dir / f"scene_{scene_num}_card.mp4"
         card_png = temp_dir / f"card_{scene_num}.png"
         card_gen.generate(
-            CardType.CONTEXT, f"Scene {scene_num}", str(card_png),
+            CardType.CONTEXT,
+            f"Scene {scene_num}",
+            str(card_png),
         )
         ctv = card_to_video(str(card_png), str(card_mp4), duration=5)
         if ctv.success:
             return str(card_mp4), True
         logger.error(
             "Composer: card_to_video failed scene %d: %s",
-            scene_num, ctv.error,
+            scene_num,
+            ctv.error,
         )
         return None, True
 
     def _assemble_video(
-        self, assets: list[dict], audio_files: list[str], output_path: str,
+        self,
+        assets: list[dict],
+        audio_files: list[str],
+        output_path: str,
         script_scenes: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Assemble final video from assets with scene normalization and card fallback.
@@ -897,8 +928,11 @@ class ComposerAgent(BaseAgent):
                 scene_path = asset.get("path", "")
                 scene_num = int(asset.get("scene", i + 1))
                 norm_path, was_card = self._process_scene(
-                    temp_dir, normalizer, card_gen,
-                    scene_num, scene_path,
+                    temp_dir,
+                    normalizer,
+                    card_gen,
+                    scene_num,
+                    scene_path,
                 )
                 if norm_path:
                     normalized_scene_paths.append(norm_path)
@@ -912,17 +946,23 @@ class ComposerAgent(BaseAgent):
                 return {"cmd": [], "card_fallback_scenes": card_fallback_scenes}
 
             normalized_assets = self._enrich_normalized_assets(
-                assets, normalized_scene_paths,
+                assets,
+                normalized_scene_paths,
             )
 
             cmd = self._build_assembly_cmd(
-                valid_normalized, normalized_assets, audio_files, output_path,
+                valid_normalized,
+                normalized_assets,
+                audio_files,
+                output_path,
                 script_scenes=script_scenes,
             )
 
             logger.info(
                 "Composer: starting FFmpeg concat — %d video + %d audio → %s",
-                len(valid_normalized), len(audio_files), output_path,
+                len(valid_normalized),
+                len(audio_files),
+                output_path,
             )
             run_ffmpeg_streaming(cmd, timeout=600, label="concat")
             logger.info("Composer: FFmpeg concat completed — %s", output_path)
@@ -937,21 +977,21 @@ class ComposerAgent(BaseAgent):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _enrich_normalized_assets(
-        self, assets: list[dict], normalized_scene_paths: list[str],
+        self,
+        assets: list[dict],
+        normalized_scene_paths: list[str],
     ) -> list[dict]:
         """Build enriched asset list preserving treatment metadata."""
         enriched: list[dict] = []
         for i, asset in enumerate(assets):
-            norm_path = (
-                normalized_scene_paths[i]
-                if i < len(normalized_scene_paths)
-                else None
-            )
+            norm_path = normalized_scene_paths[i] if i < len(normalized_scene_paths) else None
             if norm_path:
                 item = {"scene": i + 1, "path": norm_path}
                 for field in (
-                    "treatment", "target_duration",
-                    "transition_in", "transition_out",
+                    "treatment",
+                    "target_duration",
+                    "transition_in",
+                    "transition_out",
                 ):
                     if field in asset:
                         item[field] = asset[field]
@@ -964,6 +1004,7 @@ class ComposerAgent(BaseAgent):
         if isinstance(item, dict):
             return item
         import dataclasses
+
         return dataclasses.asdict(item)
 
     def _apply_timeline_to_assets(self, assets, timeline):
@@ -987,8 +1028,7 @@ class ComposerAgent(BaseAgent):
         if not timeline:
             return {}
         return {
-            i: self._timeline_item_to_dict(t).get("audio_path", "")
-            for i, t in enumerate(timeline)
+            i: self._timeline_item_to_dict(t).get("audio_path", "") for i, t in enumerate(timeline)
         }
 
     @staticmethod
@@ -1026,12 +1066,14 @@ class ComposerAgent(BaseAgent):
                 )
             else:
                 trim_parts.append(
-                    f"[{i}:v]trim=duration={duration},"
-                    f"setpts=PTS-STARTPTS,fps=30[{label}]"
+                    f"[{i}:v]trim=duration={duration},setpts=PTS-STARTPTS,fps=30[{label}]"
                 )
 
         video_filter = _build_transition_chain(
-            trim_parts, video_labels, normalized_assets, num_videos,
+            trim_parts,
+            video_labels,
+            normalized_assets,
+            num_videos,
         )
 
         # ── Subtitle overlay chain (from script_scenes) ──
@@ -1052,29 +1094,46 @@ class ComposerAgent(BaseAgent):
         else:
             video_filter += ";" + audio_filter
 
-        cmd.extend([
-            "-filter_complex", video_filter,
-            "-map", _OUTV,
-            "-map", "[outa]",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
-            "-shortest",
-            output_path,
-        ])
+        cmd.extend(
+            [
+                "-filter_complex",
+                video_filter,
+                "-map",
+                _OUTV,
+                "-map",
+                "[outa]",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "23",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                "-shortest",
+                output_path,
+            ]
+        )
         return cmd
 
     def _generate_thumbnail(self, video_path: str, thumbnail_path: str) -> None:
         cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-ss", "00:00:00",
-            "-frames:v", "1",
-            "-vf", "scale=720:1280",
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-ss",
+            "00:00:00",
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=720:1280",
             thumbnail_path,
         ]
         run_ffmpeg_streaming(cmd, timeout=60, label="thumbnail")
@@ -1095,19 +1154,25 @@ class ComposerAgent(BaseAgent):
     def _probe_duration(self, clip_path: str) -> float:
         """Get clip duration in seconds using ffprobe."""
         cmd = [
-            "ffprobe", "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=duration",
-            "-of", "csv=p=0",
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=duration",
+            "-of",
+            "csv=p=0",
             str(clip_path),
         ]
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                f"ffprobe duration failed for {clip_path}: {result.stderr}"
-            )
+            raise RuntimeError(f"ffprobe duration failed for {clip_path}: {result.stderr}")
         lines = [l for l in result.stdout.strip().split("\n") if l.strip()]
         if not lines:
             raise RuntimeError(f"ffprobe returned no duration for {clip_path}")
@@ -1120,16 +1185,25 @@ class ComposerAgent(BaseAgent):
         Returns list of timestamps (seconds) or empty list on failure.
         """
         cmd = [
-            "ffprobe", "-v", "error",
-            "-select_streams", "v:0",
-            "-skip_frame", "nokey",
-            "-show_entries", "frame=pkt_pts_time",
-            "-of", "csv=p=0",
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-skip_frame",
+            "nokey",
+            "-show_entries",
+            "frame=pkt_pts_time",
+            "-of",
+            "csv=p=0",
             str(clip_path),
         ]
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return []
@@ -1148,7 +1222,9 @@ class ComposerAgent(BaseAgent):
         return boundaries
 
     def _find_best_cut_point(
-        self, boundaries: list[float], target_duration: float,
+        self,
+        boundaries: list[float],
+        target_duration: float,
     ) -> float:
         """Find the best scene boundary to cut at, or fall back to target."""
         tolerance = target_duration * _BOUNDARY_TOLERANCE
@@ -1168,6 +1244,8 @@ class ComposerAgent(BaseAgent):
         clip_path: str,
         target_duration_sec: float,
         temp_dir: Path,
+        source_start_sec: float = 0.0,
+        source_end_sec: float | None = None,
     ) -> str:
         """Smart trim a clip to target duration.
 
@@ -1178,23 +1256,41 @@ class ComposerAgent(BaseAgent):
         4. If no good boundary: trim from start + speed-adjust
         5. If clip shorter: slow down max 30% or loop
 
+        PR 6: ``source_start_sec``/``source_end_sec`` select a sub-window of the source,
+        clamped to source bounds (degenerate window => full clip). Defaults (0.0/None)
+        reproduce the prior from-zero whole-clip trim exactly.
+
         Returns path to trimmed clip.
         """
         clip_dur = self._probe_duration(clip_path)
-        output_path = str(
-            temp_dir / f"trimmed_{Path(clip_path).stem}.mp4"
-        )
+        output_path = str(temp_dir / f"trimmed_{Path(clip_path).stem}.mp4")
 
-        if abs(clip_dur - target_duration_sec) < _DURATION_CLOSE_ENOUGH:
+        # PR 6: clamp the source window to source bounds (design §4; verification crit 1).
+        start = max(0.0, min(source_start_sec, max(clip_dur - _DURATION_CLOSE_ENOUGH, 0.0)))
+        end = clip_dur if source_end_sec is None else min(source_end_sec, clip_dur)
+        if end <= start + _DURATION_CLOSE_ENOUGH:
+            start, end = 0.0, clip_dur  # degenerate window => full clip
+        window_len = end - start
+        full_clip = start == 0.0 and end >= clip_dur - _DURATION_CLOSE_ENOUGH
+
+        if full_clip and abs(window_len - target_duration_sec) < _DURATION_CLOSE_ENOUGH:
             shutil.copy2(clip_path, output_path)
             return output_path
 
-        if clip_dur > target_duration_sec:
+        if window_len > target_duration_sec:
             return self._trim_long_clip(
-                clip_path, target_duration_sec, output_path,
+                clip_path,
+                target_duration_sec,
+                output_path,
+                start,
+                end,
             )
         return self._stretch_short_clip(
-            clip_path, clip_dur, target_duration_sec, output_path,
+            clip_path,
+            window_len,
+            target_duration_sec,
+            output_path,
+            start,
         )
 
     def _trim_long_clip(
@@ -1202,19 +1298,35 @@ class ComposerAgent(BaseAgent):
         clip_path: str,
         target: float,
         output_path: str,
+        source_start_sec: float = 0.0,
+        source_end_sec: float | None = None,
     ) -> str:
-        """Trim a clip that is longer than the target duration."""
+        """Trim a clip (or a sub-window of it) that is longer than the target duration."""
         boundaries = self._detect_scene_boundaries(clip_path)
         cut_point = self._find_best_cut_point(boundaries, target)
-
-        speed_factor = target / cut_point
+        # Bound the cut to the source window [start, end].
+        window_len = source_end_sec - source_start_sec if source_end_sec is not None else cut_point
+        cut_point = min(cut_point, max(window_len, 0.0))
+        speed_factor = target / cut_point if cut_point > 0 else 1.0
         cmd = [
-            "ffmpeg", "-y",
-            "-i", str(clip_path),
-            "-ss", "0", "-to", f"{cut_point:.4f}",
-            "-filter:v", f"setpts={speed_factor:.4f}*PTS",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-an", output_path,
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(clip_path),
+            "-ss",
+            f"{source_start_sec:.4f}",
+            "-to",
+            f"{source_start_sec + cut_point:.4f}",
+            "-filter:v",
+            f"setpts={speed_factor:.4f}*PTS",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "23",
+            "-an",
+            output_path,
         ]
         run_ffmpeg_streaming(cmd, timeout=120, label="smart_trim")
         return output_path
@@ -1222,31 +1334,56 @@ class ComposerAgent(BaseAgent):
     def _stretch_short_clip(
         self,
         clip_path: str,
-        clip_dur: float,
+        source_len: float,
         target: float,
         output_path: str,
+        source_start_sec: float = 0.0,
     ) -> str:
-        """Stretch or loop a clip that is shorter than the target duration."""
-        if clip_dur * (1 + _MAX_SLOWDOWN) >= target:
+        """Stretch or loop a clip (or a sub-window) shorter than the target duration."""
+        if source_len * (1 + _MAX_SLOWDOWN) >= target:
             # Slowdown alone is enough
-            speed_factor = target / clip_dur
+            speed_factor = target / source_len if source_len > 0 else 1.0
             cmd = [
-                "ffmpeg", "-y",
-                "-i", str(clip_path),
-                "-filter:v", f"setpts={speed_factor:.4f}*PTS",
-                "-t", f"{target:.4f}",
-                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                "-an", output_path,
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(clip_path),
+                "-ss",
+                f"{source_start_sec:.4f}",
+                "-filter:v",
+                f"setpts={speed_factor:.4f}*PTS",
+                "-t",
+                f"{target:.4f}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "23",
+                "-an",
+                output_path,
             ]
         else:
             # Need to loop to fill duration
             cmd = [
-                "ffmpeg", "-y",
-                "-stream_loop", "-1",
-                "-i", str(clip_path),
-                "-t", f"{target:.4f}",
-                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                "-an", output_path,
+                "ffmpeg",
+                "-y",
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(clip_path),
+                "-ss",
+                f"{source_start_sec:.4f}",
+                "-t",
+                f"{target:.4f}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "23",
+                "-an",
+                output_path,
             ]
         run_ffmpeg_streaming(cmd, timeout=120, label="smart_trim_stretch")
         return output_path
@@ -1280,7 +1417,8 @@ class ComposerAgent(BaseAgent):
         # Final timestamp end for trailing audio
         final_ts = timestamps[-1]
         final_end = (
-            final_ts.get("end", 0.0) if isinstance(final_ts, dict)
+            final_ts.get("end", 0.0)
+            if isinstance(final_ts, dict)
             else getattr(final_ts, "end", 0.0)
         )
 
@@ -1290,7 +1428,8 @@ class ComposerAgent(BaseAgent):
             safe_start = max(0, min(first_idx, len(timestamps) - 1))
             ts_start = timestamps[safe_start]
             start_time = (
-                ts_start.get("start", 0.0) if isinstance(ts_start, dict)
+                ts_start.get("start", 0.0)
+                if isinstance(ts_start, dict)
                 else getattr(ts_start, "start", 0.0)
             )
 
@@ -1299,7 +1438,8 @@ class ComposerAgent(BaseAgent):
                 safe_next = max(0, min(next_first, len(timestamps) - 1))
                 ts_next = timestamps[safe_next]
                 end_time = (
-                    ts_next.get("start", final_end) if isinstance(ts_next, dict)
+                    ts_next.get("start", final_end)
+                    if isinstance(ts_next, dict)
                     else getattr(ts_next, "start", final_end)
                 )
             else:
@@ -1338,8 +1478,12 @@ class ComposerAgent(BaseAgent):
             }
             if i < len(assets):
                 for field in (
-                    "treatment", "transition_in", "transition_out",
-                    "transition_duration", "type", "headline",
+                    "treatment",
+                    "transition_in",
+                    "transition_out",
+                    "transition_duration",
+                    "type",
+                    "headline",
                 ):
                     if field in assets[i]:
                         item[field] = assets[i][field]
@@ -1353,9 +1497,7 @@ class ComposerAgent(BaseAgent):
     ) -> list[dict]:
         """Align visual assets to narrative beats by beat_id, ignoring phantom assets."""
         assets_by_beat_id = {
-            asset.get("beat_id"): asset
-            for asset in assets
-            if asset.get("beat_id") is not None
+            asset.get("beat_id"): asset for asset in assets if asset.get("beat_id") is not None
         }
         aligned: list[dict] = []
         for beat in narrative_structure:
@@ -1408,32 +1550,46 @@ class ComposerAgent(BaseAgent):
                 )
             else:
                 trim_parts.append(
-                    f"[{i + 1}:v]trim=duration={duration},"
-                    f"setpts=PTS-STARTPTS,fps=30[{label}]"
+                    f"[{i + 1}:v]trim=duration={duration},setpts=PTS-STARTPTS,fps=30[{label}]"
                 )
 
         video_filter = _build_transition_chain(
-            trim_parts, video_labels, normalized_assets, num_videos,
+            trim_parts,
+            video_labels,
+            normalized_assets,
+            num_videos,
         )
 
         # Keyword caption chain
         if keyword_captions:
             video_filter = _build_keyword_chain(video_filter, keyword_captions)
 
-        cmd.extend([
-            "-filter_complex", video_filter,
-            "-map", _OUTV,
-            "-map", "0:a",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
-            "-shortest",
-            output_path,
-        ])
+        cmd.extend(
+            [
+                "-filter_complex",
+                video_filter,
+                "-map",
+                _OUTV,
+                "-map",
+                "0:a",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "23",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                "-shortest",
+                output_path,
+            ]
+        )
         return cmd
 
     def _execute_audio_first(
@@ -1458,9 +1614,15 @@ class ComposerAgent(BaseAgent):
 
         try:
             return self._try_audio_first_assemble(
-                job_id, voiceover_path, timestamps,
-                narrative_structure, assets,
-                video_path, thumbnail_path, assets_cache, agent_dir,
+                job_id,
+                voiceover_path,
+                timestamps,
+                narrative_structure,
+                assets,
+                video_path,
+                thumbnail_path,
+                assets_cache,
+                agent_dir,
                 beat_timeline=beat_timeline,
             )
         except subprocess.CalledProcessError as e:
@@ -1490,10 +1652,12 @@ class ComposerAgent(BaseAgent):
         """Attempt audio-first assembly. Raises on FFmpeg or unexpected errors."""
         if beat_timeline:
             from clipper_agency.core.beat_timeline import timeline_to_duration_list
+
             beat_durations = timeline_to_duration_list(beat_timeline)
         else:
             beat_durations = self._compute_beat_durations(
-                narrative_structure, timestamps,
+                narrative_structure,
+                timestamps,
             )
 
         temp_dir = Path(tempfile.mkdtemp(prefix="composer_af_"))
@@ -1502,11 +1666,15 @@ class ComposerAgent(BaseAgent):
 
         try:
             aligned_assets = self._align_assets_to_narrative_beats(
-                narrative_structure, assets,
+                narrative_structure,
+                assets,
             )
             self._collect_beat_clips(
-                beat_durations, aligned_assets, temp_dir,
-                trimmed_clips, card_fallback_scenes,
+                beat_durations,
+                aligned_assets,
+                temp_dir,
+                trimmed_clips,
+                card_fallback_scenes,
             )
 
             if not trimmed_clips:
@@ -1524,9 +1692,17 @@ class ComposerAgent(BaseAgent):
                 return output
 
             return self._run_audio_first_render(
-                job_id, voiceover_path, timestamps,
-                aligned_assets, beat_durations, trimmed_clips, card_fallback_scenes,
-                video_path, thumbnail_path, assets_cache, agent_dir,
+                job_id,
+                voiceover_path,
+                timestamps,
+                aligned_assets,
+                beat_durations,
+                trimmed_clips,
+                card_fallback_scenes,
+                video_path,
+                thumbnail_path,
+                assets_cache,
+                agent_dir,
             )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1551,13 +1727,26 @@ class ComposerAgent(BaseAgent):
 
             if scene_path and Path(scene_path).exists():
                 self._process_existing_scene(
-                    temp_dir, normalizer, card_gen, i, beat_dur,
-                    scene_path, trimmed_clips, card_fallback_scenes,
+                    temp_dir,
+                    normalizer,
+                    card_gen,
+                    i,
+                    beat_dur,
+                    scene_path,
+                    trimmed_clips,
+                    card_fallback_scenes,
+                    source_start_sec=asset.get("source_start_sec", 0.0),
+                    source_end_sec=asset.get("source_end_sec"),
                 )
             else:
                 self._generate_card_fallback(
-                    temp_dir, card_gen, i, beat_dur, asset,
-                    trimmed_clips, card_fallback_scenes,
+                    temp_dir,
+                    card_gen,
+                    i,
+                    beat_dur,
+                    asset,
+                    trimmed_clips,
+                    card_fallback_scenes,
                 )
 
     def _process_existing_scene(
@@ -1570,13 +1759,25 @@ class ComposerAgent(BaseAgent):
         scene_path: str,
         trimmed_clips: list[str],
         card_fallback_scenes: list[int],
+        source_start_sec: float = 0.0,
+        source_end_sec: float | None = None,
     ) -> None:
         """Normalize and smart-trim an existing scene asset."""
         norm_path, was_card = self._process_scene(
-            temp_dir, normalizer, card_gen, index + 1, scene_path,
+            temp_dir,
+            normalizer,
+            card_gen,
+            index + 1,
+            scene_path,
         )
         if norm_path:
-            trimmed = self._smart_trim(norm_path, beat_dur, temp_dir)
+            trimmed = self._smart_trim(
+                norm_path,
+                beat_dur,
+                temp_dir,
+                source_start_sec=source_start_sec,
+                source_end_sec=source_end_sec,
+            )
             trimmed_clips.append(trimmed)
         if was_card:
             card_fallback_scenes.append(index + 1)
@@ -1600,7 +1801,9 @@ class ComposerAgent(BaseAgent):
             str(card_png),
         )
         ctv = card_to_video(
-            str(card_png), str(card_mp4), duration=max(1, int(beat_dur)),
+            str(card_png),
+            str(card_mp4),
+            duration=max(1, int(beat_dur)),
         )
         if ctv.success:
             trimmed_clips.append(str(card_mp4))
@@ -1627,7 +1830,9 @@ class ComposerAgent(BaseAgent):
         )
 
         enriched = self._enrich_audio_first_assets(
-            assets, trimmed_clips, beat_durations,
+            assets,
+            trimmed_clips,
+            beat_durations,
         )
 
         cmd = self._build_audio_first_cmd(
@@ -1640,7 +1845,8 @@ class ComposerAgent(BaseAgent):
 
         logger.info(
             "Composer (audio-first): assembling %d clips + voiceover → %s",
-            len(trimmed_clips), video_path,
+            len(trimmed_clips),
+            video_path,
         )
         run_ffmpeg_streaming(cmd, timeout=600, label="audio_first")
 
@@ -1661,7 +1867,8 @@ class ComposerAgent(BaseAgent):
         if agent_dir:
             self._persist_diagnostics(agent_dir, cmd, "")
             write_json(
-                agent_output_file(assets_cache, job_id, "composer"), output,
+                agent_output_file(assets_cache, job_id, "composer"),
+                output,
             )
         output = self._attach_visual_coverage_diagnostics(output, None)
 
@@ -1673,7 +1880,11 @@ class ComposerAgent(BaseAgent):
 
         # Build rendered scene manifest from enriched assets
         output["rendered_scene_manifest"] = _build_scene_manifest(
-            enriched, text_regions, output_dur, video_path, assets,
+            enriched,
+            text_regions,
+            output_dur,
+            video_path,
+            assets,
         )
 
         return output
