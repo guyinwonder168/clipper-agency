@@ -950,3 +950,92 @@ class TestBuildQualificationReport:
             "providers_attempted_added": 0,
         }
         assert report["beats"] == []
+
+
+# ---------------------------------------------------------------------------
+# SLICE 7 — SP discovery adapter (design §4 [V1]).
+#
+# ``_build_sp_discovery_adapter`` curries ``(sp, topic, entities, config, beats)``
+# into the ``discover_fn`` callable the recovery stage calls. It reuses SP's
+# existing discovery primitives (``_discover_multi_source_assets`` instance
+# method + ``_build_asset_candidates_from_sources`` @staticmethod) — no
+# reimplementation (ADR 0026 / DRY). The module imports NEITHER segment_producer
+# NOR visual_director: ``sp`` is an opaque object whose methods are called.
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSpDiscoveryAdapter:
+    """SLICE 7 — the adapter curries SP discovery into the recovery ``discover_fn``."""
+
+    def test_adapter_curries_and_calls_sp_discovery(self) -> None:
+        sources = [{"url": "https://yt/1", "source_type": "tiktok_clip"}]
+        attempts = [{"provider": "youtube", "query": "q", "result_count": 1}]
+        recorded: dict[str, Any] = {}
+
+        class FakeSP:
+            def _discover_multi_source_assets(
+                self, topic: str, entities: list, config: Any, beats: list | None = None
+            ) -> tuple[list[dict], list[dict]]:
+                recorded["topic"] = topic
+                recorded["entities"] = entities
+                recorded["config"] = config
+                recorded["beats"] = beats
+                return sources, attempts
+
+            @staticmethod
+            def _build_asset_candidates_from_sources(
+                sources: list[dict] | None = None, **_: Any
+            ) -> list[dict]:
+                recorded["sources_passed"] = sources
+                return [
+                    {"type": "tiktok_clip", "url": s["url"], "reason": "x"} for s in (sources or [])
+                ]
+
+        beats = [{"beat_id": 1}]
+        discover_fn = asset_qualification._build_sp_discovery_adapter(
+            FakeSP(), "TOPIC", ["ent"], "CFG", beats=beats
+        )
+
+        # discover_fn accepts queries (recovery contract) but delegates query-building
+        # to _discover_multi_source_assets, which builds its own from the curried beats.
+        candidate_dicts, atts = discover_fn(["q1", "q2"])
+
+        # The curried args reach SP discovery verbatim (incl. the failing beat set).
+        assert recorded["topic"] == "TOPIC"
+        assert recorded["entities"] == ["ent"]
+        assert recorded["config"] == "CFG"
+        assert recorded["beats"] == beats
+        # The raw sources flow through the @staticmethod candidate transform.
+        assert recorded["sources_passed"] == sources
+        # Return shape matches the recovery contract: (candidate_dicts, attempts).
+        assert len(candidate_dicts) == 1
+        assert candidate_dicts[0]["url"] == "https://yt/1"
+        assert atts == attempts
+
+    def test_adapter_defaults_beats_none(self) -> None:
+        """beats=None is a valid curry (SP discovery falls back to entity queries)."""
+        recorded: dict[str, Any] = {}
+
+        class FakeSP:
+            def _discover_multi_source_assets(
+                self, topic: str, entities: list, config: Any, beats: list | None = None
+            ) -> tuple[list[dict], list[dict]]:
+                recorded["beats"] = beats
+                return [], [{"provider": "youtube"}]
+
+            @staticmethod
+            def _build_asset_candidates_from_sources(
+                sources: list[dict] | None = None, **_: Any
+            ) -> list[dict]:
+                return []
+
+        discover_fn = asset_qualification._build_sp_discovery_adapter(
+            FakeSP(),
+            "T",
+            [],
+            "C",  # beats omitted → None
+        )
+        candidate_dicts, atts = discover_fn(["q"])
+        assert recorded["beats"] is None
+        assert candidate_dicts == []
+        assert len(atts) == 1

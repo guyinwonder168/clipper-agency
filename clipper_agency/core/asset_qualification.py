@@ -380,6 +380,41 @@ def _to_asset_candidate(item: Any) -> AssetCandidate:
     return AssetCandidate(**item)
 
 
+def _build_sp_discovery_adapter(
+    sp: Any,
+    topic: str,
+    entities: list,
+    config: Any,
+    beats: list[dict] | None = None,
+) -> Callable[[list[str]], tuple[list[dict], list[dict]]]:
+    """Curry Segment Producer discovery into the recovery ``discover_fn`` (design §4 [V1]).
+
+    Binds ``(sp, topic, entities, config, beats)`` and returns a callable matching the
+    recovery contract ``Callable[queries -> (candidate_dicts, attempts)]``. It reuses SP's
+    EXISTING discovery primitives — ``_discover_multi_source_assets`` (instance method) +
+    ``_build_asset_candidates_from_sources`` (@staticmethod) — so this module imports
+    NEITHER ``segment_producer`` NOR ``visual_director`` (``sp`` is an opaque object; the
+    import cycle is broken by injection, like ``RecoveryPolicy.discover_fn`` and the
+    inspector).
+
+    The ``queries`` argument is accepted for contract parity with the recovery stage
+    (which expands per-beat queries from ``visual_must_show`` / ``spoken_point``) but is
+    not forwarded: ``_discover_multi_source_assets`` builds its own search queries from the
+    curried ``beats`` (the failing beat is in that set), and recovered candidates are
+    re-scored against the failing beat by ``_qualify_beat`` — so targeting is handled by
+    re-scoring, not by the discovery query. ``_distribute_candidates_to_beats`` is
+    intentionally NOT called: recovery needs a flat candidate pool to re-score, not a
+    per-beat reassignment (KISS — distributing then re-flattening would be dead work).
+    """
+
+    def discover_fn(_queries: list[str]) -> tuple[list[dict], list[dict]]:
+        sources, attempts = sp._discover_multi_source_assets(topic, entities, config, beats=beats)
+        candidate_dicts = sp._build_asset_candidates_from_sources(sources=sources)
+        return candidate_dicts, attempts
+
+    return discover_fn
+
+
 def _attempt_recovery(
     beat: StoryBeat,
     discover_fn: Callable[[list[str]], tuple[list[dict], list[dict]]],
