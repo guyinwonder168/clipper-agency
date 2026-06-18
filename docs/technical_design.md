@@ -119,6 +119,7 @@ Stage 2+:
 12. Agent A4: Voice Producer (single TTS call + word-level timestamps)
 13. Gate G8: Audio Validation Gate
 14. Agent A5: Visual Director (beat-driven, audio-aware, visual_must_show rules)
+    (Asset qualification boundary runs here — see §17: score → rank → recover → fallback before VD consumes candidates)
 15. Gate G9: Asset Validation Gate
 16. Agent A6: Composer (single audio timeline, smart trimming, keyword captions)
 17. Gate G10: Deterministic Video Validation
@@ -307,7 +308,7 @@ Required before enabling those commands:
 | **Segment Producer** | Formerly Researcher. Gathers context + source URLs via ScrapeCreators + Firecrawl. Outputs edit blueprint with story_beats (visual_must_show/must_not_show, asset_candidates, overlay_text, caption_keywords), format_decision, verified_facts, unverified_claims, and do_not_use list. 5 sub-roles: Fact Checker, Viral Analyst, Clip Scout, Story Producer, Edit Planner. See `docs/adr/0021-audio-first-continuous-voiceover.md`. | Budget East | TTL-based + job workspace file cache |
 | **Scriptwriter** | Writes continuous voiceover narration (75-110 words, no emojis, spoken-word style) from Segment Producer's story_beats. Outputs voiceover_text + narrative_structure (beat_id, word_range, overlay_text, caption_keywords). Removes per-scene word limit formula. Rotates angle from creative history. | Budget East | Never |
 | **Voice Producer** | Generates continuous voiceover via single TTS call (87.5% cost reduction vs per-scene). Primary: ElevenLabs `/with-timestamps` (character-level alignment grouped into words). Fallback: Gemini TTS (silence detection) → Fish Audio → fail clearly. Returns voiceover.mp3 + word-level timestamps + duration. Voice files and metadata saved under `ASSETS_CACHE/job_{id}/agents/voice_producer/`. | API cost | Never |
-| **Visual Director** | Beat-driven, audio-aware visual planning: consumes story_beats + word timestamps + visual rules (must_show/must_not_show) + do_not_use list. Each beat has exact audio duration from timestamps. Visual hierarchy: source clip → screenshot → portrait with Ken Burns → text card → stock (abstract only). Sequential execution: Voice Producer must complete first. | Budget East | Never |
+| **Visual Director** | Beat-driven, audio-aware visual planning: consumes story_beats + word timestamps + visual rules (must_show/must_not_show) + do_not_use list. Each beat has exact audio duration from timestamps. Visual hierarchy: source clip → screenshot → portrait with Ken Burns → text card → stock (abstract only). Sequential execution: Voice Producer must complete first. Receives a **pre-qualified candidate pool**: rejected candidates never reach VD (see §17). | Budget East | Never |
 | **Composer** | Single audio timeline: voiceover.mp3 is immutable anchor (never trimmed). Smart scene trimming at ffprobe keyframe boundaries (±15% tolerance). Speed adjustment ±20% (imperceptible). Keyword captions (max 6 words, beat-aligned, bottom-positioned) replace full-sentence subtitles. Treatment-aware rendering from `templates/treatments.yaml`. Scene normalizer unifies framerates to 30fps. Production flags: `-pix_fmt yuv420p`, `-movflags +faststart`. | N/A | Never |
 | **Reviewer** | 4 programmatic quality checks: (1) AV sync (drift < 0.5s), (2) caption quality (short keywords, max 6 words), (3) fact safety (safe wording for unverified claims), (4) narrative structure (beat completeness). Plus multimodal quality + safety + duplicate check. Max 2 human-triggered retries. | Moderate | Never |
 | **Creative Director** | Stage 2. Proposes new angles/templates when variation exhausted. | Agentic East | Triggered |
@@ -325,6 +326,8 @@ The Visual Director uses LLM-driven planning with video production expertise to 
 5. **Legacy fallback**: `_run_legacy_planning()` uses the original sequential URL assignment + Pexels fallback when LLM planning fails or returns `None`.
 
 **Default treatment routing:** When LLM is unavailable or returns no treatment, Visual Director applies sensible defaults: `text_card_reveal` for text_card scenes, `broll_standard` for video clips, `ken_burns_zoom_in` for static images.
+
+**Pre-VD asset qualification (Phase 26, PR 5):** Before Visual Director runs, the orchestrator qualifies each beat's `asset_candidates` via `clipper_agency/core/asset_qualification.py` and immutably rewrites the candidate pool VD receives. Ordering inside `_qualify_beat`: **SCORE → RANK → RECOVER → FALLBACK**. Rejected candidates never reach VD's live per-beat surface; a `qualification_report.json` artifact is written. See §17.
 
 **Design principle:** "Orchestrator owns cross-agent contracts, agents own creative decisions." The Orchestrator validates content direction, derives word/time budgets, and reconciles the canonical timeline. Agents receive explicit contracts rather than inferring timing independently. See `docs/adr/0020-use-canonical-timeline-contract.md`.
 
@@ -1128,3 +1131,45 @@ Phase 23 closes the Reviewer enforcement gap exposed by runtime quality gates. C
 - Deterministic gates can fail or route repairs using Composer evidence instead of silently skipping.
 - Timestamp-level semantic review can map rendered scenes to story beats with evidence contracts.
 - Reviewer LLM spend is protected by deterministic gates in both production and repair paths.
+
+## 17. Phase 26 (PR 5): Pre-Visual-Director Asset Qualification Boundary
+
+PR 5 is the real Job #8 fix. Job #8 root cause was **candidate rejection, not scarcity**: Visual Director rejected ~7 of 8 candidates and fell back to text cards. A new in-process boundary scores image candidates *before* VD consumes them and — critically — runs **source recovery before the text-card fallback**.
+
+**ADR compliance:** ADR 0026 governs this work as *"enforce contracts, do NOT rebuild"* — pure orchestration, no new agent, no new gate, no schema change, no state-machine change. ADR 0027 governs the cache-miss inspection delegation (below).
+
+### Module & Seam
+
+| Element | Value |
+|---------|-------|
+| **Module** | `clipper_agency/core/asset_qualification.py` (pure orchestration) |
+| **Engine seam** | `Engine._run_visual_director_phase` via helper `_apply_asset_qualification` — runs after voicing, before the `_run_visual_director` call |
+| **DB state machine** | Unchanged (no new state, no new gate) |
+| **Version** | Stays `v2.3.0` (PR 8 owns the `v2.4.0` bump) |
+
+The module imports and calls only existing modules (`inspection_cache`, `MultimodalInspectionClient`, `semantic_visual_review`, `candidate_semantic_ranker`); it imports **neither** `segment_producer` nor `visual_director` — the Segment Producer discovery callable is injected as an opaque `Callable` via `RecoveryPolicy.discover_fn` to break the import cycle.
+
+### Per-Beat Ordering (SCORE → RANK → RECOVER → FALLBACK)
+
+`_qualify_beat` is the module-level contract that owns the ordering:
+
+1. **SCORE** all candidates via `_score_candidate`.
+2. **RANK** via `candidate_semantic_ranker.rank_candidates()` → decisions `{accept, revise, reject, fallback_card}`.
+3. **QUALIFIED CHECK** — if any candidate is `{accept, revise}` → `verdict='qualified'`, `recovery_outcome='none'`. No recovery, no text card.
+4. **RECOVER stage** — fires **only** when qualified is empty: a bounded re-run of Segment Producer discovery for fresh candidates (`MAX_RECOVERY_CYCLES=1`, no loop), then re-score/re-rank. Success → `verdict='recovered'`, `recovery_outcome='ran'`. This runs **before** any text-card fallback. Recovery is synchronous in-process: it emits no `RepairPatch`, calls no `build_gate_failure_repair_plan`, and touches no `GATE_FAILURE_REPAIR_MAP` (distinct from ADR 0023's post-Reviewer repair path).
+5. **FALLBACK (terminal, last resort)** — only if qualified is *still* empty after recovery (or recovery is disabled/exhausted) → `verdict='exhausted_text_card'`, `qualified=[]`, `fallback_card={...}`. **The only path that emits a text card.**
+
+### Immutable Candidate-Pool Rewrite & Artifact
+
+The seam **immutably rewrites** `beat.asset_candidates` to the qualified set only (new dicts per spread — rejected candidates never reach VD's live per-beat surface), defense-in-depth-filters the flat candidate pool, and writes a `qualification_report.json` artifact via existing `core/paths.py` helpers. The report documents per-beat verdicts (`qualified` | `recovered` | `exhausted_text_card`), `recovery_outcome` (`none` | `ran` | `exhausted` | `no_fn`), `recovery_attempts`, and `reject_reasons` (`asset_id → reason`).
+
+### Cache-Key Parity & Inspection Delegation (0 double-VLM spend)
+
+- **Cache-key parity (hard gate):** `asset_qualification._score_candidate` and `VD._score_one_candidate` compute byte-identical cache keys. VD's re-inspection of a pre-qualified candidate is therefore a cache hit → **0 double-VLM spend**. Existing VD tests pass unmodified (VD source untouched — blast-radius contained).
+- **Inspection delegation (ADR 0027):** on a cache miss, the qualification layer **delegates** to Visual Director's own bound `_run_multimodal_inspection` (injected at the seam) rather than lifting ~140 lines of OCR/face/enhanced ML machinery. The cached output is byte-identical to VD's (no cache-namespace drift) and frame ownership stays in VD.
+
+### Evidence
+
+The SLICE 12 hard merge gate proves M < N (recovery strictly reduces text-card fallbacks vs the all-reject baseline) on the real frozen Job #8 research contract. Visual Director source is untouched; its existing 69 tests pass unmodified. `do_not_use` URL re-filtering at the boundary (SLICE 8) is deferred — Visual Director already enforces `do_not_use` at four downstream points, so re-filtering here would be redundant contract re-enforcement; the qualification layer's native badness signal is `reject_reasons`.
+
+**Reference design:** `docs/plans/pr5-asset-qualification-design.md`. **ADRs:** `docs/adr/0026-v2.4.0-contract-enforcement-over-rebuild.md`, `docs/adr/0027-asset-qualification-inspection-delegation.md`.

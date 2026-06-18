@@ -83,6 +83,18 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - Type-honesty fix: `_fail_if_package_consistency_failed` `main_entities` param widened to `list[str] | None` (matches `main_entities or []` body + `list[str] | None` call site).
 - 10 new tests (`tests/test_agents_reviewer.py` + `tests/test_inspection_cache.py`); 1 cache test updated to the new content-hashed key.
 
+#### PR 5 — Pre-VD Asset Qualification Boundary + Source Recovery
+- **Added:** new `core/asset_qualification.py` module scores image candidates per beat BEFORE the Visual Director consumes them — the real Job #8 fix. Root cause was candidate REJECTION (VD rejected ~7 of 8 candidates → text cards), not scarcity.
+- **Added:** engine seam `_apply_asset_qualification()` in `Orchestrator._run_visual_director_phase` (design §6) — qualifies each beat, IMMUTABLY rewrites `beat.asset_candidates` to the qualified set only (rejected candidates never reach VD's live per-beat surface), applies defense-in-depth filtering on the flat candidate pool, and writes a `qualification_report.json` artifact documenting verdicts (`qualified`/`recovered`/`exhausted_text_card`) + `recovery_outcome` + `reject_reasons`.
+- **Added:** RECOVER stage runs before the text-card fallback — when a beat has zero qualified candidates, Segment Producer discovery is re-run for fresh candidates and re-scored (`MAX_RECOVERY_CYCLES=1`, bounded — no loop) instead of immediately degrading to a text card.
+- **Added:** SLICE 1 cache-key parity hard gate — `asset_qualification._score_candidate` and `VD._score_one_candidate` compute byte-identical cache keys, so VD's re-inspection of a pre-qualified candidate is a cache hit → 0 double-VLM spend.
+- **Added:** SLICE 12 HARD merge gate proves M<N (recovery strictly reduces text-card fallbacks vs the all-reject baseline) on the real frozen Job #8 research contract.
+- **Changed:** Visual Director phase now receives pre-qualified candidates; recovery-before-text-card ordering is enforced at the qualification boundary.
+- ADR 0026 — Contract Enforcement Over Rebuild (pure orchestration: NO new agent, NO new gate, NO schema change, NO state-machine change).
+- ADR 0027 — Asset-Qualification Inspection Delegation (cache-miss inspection delegates to VD's own bound `_run_multimodal_inspection` → byte-identical cached output, no cache-namespace drift, frame ownership stays in VD).
+- 2031 offline tests pass, 18 deselected; ruff clean; 93%+ coverage. Existing 69 VD tests pass UNMODIFIED (VD source untouched — blast-radius contained).
+- Version stays 2.3.0 (PR 8 owns the 2.4.0 bump).
+
 ### Phase 25: Dead Code Removal (PR #49)
 
 Removed superseded `core/multimodal_provider.py` — 0 production consumers, deliberately excluded from wiring in Phase 23 plan (`multimodal_client.py` serves the same purpose and is wired into Visual Director). Eliminated 0.1% code duplication.

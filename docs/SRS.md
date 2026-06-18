@@ -85,6 +85,9 @@
 | FR-66 | Publication blocking: rejected artifacts retained under `outputs/job_{id}/`. `_promote_to_final()` requires quality=passed AND artifact=approved. Atomic promotion via temp dir + rename | P0 | MVP |
 | FR-67 | Timestamp-level semantic review integrated into reviewer gate chain: `map_scenes_to_beats()` maps rendered scenes to story beats, `_run_timestamp_semantic_review()` emits SceneSemanticReview with evidence contracts | P0 | MVP |
 | FR-68 | Reviewer diagnostics passthrough and manifest serialization: Orchestrator engine passes Composer diagnostics and rendered scene manifest to Reviewer in `_retry_review_and_package()` and repair rerun path; `RenderedSceneManifest` is serialized to dict before Reviewer gate code consumes `entries` | P0 | MVP |
+| FR-69 | Pre-Visual-Director asset-qualification boundary: `clipper_agency/core/asset_qualification.py` scores each beat's `asset_candidates` BEFORE Visual Director consumes them, via the engine seam `_apply_asset_qualification` in `Orchestrator._run_visual_director_phase`. Each beat is immutably rewritten so `beat.asset_candidates` contains only the qualified set; rejected candidates never reach Visual Director's live per-beat surface. The flat candidate pool is defense-in-depth filtered. Enforcement is pure orchestration — no new agent, no new gate, no schema change, no state-machine change (ADR 0026). The cache-miss inspection delegates to Visual Director's own bound `_run_multimodal_inspection` so cached output is byte-identical to Visual Director's, with no cache-namespace drift and frame ownership staying in Visual Director (ADR 0027) | P0 | MVP |
+| FR-70 | Bounded source recovery before text-card fallback: when a beat has zero qualified candidates, a RECOVER stage re-runs Segment Producer discovery for fresh candidates and re-scores them instead of immediately degrading to a text card. Recovery is bounded to MAX_RECOVERY_CYCLES=1 (no loop). Job #8 root cause was candidate rejection, not scarcity; recovery strictly reduces text-card fallbacks versus the all-reject baseline | P0 | MVP |
+| FR-71 | Qualification report artifact: a `qualification_report.json` artifact is emitted per job documenting per-beat verdicts (qualified / recovered / exhausted_text_card), recovery outcome, and reject reasons for every rejected candidate | P0 | MVP |
 
 ### 2.2 User Interfaces
 
@@ -123,6 +126,7 @@
 | NFR-08 | Jobs restartable in principle from persisted DB state plus `ASSETS_CACHE/job_{id}` agent/gate artifacts; write-enabled retry/resume implemented after artifact contract stabilization | Required |
 | NFR-09 | Agent contracts identical at all scales (MVP → 1000+ accounts) | Required |
 | NFR-10 | All external API calls log request parameters, response status, token usage, cost estimate, and latency | Required |
+| NFR-11 | Zero double-VLM spend on pre-qualified candidates: `asset_qualification._score_candidate` and Visual Director `_score_one_candidate` compute byte-identical cache keys, so Visual Director's re-inspection of a pre-qualified candidate is a cache hit | Required |
 
 ---
 
