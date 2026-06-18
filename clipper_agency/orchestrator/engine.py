@@ -1405,6 +1405,7 @@ class Orchestrator:
         job_id: int,
         topic: str,
         assets_cache: str,
+        window_selector: Any = None,
     ) -> tuple[list[dict], list[dict]]:
         """Pre-Visual-Director asset-qualification boundary (PR 5 / design §6).
 
@@ -1426,9 +1427,12 @@ class Orchestrator:
         output, frame ownership in VD, no double extraction).
         """
         from clipper_agency.core import asset_qualification
+        from clipper_agency.core.clip_window import KeywordOverlapWindowSelector
         from clipper_agency.core.paths import ensure_agent_dir, job_cache_dir
 
         settings = load_settings()
+        # PR 6: clip-window selector (default conservative full-clip; injectable for tests).
+        selector = window_selector or KeywordOverlapWindowSelector()
         # Same cache + frame dir VD uses, so the pre-VD pass populates VD's cache.
         vd_agent_dir = ensure_agent_dir(assets_cache, job_id, "visual_director")
         cache_dir = f"{vd_agent_dir}/inspection_cache"
@@ -1464,11 +1468,19 @@ class Orchestrator:
                 qualified_story_beats.append(beat_dict)
                 continue
             qualified_ids = {c["asset_id"] for c in result.qualified}
-            kept = [
-                ac
-                for ac in beat_dict.get("asset_candidates", [])
-                if f"{ac.get('type', '')}_{ac.get('url', '')[:40]}" in qualified_ids
-            ]
+            kept: list[dict] = []
+            for ac in beat_dict.get("asset_candidates", []):
+                if f"{ac.get('type', '')}_{ac.get('url', '')[:40]}" not in qualified_ids:
+                    continue
+                # PR 6: attach the clip window (default full-clip; selector is conservative v1).
+                window = selector.select_window(ac, beat_dict, None)
+                kept.append(
+                    {
+                        **ac,
+                        "source_start_sec": window.source_start_sec,
+                        "source_end_sec": window.source_end_sec,
+                    }
+                )
             rewritten = {**beat_dict, "asset_candidates": kept}
             if result.verdict == "exhausted_text_card" and result.fallback_card is not None:
                 rewritten["qualification_text_card"] = result.fallback_card
