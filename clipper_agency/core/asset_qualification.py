@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # the hard merge gate enforcing this; do not change these values without also
 # updating VD's inline literals (or, preferably, see the follow-up below).
 #
-# TODO(PR 5 follow-up, design §8): extract compute_candidate_cache_key(candidate,
+# Follow-up (PR 5+, design §8): extract compute_candidate_cache_key(candidate,
 # beat) into clipper_agency/core/inspection_cache.py and call it from BOTH Visual
 # Director and this module. One definition removes this drift risk by construction
 # and collapses the SLICE 1 gate to a trivial single-caller test. Deferred per the
