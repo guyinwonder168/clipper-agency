@@ -461,7 +461,7 @@ class TestQualifyBeatHappyPath:
         assert result.qualified[0]["candidate"] is mid
 
     def test_empty_pool_raises_not_implemented(self) -> None:
-        """Zero qualified candidates is SLICE 3 territory — fail loud, never silently text-card."""
+        """No recovery policy → SLICE 4 terminal stub (never silently text-cards)."""
         import pytest
 
         cand = _make_candidate("tiktok_clip", "https://b.com/bad.mp4")
@@ -481,6 +481,140 @@ class TestQualifyBeatHappyPath:
         ):
             with pytest.raises(NotImplementedError):
                 asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+
+# ---------------------------------------------------------------------------
+# SLICE 3 — all-reject → source recovery BEFORE text card (the Job #8 fix).
+#
+# When a beat has zero qualified candidates, a RECOVER stage runs the injected
+# discovery callable BEFORE any text-card fallback. If recovery yields a
+# qualified candidate the beat is ``verdict='recovered'`` — never a text card.
+# The terminal text-card fallback (recovery exhausted / disabled) is SLICE 4.
+# ---------------------------------------------------------------------------
+
+
+class TestQualifyBeatRecoveryBeforeTextCard:
+    """SLICE 3 — recovery runs before the text-card fallback and can rescue a beat."""
+
+    def test_recovery_rescues_all_reject_beat(self, tmp_path: Any) -> None:
+        bad = _make_candidate("tiktok_clip", "https://b.com/bad.mp4")  # rejects
+        rescued = _make_candidate("tiktok_clip", "https://r.com/rescued.mp4")  # accepts
+        beat = _make_beat(beat_id=5, asset_candidates=[bad])
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        # bad→low (rejects on the original pass); rescued→high (accepts after recovery).
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        for cand, insp in ((bad, _low_inspection()), (rescued, _high_inspection())):
+            cache_store(
+                cache_dir,
+                compute_cache_key(
+                    asset_path=cand.url,
+                    asset_hash=inspection_cache.compute_asset_content_hash(cand),
+                    beat_claim=beat.spoken_point,
+                    evidence_contract_hash="",
+                    model="multimodal",
+                    prompt_version="1.0",
+                ),
+                insp,
+            )
+
+        discover_calls: list[list[str]] = []
+
+        def discover_fn(queries: list[str]) -> tuple[list[dict], list[dict]]:
+            discover_calls.append(list(queries))
+            return (
+                [{"type": "tiktok_clip", "url": rescued.url, "reason": "recovered"}],
+                [{"provider": "youtube"}],
+            )
+
+        recovery = asset_qualification.RecoveryPolicy(
+            enabled=True, max_cycles=1, discover_fn=discover_fn
+        )
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir=cache_dir,
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=recovery,
+            plan_item=None,
+        )
+        result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        # Recovery ran BEFORE any text card: discover_fn called once with the
+        # expanded per-beat queries built from visual_must_show + spoken_point.
+        assert len(discover_calls) == 1
+        assert beat.visual_must_show in discover_calls[0]
+        assert beat.spoken_point in discover_calls[0]
+        # The beat was rescued — 'recovered', NOT a text card.
+        assert result.verdict == "recovered"
+        assert result.recovery_outcome == "ran"
+        assert result.recovery_attempts == 1
+        assert result.fallback_card is None
+        assert len(result.qualified) == 1
+        assert result.qualified[0]["candidate"].url == rescued.url
+        assert len(result.provider_attempts_added) == 1
+        assert result.provider_attempts_added[0]["provider"] == "youtube"
+
+    def test_recovery_skips_malformed_discovery_items(self, tmp_path: Any) -> None:
+        """A non-mapping discovery item is logged+skipped, not crash the whole pass."""
+        bad = _make_candidate("tiktok_clip", "https://b.com/bad.mp4")
+        rescued = _make_candidate("tiktok_clip", "https://r.com/rescued.mp4")
+        beat = _make_beat(beat_id=9, asset_candidates=[bad])
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        for cand, insp in ((bad, _low_inspection()), (rescued, _high_inspection())):
+            cache_store(
+                cache_dir,
+                compute_cache_key(
+                    asset_path=cand.url,
+                    asset_hash=inspection_cache.compute_asset_content_hash(cand),
+                    beat_claim=beat.spoken_point,
+                    evidence_contract_hash="",
+                    model="multimodal",
+                    prompt_version="1.0",
+                ),
+                insp,
+            )
+
+        # First discovery item is malformed (None); the valid one still rescues the beat.
+        def discover_fn(_queries: list[str]) -> tuple[list, list[dict]]:
+            return ([None, {"type": "tiktok_clip", "url": rescued.url, "reason": "r"}], [])
+
+        recovery = asset_qualification.RecoveryPolicy(
+            enabled=True, max_cycles=1, discover_fn=discover_fn
+        )
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir=cache_dir,
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=recovery,
+            plan_item=None,
+        )
+        result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        # The malformed None was skipped; the valid candidate rescued the beat.
+        assert result.verdict == "recovered"
+        assert len(result.qualified) == 1
+        assert result.qualified[0]["candidate"].url == rescued.url
+
+
+class TestToAssetCandidate:
+    """``_to_asset_candidate`` coerces discovery results (dict OR model) to AssetCandidate."""
+
+    def test_passes_through_existing_model(self) -> None:
+        cand = _make_candidate()
+        assert asset_qualification._to_asset_candidate(cand) is cand
+
+    def test_coerces_dict(self) -> None:
+        coerced = asset_qualification._to_asset_candidate(
+            {"type": "tiktok_clip", "url": "https://x.com/c.mp4", "reason": "discovered"}
+        )
+        assert isinstance(coerced, AssetCandidate)
+        assert coerced.url == "https://x.com/c.mp4"
 
 
 class TestQualifyResearchCandidatesPublicEntry:
