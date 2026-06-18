@@ -288,6 +288,15 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 191 | Inspection delegation (ADR 0027): the cache-miss inspection delegates to VD's own bound `_run_multimodal_inspection` rather than verbatim-lifting ~140 lines of OCR/face/enhanced ML — cached output byte-identical to VD's (no cache-namespace drift), frame ownership stays in VD | SRS §2 FR-69, Design §17, ADR 0027 |
 | 192 | ADR 0026 compliance: pure orchestration — NO new agent, NO new gate, NO schema change, NO state-machine change. SLICE 8 (do_not_use URL filter at the boundary) DEFERRED to post-PR-5 (VD already enforces do_not_use at four downstream points; re-filtering would be redundant contract re-enforcement the rebuild-ADR forbids) | ADR 0026 |
 
+### From Phase 26 PR 6 — Clip-Window Selector (Minimal, Contract-First)
+
+| # | Fact | New Location |
+|---|------|-------------|
+| 193 | Clip-window module + pluggable selector: `clipper_agency/core/clip_window.py` exposes a frozen `ClipWindow(start_sec, end_sec)` dataclass, a `WindowSelector` Protocol, and `KeywordOverlapWindowSelector` (v1 default, conservative: returns `ClipWindow(0.0, None)` — the full-clip window — because keyword overlap cannot localize a spoken point to a timestamp) | SRS §2 FR-72, Design §18, ADR 0026 |
+| 194 | `AssetCandidate` window fields: optional `source_start_sec: float = 0.0` and `source_end_sec: float | None = None` (additive — defaults preserve today's from-zero trim). Excluded from `compute_asset_content_hash` so FR-69 / PR 5 cache-key parity holds (no VLM double-spend) | SRS §2 FR-72, Design §18 |
+| 195 | End-to-end propagation: qualification seam attaches the window to kept candidates → Visual Director `_attach_candidate_windows` re-attaches by `source_url` and `_exec_tiktok_clip` threads it into the asset dict → Composer `_smart_trim` clamps to source bounds (degenerate ⇒ full clip) and `_trim_long_clip` / `_stretch_short_clip` emit `-ss <source_start_sec>` | SRS §2 FR-72, Design §18 |
+| 196 | Transcript backend DEFERRED (post-v2.4.0): faster-whisper behind a config flag, yt-dlp auto-caption extraction, and keyframe-precise snapping. Blocked by ADR 0026 (do-not-rebuild), the GPU-forbidden constraint, no existing transcript infra, and the fact that the v2.4.0 release gate does NOT require clip-windowing. The "trimmed segment matches beat's spoken point" verification criterion waits for this backend (the v1 default cannot satisfy it because it never narrows the window) | ADR 0026, Design §18 |
+
 ---
 
 ## Requirements Traceability Matrix

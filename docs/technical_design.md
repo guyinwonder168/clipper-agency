@@ -1173,3 +1173,32 @@ The seam **immutably rewrites** `beat.asset_candidates` to the qualified set onl
 The SLICE 12 hard merge gate proves M < N (recovery strictly reduces text-card fallbacks vs the all-reject baseline) on the real frozen Job #8 research contract. Visual Director source is untouched; its existing 69 tests pass unmodified. `do_not_use` URL re-filtering at the boundary (SLICE 8) is deferred — Visual Director already enforces `do_not_use` at four downstream points, so re-filtering here would be redundant contract re-enforcement; the qualification layer's native badness signal is `reject_reasons`.
 
 **Reference design:** `docs/plans/pr5-asset-qualification-design.md`. **ADRs:** `docs/adr/0026-v2.4.0-contract-enforcement-over-rebuild.md`, `docs/adr/0027-asset-qualification-inspection-delegation.md`.
+
+## 18. Phase 26 (PR 6): Clip-Window Selector (Minimal, Contract-First)
+
+PR 6 freezes the clip-window **data-flow contract** so the propagation path (qualification → VD → Composer) is fixed, then ships a conservative default selector. The localizing backend (transcript/whisper) is deferred — it plugs into the same `WindowSelector` Protocol later without touching the propagation shape. Per ADR 0026, this is "enforce contracts, do NOT rebuild": pure orchestration, no new agent, no new gate, no state-machine change.
+
+### Module & Data Contract
+
+| Element | Value |
+|---------|-------|
+| **Module** | `clipper_agency/core/clip_window.py` (pure orchestration) |
+| **Frozen dataclass** | `ClipWindow(start_sec: float, end_sec: float | None)` — `None` end ⇒ through end of source |
+| **Pluggable Protocol** | `WindowSelector.select(candidate, beat, *, source_duration_sec=None) -> ClipWindow` |
+| **v1 default selector** | `KeywordOverlapWindowSelector` — **conservative**: returns `ClipWindow(0.0, None)` for every candidate because keyword overlap cannot localize a spoken point to a timestamp (returns the full-clip window, equivalent to today's from-zero trim) |
+| **Schema** | `AssetCandidate` gains optional `source_start_sec: float = 0.0` and `source_end_sec: float | None = None` (additive — defaults preserve today's from-zero trim) |
+| **Cache parity** | The two new fields are **excluded** from `compute_asset_content_hash` (`type`/`url`/`source_type` only), so PR 5's cache-key parity holds — identical content still hits the inspection cache regardless of window |
+| **Version** | Stays `v2.3.0` (PR 8 owns the `v2.4.0` bump) |
+
+### Propagation (qualification → VD → Composer)
+
+1. **Qualification seam** — `Orchestrator._apply_asset_qualification` invokes the injected selector and attaches the resulting `ClipWindow` to each kept candidate (writing `source_start_sec` / `source_end_sec`).
+2. **Visual Director** — `_attach_candidate_windows` re-attaches the window by `source_url` (candidate dicts flow through VD; the window rides along); `_exec_tiktok_clip` carries `source_start_sec`/`source_end_sec` into the asset dict VD emits.
+3. **Composer** — `_smart_trim` clamps the window to the source's actual duration (a degenerate `ClipWindow(0.0, None)` clamps to the full clip, so behavior is unchanged for the v1 default). `_trim_long_clip` and `_stretch_short_clip` emit `-ss <source_start_sec>` so the FFmpeg trim honors the window.
+
+### Deferred Backend (post-v2.4.0)
+
+The transcript/whisper backend is **deferred**: faster-whisper behind a config flag, yt-dlp auto-caption extraction, and keyframe-precise snapping. Blocked by ADR 0026 (do-not-rebuild), the GPU-forbidden constraint, the absence of any existing transcript infra, and the fact that the v2.4.0 release gate does NOT require clip-windowing. The "trimmed segment matches beat's spoken point" verification criterion waits for this backend (documented honestly; the PR 6 v1 default cannot satisfy it because it never narrows the window). Until then, the propagation contract is proven end-to-end on the degenerate full-clip window: source bounds are respected, `source_start_sec`/`source_end_sec` flow through, and Composer emits `-ss <start>`.
+
+**Reference design:** `docs/plans/pr6-clip-window-design.md`. **ADR:** `docs/adr/0026-v2.4.0-contract-enforcement-over-rebuild.md`.
+
