@@ -14,11 +14,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from clipper_agency.config.schema import AssetCandidate, StoryBeat
 from clipper_agency.core.candidate_semantic_ranker import (
     apply_rejection_rules,
+    compute_final_score,
     rank_candidates,
 )
 from clipper_agency.core.inspection_cache import (
@@ -262,6 +264,63 @@ def qualify_research_candidates(
         beat = StoryBeat(**beat_dict)
         results.append(_qualify_beat(beat, ctx, min_claim_support, max_misleading_risk))
     return results
+
+
+def build_qualification_report(
+    job_id: int,
+    results: list[BeatQualificationResult],
+) -> dict:
+    """Pure serializer → ``qualification_report.json`` (design §5).
+
+    A plain-dict transform over the already-built ``BeatQualificationResult``
+    list — no new schema, no I/O (the engine seam writes it via ``write_json``).
+    ``top_score`` reuses the ranker's own ``compute_final_score`` so the report
+    and the ranking decision share one score definition (DRY).
+    """
+    beats_report: list[dict] = []
+    providers_added = 0
+    for r in results:
+        top_asset_id: str | None = None
+        top_score = 0.0
+        if r.qualified:
+            top = r.qualified[0]
+            top_asset_id = top.get("asset_id")
+            top_score = round(
+                compute_final_score(
+                    top.get("inspection", {}),
+                    top.get("visual_relevance", {}),
+                    top.get("cleanliness_score", 1.0),
+                ),
+                4,
+            )
+        providers_added += len(r.provider_attempts_added)
+        beats_report.append(
+            {
+                "beat_id": r.beat_id,
+                "verdict": r.verdict,
+                "recovery_outcome": r.recovery_outcome,
+                "qualified_count": len(r.qualified),
+                "recovery_attempts": r.recovery_attempts,
+                "reject_reasons": dict(r.reject_reasons),
+                "top_asset_id": top_asset_id,
+                "top_score": top_score,
+            }
+        )
+    summary = {
+        "total_beats": len(results),
+        "qualified_beats": sum(1 for r in results if r.verdict == "qualified"),
+        "recovered_beats": sum(1 for r in results if r.verdict == "recovered"),
+        "text_card_last_resort_beats": sum(
+            1 for r in results if r.verdict == "exhausted_text_card"
+        ),
+        "providers_attempted_added": providers_added,
+    }
+    return {
+        "job_id": job_id,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "summary": summary,
+        "beats": beats_report,
+    }
 
 
 def _score_candidates(

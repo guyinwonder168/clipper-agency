@@ -807,3 +807,146 @@ class TestQualifyResearchCandidatesPublicEntry:
             {"story_beats": []}, 1, "/tmp/cache", "/tmp/agent"
         )
         assert results == []
+
+
+# ---------------------------------------------------------------------------
+# SLICE 11 — qualification_report.json serializer (design §5).
+#
+# ``build_qualification_report`` is a PURE serializer over the already-built
+# ``BeatQualificationResult`` list — no new schema, no I/O. The engine seam
+# (SLICE 7) writes its output via ``write_json``. These tests pin the
+# documented artifact shape (summary counts + per-beat verdict/top-asset rows)
+# so the HARD verification gate ("qualification_report.json exists with the
+# documented shape") is enforceable.
+# ---------------------------------------------------------------------------
+
+
+def _scored_dict(asset_id: str, quality: float = 0.9) -> dict:
+    """A scored candidate dict in the exact ``_score_candidate`` output shape.
+
+    ``compute_final_score`` reads ``inspection`` (mean of inspection dims +
+    ``source_credibility``), ``visual_relevance`` (mean of relevance dims), and
+    ``cleanliness_score`` — so all three are populated here.
+    """
+    return {
+        "asset_id": asset_id,
+        "beat_id": "1",
+        "role": "evidence",
+        "treatment": "broll_standard",
+        "inspection": {
+            "decision": "accept",
+            "person_match": quality,
+            "event_match": quality,
+            "claim_support": quality,
+            "visual_quality": quality,
+            "misleading_risk": 0.1,
+            "source_credibility": quality,
+        },
+        "visual_relevance": {
+            "person_match": quality,
+            "event_match": quality,
+            "claim_support": quality,
+            "visual_quality": quality,
+        },
+        "cleanliness_score": quality,
+        "candidate": _make_candidate("tiktok_clip", f"https://x.com/{asset_id}.mp4"),
+        "inspection_diag": {"beat_id": 1, "asset_id": asset_id, "from_cache": True},
+    }
+
+
+class TestBuildQualificationReport:
+    """SLICE 11 — the report serializer shape (design §5)."""
+
+    def test_report_shape_and_summary_counts(self) -> None:
+        from clipper_agency.core.candidate_semantic_ranker import compute_final_score
+
+        qualified = asset_qualification.BeatQualificationResult(
+            beat_id="1",
+            verdict="qualified",
+            recovery_outcome="none",
+            recovery_attempts=0,
+            qualified=[_scored_dict("tiktok_clip_q1")],
+            scored=[_scored_dict("tiktok_clip_q1")],
+            reject_reasons={},
+        )
+        recovered = asset_qualification.BeatQualificationResult(
+            beat_id="2",
+            verdict="recovered",
+            recovery_outcome="ran",
+            recovery_attempts=1,
+            qualified=[_scored_dict("tiktok_clip_r1")],
+            scored=[_scored_dict("tiktok_clip_r1")],
+            reject_reasons={},
+            provider_attempts_added=[{"provider": "youtube"}, {"provider": "tavily"}],
+        )
+        exhausted = asset_qualification.BeatQualificationResult(
+            beat_id="3",
+            verdict="exhausted_text_card",
+            recovery_outcome="exhausted",
+            recovery_attempts=1,
+            qualified=[],
+            scored=[],
+            reject_reasons={"tiktok_clip_bad": "HIGH_MISLEADING_RISK"},
+            fallback_card={"type": "text_card", "headline": "X", "style": "news_card"},
+            provider_attempts_added=[{"provider": "youtube"}],
+        )
+
+        report = asset_qualification.build_qualification_report(
+            8, [qualified, recovered, exhausted]
+        )
+
+        # Top-level envelope
+        assert report["job_id"] == 8
+        assert isinstance(report["generated_at"], str) and report["generated_at"]
+        assert report["summary"] == {
+            "total_beats": 3,
+            "qualified_beats": 1,
+            "recovered_beats": 1,
+            "text_card_last_resort_beats": 1,
+            "providers_attempted_added": 3,  # 0 + 2 + 1
+        }
+        # Per-beat rows preserve input order and carry the documented fields.
+        assert [b["beat_id"] for b in report["beats"]] == ["1", "2", "3"]
+        row1 = report["beats"][0]
+        assert row1["verdict"] == "qualified"
+        assert row1["qualified_count"] == 1
+        assert row1["top_asset_id"] == "tiktok_clip_q1"
+        # top_score is the ranker's own final score (DRY — single source of truth).
+        assert row1["top_score"] == round(
+            compute_final_score(
+                _scored_dict("tiktok_clip_q1")["inspection"],
+                _scored_dict("tiktok_clip_q1")["visual_relevance"],
+                _scored_dict("tiktok_clip_q1")["cleanliness_score"],
+            ),
+            4,
+        )
+        # The recovered beat shares the same top-score code path — pin it too.
+        row2 = report["beats"][1]
+        assert row2["verdict"] == "recovered"
+        assert row2["top_asset_id"] == "tiktok_clip_r1"
+        assert row2["top_score"] == round(
+            compute_final_score(
+                _scored_dict("tiktok_clip_r1")["inspection"],
+                _scored_dict("tiktok_clip_r1")["visual_relevance"],
+                _scored_dict("tiktok_clip_r1")["cleanliness_score"],
+            ),
+            4,
+        )
+        # The exhausted beat has no top asset.
+        row3 = report["beats"][2]
+        assert row3["verdict"] == "exhausted_text_card"
+        assert row3["top_asset_id"] is None
+        assert row3["top_score"] == 0.0
+        assert row3["qualified_count"] == 0
+        assert row3["reject_reasons"] == {"tiktok_clip_bad": "HIGH_MISLEADING_RISK"}
+
+    def test_empty_results_summary_is_zero(self) -> None:
+        report = asset_qualification.build_qualification_report(42, [])
+        assert report["summary"] == {
+            "total_beats": 0,
+            "qualified_beats": 0,
+            "recovered_beats": 0,
+            "text_card_last_resort_beats": 0,
+            "providers_attempted_added": 0,
+        }
+        assert report["beats"] == []
