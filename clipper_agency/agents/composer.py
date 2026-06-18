@@ -1271,7 +1271,7 @@ class ComposerAgent(BaseAgent):
         if end <= start + _DURATION_CLOSE_ENOUGH:
             start, end = 0.0, clip_dur  # degenerate window => full clip
         window_len = end - start
-        full_clip = start == 0.0 and end >= clip_dur - _DURATION_CLOSE_ENOUGH
+        full_clip = start < _DURATION_CLOSE_ENOUGH and end >= clip_dur - _DURATION_CLOSE_ENOUGH
 
         if full_clip and abs(window_len - target_duration_sec) < _DURATION_CLOSE_ENOUGH:
             shutil.copy2(clip_path, output_path)
