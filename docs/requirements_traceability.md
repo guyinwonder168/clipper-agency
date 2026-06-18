@@ -276,6 +276,18 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 184 | Rendered scene manifest + reviewer context: engine passes serialized `rendered_scene_manifest`, `story_beats`, and `word_timestamps` to Reviewer for timestamp-level semantic review | SRS §2 FR-67/FR-68, Design §16 |
 | 185 | Composer diagnostics passthrough: engine forwards diagnostics to Reviewer in normal and repair rerun paths so visual_coverage, text_collision, and safe_area gates enforce Composer evidence | SRS §2 FR-68, Design §16, ADR 0024 |
 
+### From Phase 26 PR 5 — Pre-Visual-Director Asset Qualification Boundary
+
+| # | Fact | New Location |
+|---|------|-------------|
+| 186 | Pre-Visual-Director asset-qualification boundary: `clipper_agency/core/asset_qualification.py` scores each beat's image candidates (reuse of VD's scoring chain) BEFORE Visual Director consumes them; engine seam `_apply_asset_qualification` in `Engine._run_visual_director_phase` (engine.py ~1206-1242) runs after voicing, before VD | PRD §5 PR-37, SRS §2 FR-69, Design §17, ADR 0026 |
+| 187 | Source-recovery-before-text-card (real Job #8 fix): when a beat has zero qualified candidates, a bounded RECOVER stage re-runs Segment Producer discovery for fresh candidates and re-scores them BEFORE the text-card fallback. Job #8 root cause was candidate REJECTION, not scarcity. `MAX_RECOVERY_CYCLES=1` bounds the loop | PRD §5 PR-37, SRS §2 FR-69, Design §17, ADR 0026 |
+| 188 | `qualification_report.json` artifact: per-beat verdicts (`qualified` / `recovered` / `exhausted_text_card`), `recovery_outcome`, `reject_reasons` written under the job's ASSETS_CACHE dir via existing `write_json` | PRD §5 PR-37, SRS §2 FR-69, Design §17 |
+| 189 | Zero double-VLM spend (cache-key parity): `asset_qualification._score_candidate` computes byte-identical cache keys to `VD._score_one_candidate`, so VD's re-inspection of a pre-qualified candidate is a cache hit. SLICE 1 hard gate | SRS §2 FR-69, Design §17, ADR 0027 |
+| 190 | Rejected candidates never reach VD: engine immutably rewrites `beat.asset_candidates` to the qualified set only (the load-bearing per-beat surface); flat-pool filter is defense-in-depth. Existing 69 VD tests pass unmodified — VD source untouched, blast-radius contained | PRD §5 PR-37, SRS §2 FR-69, Design §17, ADR 0026 |
+| 191 | Inspection delegation (ADR 0027): the cache-miss inspection delegates to VD's own bound `_run_multimodal_inspection` rather than verbatim-lifting ~140 lines of OCR/face/enhanced ML — cached output byte-identical to VD's (no cache-namespace drift), frame ownership stays in VD | SRS §2 FR-69, Design §17, ADR 0027 |
+| 192 | ADR 0026 compliance: pure orchestration — NO new agent, NO new gate, NO schema change, NO state-machine change. SLICE 8 (do_not_use URL filter at the boundary) DEFERRED to post-PR-5 (VD already enforces do_not_use at four downstream points; re-filtering would be redundant contract re-enforcement the rebuild-ADR forbids) | ADR 0026 |
+
 ---
 
 ## Requirements Traceability Matrix
@@ -302,6 +314,7 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | PR-29 | FR-37, FR-38, FR-39, FR-40, FR-41, FR-42 | §7 Audio-First Architecture, §3 G7/G8/G10, §4 Agent Contracts | G7, G8, G9, G10 | TTS too long/short (atempo ±15%), single TTS failure, word timestamp inaccuracy, clip longer than beat (smart trim), clip shorter (slow 30%), downloaded clip watermarks, no video clips (text_only), fewer clips than stories (deep dive), generic stock for named-person (visual rules), unverified claim as fact (reviewer catch) | Story beats with visual rules, continuous voiceover contract, word-level timestamps, beat-driven visual planning, smart scene trimming, keyword captions, 4 reviewer quality checks, shared schema.py contract |
 | PR-30 | FR-43, FR-44, FR-45, FR-46, FR-47, FR-48, FR-49, FR-50 | §13 Deterministic Quality Gates, §3 G10, §4 Agent Roles | G10 (extended) | Black/freeze frames undetected, text collisions from overlapping overlays, safe-area violations, story mode vs actual composition mismatch, claim-to-visual irrelevance, repair routing to wrong agent | Deterministic gate chain (visual_coverage→text_collision→safe_area→package_consistency→timestamp_semantic→semantic_review→LLM), evidence contracts on StoryBeat, repair routing table, 10 pure-function core modules |
 | PR-36 | FR-67, FR-68 | §16 Reviewer Context + Diagnostics Enforcement | G10 (extended) | Engine omits diagnostics/manifest; Pydantic manifest not dict; timestamp semantic review skips | Reviewer receives serialized manifest + diagnostics in normal and repair rerun paths; gate chain includes timestamp_semantic before semantic_review |
+| PR-37 | FR-69 | §17 Pre-VD Qualification Boundary | Pre-VD (no new gate) | Beat has zero qualified candidates (all rejected); recovery discovers nothing new; recovery budget exhausted; cache-key drift would double-spend VLM | `clipper_agency/core/asset_qualification.py` qualifies each beat before VD; engine seam `_apply_asset_qualification` rewrites `beat.asset_candidates` to qualified set only and writes `qualification_report.json`; recovery-before-text-card with `MAX_RECOVERY_CYCLES=1`; cache-key parity hard gate (SLICE 1) → 0 double-VLM; SLICE 12 Job #8 regression proves M<N text-cards; ADR 0026/0027 |
 
 ### MVP P1 Requirements
 
@@ -372,6 +385,8 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | E21e | All 3-tier image fallbacks fail for a text card (Pexels down, Firecrawl fails, gradient generator error) | Text card generated with plain colored background (no image); provenance records all failures | SRS §2 FR-07, Design §4 |
 | E21f | Treatment YAML missing or invalid (malformed, missing required fields) | Composer falls back to `broll_standard` treatment for all scenes; warning logged; `provenance.json` records fallback | PRD §5 PR-26, SRS §2 FR-32 |
 | E21g | Visual Director selects unknown treatment type | Default routing applied (text_card→text_card_reveal, video→broll_standard, image→ken_burns_zoom_in); provenance records original and fallback | PRD §5 PR-26, Design §4 |
+| E21h | Pre-VD qualification: a beat has zero qualified candidates after scoring (all rejected) | Bounded RECOVER stage re-runs Segment Producer discovery for fresh candidates and re-scores BEFORE the text-card fallback (`MAX_RECOVERY_CYCLES=1`); only if recovery still yields nothing does the beat emit a `verdict='exhausted_text_card'` text card | PRD §5 PR-37, SRS §2 FR-69, Design §17, ADR 0026 |
+| E21i | Pre-VD qualification: cache-key drift between qualifier and VD | Hard-gated by SLICE 1 (`asset_qualification._score_candidate` and `VD._score_one_candidate` compute byte-identical cache keys); VD's re-inspection of a pre-qualified candidate is a cache hit → 0 double-VLM spend | SRS §2 FR-69, Design §17, ADR 0027 |
 
 ### Composer Edge Cases
 
@@ -586,3 +601,4 @@ Use this checklist to verify the documentation set is airtight. Any reviewer (hu
 | **Evidence Contract** | Mapping on StoryBeat that links each claim to required visual evidence and tracks actual alignment score |
 | **Reviewer Gate Chain** | Ordered deterministic quality checks run before LLM multimodal review: visual_coverage → text_collision → safe_area → package_consistency → timestamp_semantic → semantic_review → LLM |
 | **Reviewer Context Bundle** | Engine-provided Reviewer kwargs: `story_beats`, `word_timestamps`, `rendered_scene_manifest`, and Composer `diagnostics` |
+| **Asset Qualification Boundary** | Pre-Visual-Director in-process synchronous transform (`clipper_agency/core/asset_qualification.py`) wired via `_apply_asset_qualification` in `Engine._run_visual_director_phase`; scores each beat's candidates, runs source-recovery-before-text-card (`MAX_RECOVERY_CYCLES=1`), immutably rewrites `beat.asset_candidates` to the qualified set, and writes `qualification_report.json`. ADR 0026: pure orchestration (no new agent/gate/schema/state-machine); ADR 0027: inspection delegates to VD's own `_run_multimodal_inspection` for cache-key-parity (0 double-VLM) |

@@ -83,7 +83,7 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 | **P1** | 2 | Canonical beat timeline enforcement | `phase/26-pr2-canonical-timeline` | Medium | ✅ MERGED (#52, 85df554) | v2.3.0 |
 | **P1** | 3 | Deterministic failure-to-repair integration | `phase/26-pr3-repair-integration` | Medium | ✅ MERGED (#53, 86b37ba) | v2.3.0 |
 | **P2** | 4 | Segment Producer precision upgrade | `phase/26-pr4-sp-precision` | Medium | ✅ COMPLETE (#58, a326936 + 4f-artifact-correctness: 4a✅, 4b✅, 4c✅, 4d⏭️deferred-confirmed, 4e✅, 4f-SP✅, 4f-VD✅, 4f-Reviewer✅) | v2.3.0 |
-| **P2** | 5 | Pre-VD asset qualification boundary | `phase/26-pr5-pre-vd-qualification` | High | ⬜ Pending (un-deferred per Job #8 evidence: 7/8 candidates rejected, all fell back to text cards, no source recovery) | v2.3.0 |
+| **P2** | 5 | Pre-VD asset qualification boundary | `phase/26-pr5-pre-vd-qualification` | High | ✅ COMPLETE (#NN, <merge-sha> — SLICE 1-12; SLICE 8 do_not_use filter deferred to post-PR-5: VD already enforces do_not_use at 4 downstream points; SLICE 12 M<N hard gate green on frozen Job #8 research contract) | v2.3.0 |
 | **P2** | 6 | Source transcript + clip-window selector | `phase/26-pr6-clip-window` | Medium | ⬜ Pending | v2.3.0 |
 | **P2** | 7 | Visual Director multi-shot planning | `phase/26-pr7-multishot-vd` | Medium | ⬜ Pending | v2.3.0 |
 | **P3** | 8 | Release gate + golden-set validation | `phase/26-pr8-release-gate` | Low | ⬜ Pending | **v2.4.0** (bump here) |
@@ -300,6 +300,8 @@ These tests assert the **current broken behavior** — they PASS on master today
 **Branch:** `phase/26-pr5-pre-vd-qualification`
 **Scope:** Move qualification upstream. Reuse existing modules — do NOT rebuild.
 
+> **Status:** ✅ COMPLETE. Delivered as SLICE 1–12 against the LOCKED design (`docs/plans/pr5-asset-qualification-design.md`). New module `clipper_agency/core/asset_qualification.py` scores candidates per-beat BEFORE Visual Director and runs source recovery BEFORE the text-card fallback. Engine seam is `_apply_asset_qualification` in `Orchestrator._run_visual_director_phase`; it immutably rewrites each beat's `asset_candidates` to the qualified set, defense-in-depth filters the flat pool, and writes `qualification_report.json`. Per ADR 0026 (enforce contracts, do NOT rebuild): pure orchestration — NO new agent, NO new gate, NO schema change, NO state-machine change. Per ADR 0027, the cache-miss inspection DELEGATES to VD's own bound `_run_multimodal_inspection` so the cached output is byte-identical to VD's (no cache-namespace drift; frame ownership stays in VD). **SLICE 8** (a `do_not_use` URL filter at the qualification boundary) was DEFERRED to post-PR-5 — VD already enforces `do_not_use` at four downstream points, so re-filtering at the boundary would be redundant contract re-enforcement. The qualification layer's native badness signal is `reject_reasons`. Version stays `v2.3.0` (PR 8 owns the `v2.4.0` bump).
+
 > ⚠️ **Highest-risk PR.** This refactors a working pipeline. Requires **Step 4 fully complete** and stable. Strong integration tests mandatory.
 
 > **Un-deferred justification (Job #8 rerun evidence):** The original deferral assumed "VD already qualifies per-beat; Step 4 removes root cause." Job #8 rerun disproved this:
@@ -318,6 +320,8 @@ These tests assert the **current broken behavior** — they PASS on master today
    - `MultimodalInspectionClient` → visual inspection
    - `candidate_semantic_ranker` → rank + reject
 
+   ✅ DONE — module delivered; inspection DELEGATES to VD's `_run_multimodal_inspection` per ADR 0027 (no ~140-line OCR/face/enhanced-ML lift). SLICE 1 cache-key parity hard gate: `asset_qualification._score_candidate` and `VD._score_one_candidate` compute byte-identical cache keys → VD's re-inspection of a pre-qualified candidate is a cache HIT (0 double-VLM spend).
+
 2. Pipeline becomes:
    ```
    Segment Producer raw candidates
@@ -330,14 +334,14 @@ These tests assert the **current broken behavior** — they PASS on master today
 
 4. VD may still inspect final crop/layout, but source qualification happens upstream.
 
-5. **Source recovery:** When all candidates for a beat are rejected, trigger re-search/re-discovery BEFORE falling back to text card. Text card is the last resort, not the first fallback.
+5. **Source recovery:** When all candidates for a beat are rejected, trigger re-search/re-discovery BEFORE falling back to text card. Text card is the last resort, not the first fallback. ✅ DONE — named RECOVER stage in `_qualify_beat` re-runs Segment Producer discovery for fresh candidates and re-scores them; bounded by `MAX_RECOVERY_CYCLES=1` (no loop). `qualification_report.json` records `verdict` (`qualified` | `recovered` | `exhausted_text_card`), `recovery_outcome` (`none` | `ran` | `exhausted` | `no_fn`), and `reject_reasons`.
 
 **Verification:**
-- Rejected candidates never reach Visual Director
-- Qualification artifact (`job_{id}/qualification_report.json`) exists
-- All existing VD tests pass (adapted to receive pre-qualified candidates)
-- **Job #8 integration test:** full pipeline rerun → VD receives qualified candidates → fewer text-card fallbacks than baseline
-- Integration test: full pipeline with a known-bad source → rejected before VD
+- ✅ Rejected candidates never reach Visual Director (beat `asset_candidates` immutably rewritten to the qualified set; rejected candidates never reach VD's live per-beat surface)
+- ✅ Qualification artifact (`job_{id}/qualification_report.json`) exists with the documented shape
+- ✅ All 69 existing VD tests pass UNMODIFIED — VD source untouched (blast-radius contained)
+- ✅ **SLICE 12 hard gate:** on the frozen Job #8 research contract, recovery strictly reduces text-card fallbacks vs the all-reject baseline (M < N)
+- ✅ 2031 offline tests pass, 18 deselected, ruff clean, 93%+ coverage
 
 ---
 

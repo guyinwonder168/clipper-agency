@@ -3,11 +3,10 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clipper_agency.config.loader import load_settings
 from clipper_agency.config.schema import NicheConfig
 from clipper_agency.db.connection import close_connection, get_connection
 from clipper_agency.db.schema import initialize_schema
@@ -192,6 +191,7 @@ def mock_packager_output():
 @pytest.fixture
 def mock_probe_video_ok(mocker):
     """Mock probe_video to return valid 1080x1920 h264 video info."""
+
     class MockVideoInfo:
         width = 1080
         height = 1920
@@ -214,25 +214,63 @@ class TestOrchestratorRunPipeline:
     def test_creates_job_in_db(self, db_initialized, tmp_path):
         """Orchestrator should create a job record in the database."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
-            mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             result = orch.run_pipeline(topic="Test topic", niche="test_niche")
 
@@ -246,8 +284,10 @@ class TestOrchestratorRunPipeline:
     def test_stops_on_safety_hard_fail(self, db_initialized):
         """Orchestrator should stop pipeline if safety returns hard_fail."""
         orch = Orchestrator(db_path=db_initialized)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+        ):
             mock_safety.return_value = {"status": "hard_fail", "reason": "Blocked"}
             mock_researcher.return_value = {}
 
@@ -262,28 +302,67 @@ class TestOrchestratorRunPipeline:
     def test_initializes_agent_states(self, db_initialized):
         """Orchestrator should create agent_states for all 7 agents."""
         orch = Orchestrator(db_path=db_initialized)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": []}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": [],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [],
+                "voiceover_path": "",
+            }
             mock_visual.return_value = {"status": "completed", "assets": []}
-            mock_composer.return_value = {"status": "completed", "video_path": "", "thumbnail_path": ""}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": "",
+                "thumbnail_path": "",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             result = orch.run_pipeline(topic="Test", niche="test_niche")
 
         conn = get_connection(db_initialized)
-        expected_agents = ["safety", "segment_producer", "scriptwriter",
-                          "voice_producer", "visual_director", "composer", "reviewer"]
+        expected_agents = [
+            "safety",
+            "segment_producer",
+            "scriptwriter",
+            "voice_producer",
+            "visual_director",
+            "composer",
+            "reviewer",
+        ]
         for agent_name in expected_agents:
             row = conn.execute(
                 "SELECT * FROM agent_states WHERE job_id=? AND agent_name=?",
@@ -294,25 +373,63 @@ class TestOrchestratorRunPipeline:
     def test_full_pipeline_calls_all_agents_in_order(self, db_initialized, tmp_path):
         """Orchestrator should invoke agents in correct sequence."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
-            mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             orch.run_pipeline(topic="Test", niche="test_niche")
 
@@ -331,22 +448,54 @@ class TestOrchestratorRunPipeline:
         orch = Orchestrator(db_path=db_initialized)
         research_brief = "Detailed research about Ariana Grande"
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": research_brief, "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": research_brief,
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [],
+                "voiceover_path": "",
+            }
             mock_visual.return_value = {"status": "completed", "assets": []}
-            mock_composer.return_value = {"status": "completed", "video_path": "", "thumbnail_path": ""}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": "",
+                "thumbnail_path": "",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             orch.run_pipeline(topic="Test", niche="test_niche")
 
@@ -358,22 +507,54 @@ class TestOrchestratorRunPipeline:
     def test_passes_assets_cache_to_safety(self, db_initialized, tmp_path):
         """Orchestrator should pass configured asset workspace to Safety."""
         orch = Orchestrator(db_path=db_initialized)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": []}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": [],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [],
+                "voiceover_path": "",
+            }
             mock_visual.return_value = {"status": "completed", "assets": []}
-            mock_composer.return_value = {"status": "completed", "video_path": "", "thumbnail_path": ""}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": "",
+                "thumbnail_path": "",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             orch.run_pipeline(
                 topic="Test",
@@ -387,22 +568,54 @@ class TestOrchestratorRunPipeline:
     def test_passes_assets_cache_to_scriptwriter(self, db_initialized, tmp_path):
         """Orchestrator should pass configured asset workspace to Scriptwriter."""
         orch = Orchestrator(db_path=db_initialized)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [],
+                "voiceover_path": "",
+            }
             mock_visual.return_value = {"status": "completed", "assets": []}
-            mock_composer.return_value = {"status": "completed", "video_path": "", "thumbnail_path": ""}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": "",
+                "thumbnail_path": "",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             orch.run_pipeline(
                 topic="Test",
@@ -416,26 +629,62 @@ class TestOrchestratorRunPipeline:
     def test_passes_script_and_research_to_voice_and_visual(self, db_initialized, tmp_path):
         """Orchestrator should pass script to voice producer and visual director."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
         script_scenes = [{"scene": 1, "text": "Halo!", "duration": 3}]
         research_sources = [{"url": "https://example.com"}, {"url": "https://example2.com"}]
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "brief", "sources": research_sources}
-            mock_scriptwriter.return_value = {"status": "completed", "script": script_scenes, "caption": "Caption", "hashtags": [], "estimated_duration": 3}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": "v.mp4"}]}
-            mock_composer.return_value = {"status": "completed", "video_path": "final.mp4", "thumbnail_path": "thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "brief",
+                "sources": research_sources,
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": script_scenes,
+                "caption": "Caption",
+                "hashtags": [],
+                "estimated_duration": 3,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": "v.mp4"}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": "final.mp4",
+                "thumbnail_path": "thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             orch.run_pipeline(topic="Test", niche="test_niche")
 
@@ -451,28 +700,63 @@ class TestOrchestratorRunPipeline:
     def test_passes_assets_and_audio_to_composer(self, db_initialized, tmp_path):
         """Orchestrator should pass visual assets and audio to composer."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a1.mp3"; audio.write_bytes(b"x")
-        audio2 = tmp_path / "a2.mp3"; audio2.write_bytes(b"x")
-        asset = tmp_path / "v1.mp4"; asset.write_bytes(b"x")
+        audio = tmp_path / "a1.mp3"
+        audio.write_bytes(b"x")
+        audio2 = tmp_path / "a2.mp3"
+        audio2.write_bytes(b"x")
+        asset = tmp_path / "v1.mp4"
+        asset.write_bytes(b"x")
         audio_files = [str(audio), str(audio2)]
         assets = [{"scene": 1, "source": "pexels", "path": str(asset)}]
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "brief", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": audio_files, "voiceover_path": audio_files[0] if audio_files else ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "brief",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": audio_files,
+                "voiceover_path": audio_files[0] if audio_files else "",
+            }
             mock_visual.return_value = {"status": "completed", "assets": assets}
-            mock_composer.return_value = {"status": "completed", "video_path": "final.mp4", "thumbnail_path": "thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": "final.mp4",
+                "thumbnail_path": "thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             orch.run_pipeline(topic="Test", niche="test_niche")
 
@@ -483,25 +767,63 @@ class TestOrchestratorRunPipeline:
     def test_updates_job_status_on_completion(self, db_initialized, tmp_path):
         """Orchestrator should set job status to COMPLETED on success."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
-            mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             result = orch.run_pipeline(topic="Test", niche="test_niche")
 
@@ -532,22 +854,48 @@ class TestOrchestratorRunPipeline:
     def test_composer_failure_sets_job_failed(self, db_initialized, tmp_path):
         """If composer fails, job should be marked FAILED at the composer stage."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
-            mock_composer.return_value = {"status": "failed", "error": "FFmpeg not found", "video_path": "", "thumbnail_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "failed",
+                "error": "FFmpeg not found",
+                "video_path": "",
+                "thumbnail_path": "",
+            }
             mock_reviewer.return_value = {}
             mock_pkg.return_value = {}
 
@@ -562,18 +910,34 @@ class TestOrchestratorRunPipeline:
         """If voice_producer returns status='failed', pipeline must abort at
         voice_producer stage — not advance to G8 or Composer."""
         orch = Orchestrator(db_path=db_initialized)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "failed", "error": "All TTS providers failed", "audio_files": []}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "failed",
+                "error": "All TTS providers failed",
+                "audio_files": [],
+            }
             mock_visual.return_value = {}
             mock_composer.return_value = {}
             mock_reviewer.return_value = {}
@@ -591,29 +955,50 @@ class TestOrchestratorRunPipeline:
         # Job should be FAILED in DB
         conn = get_connection(db_initialized)
         job = conn.execute(
-            "SELECT status FROM jobs WHERE id = ?", (result["job_id"],),
+            "SELECT status FROM jobs WHERE id = ?",
+            (result["job_id"],),
         ).fetchone()
         assert job["status"] == "FAILED"
 
-    def test_visual_director_failure_aborts_pipeline(self, db_initialized,
-                                                      tmp_path):
+    def test_visual_director_failure_aborts_pipeline(self, db_initialized, tmp_path):
         """If visual_director returns status='failed', pipeline must abort at
         visual_director stage — not advance to G9 or Composer."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "failed", "error": "Asset sourcing failed", "assets": []}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "failed",
+                "error": "Asset sourcing failed",
+                "assets": [],
+            }
             mock_composer.return_value = {}
             mock_reviewer.return_value = {}
             mock_pkg.return_value = {}
@@ -629,32 +1014,71 @@ class TestOrchestratorRunPipeline:
         # Job should be FAILED in DB
         conn = get_connection(db_initialized)
         job = conn.execute(
-            "SELECT status FROM jobs WHERE id = ?", (result["job_id"],),
+            "SELECT status FROM jobs WHERE id = ?",
+            (result["job_id"],),
         ).fetchone()
         assert job["status"] == "FAILED"
 
     def test_default_output_dir(self, db_initialized, tmp_path):
         """Orchestrator should default output_dir to 'outputs'."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
-            mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             orch.run_pipeline(topic="Test", niche="test_niche")
 
@@ -665,25 +1089,63 @@ class TestOrchestratorRunPipeline:
     def test_generates_cost_estimate_data(self, db_initialized, tmp_path):
         """G2 should generate a cost estimate."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
-            mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             result = orch.run_pipeline(topic="Test", niche="test_niche")
 
@@ -699,7 +1161,8 @@ class TestOrchestratorRunPipeline:
         research_contract_path and research_brief_path instead."""
         orch = Orchestrator(db_path=db_initialized)
         # Create real audio so G8 passes
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
         # Simulate the real SegmentProducerAgent output format
         aggregate_sources = {
             "firecrawl_count": 2,
@@ -712,26 +1175,54 @@ class TestOrchestratorRunPipeline:
             ],
         }
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {
                 "status": "completed",
                 "research_brief": "ok",
                 "sources": aggregate_sources,
             }
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
             mock_visual.return_value = {"status": "completed", "assets": []}
-            mock_composer.return_value = {"status": "completed", "video_path": "/tmp/final.mp4", "thumbnail_path": "/tmp/thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": "/tmp/final.mp4",
+                "thumbnail_path": "/tmp/thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             orch.run_pipeline(topic="Test", niche="test_niche")
 
@@ -744,9 +1235,11 @@ class TestOrchestratorRunPipeline:
         """P1: G4 (PostResearchRisk) returning hard_fail must abort the
         pipeline — currently the result is computed but never checked."""
         orch = Orchestrator(db_path=db_initialized)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             # Researcher returns a danger flag that triggers G4 hard_fail
             mock_researcher.return_value = {
@@ -767,24 +1260,55 @@ class TestOrchestratorRunPipeline:
         """P1: When OutputPackager returns status='failed', the job must be
         marked FAILED — currently COMPLETED is set unconditionally."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": ["https://a.com", "https://b.com"]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
-            mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
             # Package returns FAILED
             mock_pkg.return_value = {"status": "failed", "error": "Disk full", "output_dir": "/tmp"}
 
@@ -802,9 +1326,11 @@ class TestOrchestratorRunPipeline:
     def test_g5_hard_fail_aborts_before_scriptwriter(self, db_initialized):
         """G5 hard_fail (no sources) must stop pipeline before Scriptwriter."""
         orch = Orchestrator(db_path=db_initialized)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {
                 "status": "completed",
@@ -822,20 +1348,25 @@ class TestOrchestratorRunPipeline:
     def test_g8_hard_fail_aborts_before_visual(self, db_initialized):
         """G8 hard_fail (no audio) must stop pipeline before Visual Director."""
         orch = Orchestrator(db_path=db_initialized)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {
-                "status": "completed", "research_brief": "ok",
-                "sources": ["https://a.com", "https://b.com"]
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
             }
             mock_scriptwriter.return_value = {
                 "status": "completed",
                 "script": [{"scene": 1, "text": "Test", "duration": 3}],
-                "caption": "Caption", "hashtags": [], "estimated_duration": 3,
+                "caption": "Caption",
+                "hashtags": [],
+                "estimated_duration": 3,
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -858,22 +1389,27 @@ class TestOrchestratorRunPipeline:
         audio_file = tmp_path / "audio.mp3"
         audio_file.write_bytes(b"fake-audio-data")
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+        ):
             # provide enough sources + audio to pass G5/G8
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {
-                "status": "completed", "research_brief": "ok",
+                "status": "completed",
+                "research_brief": "ok",
                 "sources": ["https://a.com", "https://b.com"],
             }
             mock_scriptwriter.return_value = {
                 "status": "completed",
                 "script": [{"scene": 1, "text": "Test", "duration": 3}],
-                "caption": "Caption", "hashtags": [], "estimated_duration": 3,
+                "caption": "Caption",
+                "hashtags": [],
+                "estimated_duration": 3,
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -903,22 +1439,27 @@ class TestOrchestratorRunPipeline:
         asset_path = tmp_path / "scene.mp4"
         asset_path.write_bytes(b"fake-video")
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {
-                "status": "completed", "research_brief": "ok",
+                "status": "completed",
+                "research_brief": "ok",
                 "sources": ["https://a.com"],
             }
             mock_scriptwriter.return_value = {
                 "status": "completed",
                 "script": [{"scene": 1, "text": "Test", "duration": 3}],
-                "caption": "Caption", "hashtags": [], "estimated_duration": 3,
+                "caption": "Caption",
+                "hashtags": [],
+                "estimated_duration": 3,
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -964,23 +1505,28 @@ class TestOrchestratorRunPipeline:
         asset_path = asset_dir / "scene_1.mp4"
         asset_path.write_bytes(b"fake-video")
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {
-                "status": "completed", "research_brief": "ok",
+                "status": "completed",
+                "research_brief": "ok",
                 "sources": ["https://a.com", "https://b.com"],
             }
             mock_scriptwriter.return_value = {
                 "status": "completed",
                 "script": [{"scene": 1, "text": "Test", "duration": 3}],
-                "caption": "Caption", "hashtags": [], "estimated_duration": 3,
+                "caption": "Caption",
+                "hashtags": [],
+                "estimated_duration": 3,
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -997,16 +1543,24 @@ class TestOrchestratorRunPipeline:
                 "thumbnail_path": "/tmp/thumb.png",
             }
             mock_reviewer.return_value = {
-                "status": "pass", "score": 80, "feedback": "ok", "issues": [],
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
             }
             mock_pkg.return_value = {
-                "status": "completed", "output_dir": "/tmp",
-                "video_path": "", "caption_path": "", "thumbnail_path": "",
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
                 "metadata_path": "",
             }
 
             result = orch.run_pipeline(
-                topic="Test", niche="test_niche", assets_cache=assets_cache,
+                topic="Test",
+                niche="test_niche",
+                assets_cache=assets_cache,
             )
 
         assert result["status"] == "completed"
@@ -1021,9 +1575,14 @@ class TestOrchestratorRunPipeline:
 
         # All 9 remaining gates should be under the actual job_id
         expected_gates = [
-            "G2_cost_estimate", "G3_research_cache",
-            "G4_post_research_risk", "G5_source_quality", "G6_creative_memory",
-            "G7_script_validation", "G8_audio_validation", "G9_asset_validation",
+            "G2_cost_estimate",
+            "G3_research_cache",
+            "G4_post_research_risk",
+            "G5_source_quality",
+            "G6_creative_memory",
+            "G7_script_validation",
+            "G8_audio_validation",
+            "G9_asset_validation",
             "G10_video_validation",
         ]
         for gate_name in expected_gates:
@@ -1039,28 +1598,39 @@ class TestOrchestratorRunPipeline:
     def test_agent_states_transition_to_completed(self, db_initialized, tmp_path):
         """All agent states should transition pending→running→completed."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {
-                "status": "completed", "research_brief": "ok",
+                "status": "completed",
+                "research_brief": "ok",
                 "sources": ["https://a.com", "https://b.com"],
             }
             mock_scriptwriter.return_value = {
-                "status": "completed", "script": [],
-                "caption": "", "hashtags": [], "estimated_duration": 0,
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
             }
             mock_voice.return_value = {
-                "status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio),
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
             }
             mock_visual.return_value = {
                 "status": "completed",
@@ -1068,14 +1638,21 @@ class TestOrchestratorRunPipeline:
             }
             mock_composer.return_value = {
                 "status": "completed",
-                "video_path": str(video), "thumbnail_path": "/tmp/thumb.png",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
             }
             mock_reviewer.return_value = {
-                "status": "pass", "score": 80, "feedback": "ok", "issues": [],
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
             }
             mock_pkg.return_value = {
-                "status": "completed", "output_dir": "/tmp",
-                "video_path": "", "caption_path": "", "thumbnail_path": "",
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
                 "metadata_path": "",
             }
 
@@ -1083,9 +1660,15 @@ class TestOrchestratorRunPipeline:
 
         assert result["status"] == "completed"
         conn = get_connection(db_initialized)
-        expected_agents = ["safety", "segment_producer", "scriptwriter",
-                          "voice_producer", "visual_director", "composer",
-                          "reviewer"]
+        expected_agents = [
+            "safety",
+            "segment_producer",
+            "scriptwriter",
+            "voice_producer",
+            "visual_director",
+            "composer",
+            "reviewer",
+        ]
         for agent_name in expected_agents:
             state = conn.execute(
                 "SELECT state, started_at, completed_at FROM agent_states "
@@ -1093,21 +1676,23 @@ class TestOrchestratorRunPipeline:
                 (result["job_id"], agent_name),
             ).fetchone()
             assert state is not None, f"Missing state for {agent_name}"
-            assert state["state"] == "completed", \
+            assert state["state"] == "completed", (
                 f"{agent_name} state is '{state['state']}', expected 'completed'"
-            assert state["started_at"] is not None, \
-                f"{agent_name} started_at is null"
-            assert state["completed_at"] is not None, \
-                f"{agent_name} completed_at is null"
+            )
+            assert state["started_at"] is not None, f"{agent_name} started_at is null"
+            assert state["completed_at"] is not None, f"{agent_name} completed_at is null"
 
     def test_failed_agent_state_persists(self, db_initialized):
         """Failed agent should have state=failed with error_message."""
         orch = Orchestrator(db_path=db_initialized)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {
-                "status": "completed", "research_brief": "ok",
+                "status": "completed",
+                "research_brief": "ok",
                 "sources": [],
                 "risk_flags": ["defamation"],
             }
@@ -1139,25 +1724,63 @@ class TestConfigSnapshot:
     def test_pipeline_stores_config_snapshot_in_db(self, db_initialized, tmp_path):
         """run_pipeline should persist config_snapshot in the jobs table."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": [{"url": "https://a.com", "title": "S1"}]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
-            mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": [{"url": "https://a.com", "title": "S1"}],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             result = orch.run_pipeline(topic="Test topic", niche="test_niche")
 
@@ -1175,31 +1798,71 @@ class TestConfigSnapshot:
     def test_manifest_includes_config_snapshot(self, db_initialized, tmp_path):
         """Manifest should include config_snapshot field."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety,\
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher,\
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,\
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice,\
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual,\
-             patch.object(Orchestrator, "_run_composer") as mock_composer,\
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,\
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": [{"url": "https://a.com", "title": "S1"}]}
-            mock_scriptwriter.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_voice.return_value = {"status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio)}
-            mock_visual.return_value = {"status": "completed", "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}]}
-            mock_composer.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": "/tmp/thumb.png"}
-            mock_reviewer.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": [{"url": "https://a.com", "title": "S1"}],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
-            result = orch.run_pipeline(topic="Test topic", niche="test_niche",
-                                       assets_cache=str(tmp_path / "cache"))
+            result = orch.run_pipeline(
+                topic="Test topic", niche="test_niche", assets_cache=str(tmp_path / "cache")
+            )
 
         assert result["status"] == "completed"
         from clipper_agency.core.manifest import load_manifest
+
         ac = str(tmp_path / "cache")
         manifest = load_manifest(ac, result["job_id"])
         assert "config_snapshot" in manifest
@@ -1211,29 +1874,44 @@ class TestRunPipelineFrom:
     """Tests for retry/resume pipeline execution from a specific agent."""
 
     def _setup_completed_job(
-        self, db_path: str, assets_cache: str, output_dir: str,
-        completed_agents: list[str], failed_agent: str | None = None,
+        self,
+        db_path: str,
+        assets_cache: str,
+        output_dir: str,
+        completed_agents: list[str],
+        failed_agent: str | None = None,
         config_snapshot: dict | None = None,
     ) -> int:
         """Create a job with completed/failed agent states and output artifacts."""
         from clipper_agency.db.connection import get_connection as _get_conn
         from clipper_agency.db.queries import (
-            create_agent_state, create_job, mark_agent_completed,
-            mark_agent_failed, update_job_status,
+            create_agent_state,
+            create_job,
+            mark_agent_completed,
+            mark_agent_failed,
+            update_job_status,
         )
         from clipper_agency.db.schema import initialize_schema as _init
 
         conn = _get_conn(db_path)
         _init(conn)
         snapshot = config_snapshot or {
-            "topic": "Test topic", "niche": "test_niche",
-            "output_dir": output_dir, "assets_cache": assets_cache,
+            "topic": "Test topic",
+            "niche": "test_niche",
+            "output_dir": output_dir,
+            "assets_cache": assets_cache,
         }
-        job_id = create_job(conn, "Test topic", "test_niche",
-                            config_snapshot=snapshot)
+        job_id = create_job(conn, "Test topic", "test_niche", config_snapshot=snapshot)
 
-        all_agents = ["safety", "segment_producer", "scriptwriter",
-                      "voice_producer", "visual_director", "composer", "reviewer"]
+        all_agents = [
+            "safety",
+            "segment_producer",
+            "scriptwriter",
+            "voice_producer",
+            "visual_director",
+            "composer",
+            "reviewer",
+        ]
         for name in all_agents:
             create_agent_state(conn, job_id, name)
 
@@ -1246,6 +1924,7 @@ class TestRunPipelineFrom:
 
         # Write output.json for completed agents
         from pathlib import Path as _P
+
         agent_outputs = {
             "safety": {"status": "pass", "reason": "Safe"},
             "segment_producer": {
@@ -1263,27 +1942,45 @@ class TestRunPipelineFrom:
             },
             "voice_producer": {
                 "status": "completed",
-                "audio_files": [f"{assets_cache}/job_{job_id}/agents/voice_producer/voices/scene_1.mp3"],
+                "audio_files": [
+                    f"{assets_cache}/job_{job_id}/agents/voice_producer/voices/scene_1.mp3"
+                ],
             },
             "visual_director": {
                 "status": "completed",
-                "assets": [{"scene": 1, "source": "pexels", "path": f"{assets_cache}/job_{job_id}/agents/visual_director/scenes/scene_1.mp4"}],
+                "assets": [
+                    {
+                        "scene": 1,
+                        "source": "pexels",
+                        "path": f"{assets_cache}/job_{job_id}/agents/visual_director/scenes/scene_1.mp4",
+                    }
+                ],
             },
         }
         for agent_name, output in agent_outputs.items():
             if agent_name in completed_agents:
-                out_path = _P(assets_cache) / f"job_{job_id}" / "agents" / agent_name / "output.json"
+                out_path = (
+                    _P(assets_cache) / f"job_{job_id}" / "agents" / agent_name / "output.json"
+                )
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 out_path.write_text(json.dumps(output), encoding="utf-8")
 
         # Write manifest
         manifest_path = _P(assets_cache) / f"job_{job_id}" / "manifest.json"
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        manifest_path.write_text(json.dumps({
-            "job_id": job_id, "topic": "Test topic",
-            "config_snapshot": snapshot,
-            "agents": {}, "gates": {}, "final_outputs": {},
-        }), encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "topic": "Test topic",
+                    "config_snapshot": snapshot,
+                    "agents": {},
+                    "gates": {},
+                    "final_outputs": {},
+                }
+            ),
+            encoding="utf-8",
+        )
 
         close_connection(db_path)
         return job_id
@@ -1293,29 +1990,55 @@ class TestRunPipelineFrom:
         ac = str(tmp_path / "cache")
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
-            db_initialized, ac, od,
+            db_initialized,
+            ac,
+            od,
             completed_agents=["safety"],
         )
         orch = Orchestrator(db_path=db_initialized)
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety, \
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher, \
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_sw, \
-             patch.object(Orchestrator, "_run_voice_producer") as mock_vp, \
-              patch.object(Orchestrator, "_run_visual_director") as mock_vd, \
-              patch.object(Orchestrator, "_run_composer") as mock_comp, \
-              patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-              patch.object(Orchestrator, "_package_output") as mock_pkg:
-             mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": [{"url": "https://a.com", "title": "S1"}]}
-             mock_sw.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-             mock_vp.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
-             mock_vd.return_value = {"status": "completed", "assets": []}
-             mock_comp.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": ""}
-             mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-             mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_sw,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_vp,
+            patch.object(Orchestrator, "_run_visual_director") as mock_vd,
+            patch.object(Orchestrator, "_run_composer") as mock_comp,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": [{"url": "https://a.com", "title": "S1"}],
+            }
+            mock_sw.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_vp.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
+            mock_vd.return_value = {"status": "completed", "assets": []}
+            mock_comp.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "",
+            }
+            mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
-             result = orch.run_pipeline_from(job_id, from_agent="segment_producer")
+            result = orch.run_pipeline_from(job_id, from_agent="segment_producer")
 
         assert result["status"] == "completed"
         mock_safety.assert_not_called()
@@ -1326,37 +2049,67 @@ class TestRunPipelineFrom:
         ac = str(tmp_path / "cache")
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
-            db_initialized, ac, od,
+            db_initialized,
+            ac,
+            od,
             completed_agents=[],
         )
         orch = Orchestrator(db_path=db_initialized)
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety, \
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher, \
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_sw, \
-             patch.object(Orchestrator, "_run_voice_producer") as mock_vp, \
-             patch.object(Orchestrator, "_run_visual_director") as mock_vd, \
-             patch.object(Orchestrator, "_run_composer") as mock_comp, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_sw,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_vp,
+            patch.object(Orchestrator, "_run_visual_director") as mock_vd,
+            patch.object(Orchestrator, "_run_composer") as mock_comp,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
-            mock_researcher.return_value = {"status": "completed", "research_brief": "ok", "sources": [{"url": "https://a.com", "title": "S1"}]}
-            mock_sw.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": [{"url": "https://a.com", "title": "S1"}],
+            }
+            mock_sw.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
             mock_vp.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_vd.return_value = {"status": "completed", "assets": []}
-            mock_comp.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": ""}
+            mock_comp.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "",
+            }
             mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             result = orch.run_pipeline_from(job_id, from_agent="safety")
 
         assert result["status"] == "completed"
         mock_safety.assert_called_once()
-        state = get_connection(db_initialized).execute(
-            "SELECT state FROM agent_states WHERE job_id = ? AND agent_name = ?",
-            (job_id, "safety"),
-        ).fetchone()
+        state = (
+            get_connection(db_initialized)
+            .execute(
+                "SELECT state FROM agent_states WHERE job_id = ? AND agent_name = ?",
+                (job_id, "safety"),
+            )
+            .fetchone()
+        )
         assert state["state"] == "completed"
 
     def test_retry_from_composer_reconstructs_all_upstream(self, db_initialized, tmp_path):
@@ -1364,25 +2117,46 @@ class TestRunPipelineFrom:
         ac = str(tmp_path / "cache")
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
-            db_initialized, ac, od,
-            completed_agents=["safety", "segment_producer", "scriptwriter",
-                              "voice_producer", "visual_director"],
+            db_initialized,
+            ac,
+            od,
+            completed_agents=[
+                "safety",
+                "segment_producer",
+                "scriptwriter",
+                "voice_producer",
+                "visual_director",
+            ],
             failed_agent="composer",
         )
         orch = Orchestrator(db_path=db_initialized)
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety, \
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher, \
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_sw, \
-             patch.object(Orchestrator, "_run_voice_producer") as mock_vp, \
-             patch.object(Orchestrator, "_run_visual_director") as mock_vd, \
-             patch.object(Orchestrator, "_run_composer") as mock_comp, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
-            mock_comp.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": ""}
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_sw,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_vp,
+            patch.object(Orchestrator, "_run_visual_director") as mock_vd,
+            patch.object(Orchestrator, "_run_composer") as mock_comp,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
+            mock_comp.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "",
+            }
             mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             result = orch.run_pipeline_from(job_id, from_agent="composer")
 
@@ -1402,29 +2176,51 @@ class TestRunPipelineFrom:
         ac = str(tmp_path / "cache")
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
-            db_initialized, ac, od,
-            completed_agents=["safety", "segment_producer", "scriptwriter",
-                              "voice_producer", "visual_director"],
+            db_initialized,
+            ac,
+            od,
+            completed_agents=[
+                "safety",
+                "segment_producer",
+                "scriptwriter",
+                "voice_producer",
+                "visual_director",
+            ],
             failed_agent="composer",
         )
         orch = Orchestrator(db_path=db_initialized)
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
 
-        with patch.object(Orchestrator, "_run_safety"), \
-             patch.object(Orchestrator, "_run_researcher"), \
-             patch.object(Orchestrator, "_run_scriptwriter"), \
-             patch.object(Orchestrator, "_run_voice_producer"), \
-             patch.object(Orchestrator, "_run_visual_director"), \
-             patch.object(Orchestrator, "_run_composer") as mock_comp, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
-            mock_comp.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": ""}
+        with (
+            patch.object(Orchestrator, "_run_safety"),
+            patch.object(Orchestrator, "_run_researcher"),
+            patch.object(Orchestrator, "_run_scriptwriter"),
+            patch.object(Orchestrator, "_run_voice_producer"),
+            patch.object(Orchestrator, "_run_visual_director"),
+            patch.object(Orchestrator, "_run_composer") as mock_comp,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
+            mock_comp.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "",
+            }
             mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             result = orch.run_pipeline_from(job_id, from_agent="composer")
 
         from clipper_agency.db.connection import get_connection as _gc
+
         conn = _gc(db_initialized)
         job = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
         assert job["status"] == "COMPLETED"
@@ -1436,32 +2232,56 @@ class TestRunPipelineFrom:
         assert result["status"] == "failed"
 
     def test_run_pipeline_from_passes_reconstructed_research_to_scriptwriter(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """run_pipeline_from passes loaded research output to downstream stages."""
         ac = str(tmp_path / "cache")
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
-            db_initialized, ac, od,
+            db_initialized,
+            ac,
+            od,
             completed_agents=["safety", "segment_producer"],
         )
         orch = Orchestrator(db_path=db_initialized)
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
 
-        with patch.object(Orchestrator, "_run_safety"), \
-             patch.object(Orchestrator, "_run_researcher"), \
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_sw, \
-             patch.object(Orchestrator, "_run_voice_producer") as mock_vp, \
-             patch.object(Orchestrator, "_run_visual_director") as mock_vd, \
-             patch.object(Orchestrator, "_run_composer") as mock_comp, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
-            mock_sw.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
+        with (
+            patch.object(Orchestrator, "_run_safety"),
+            patch.object(Orchestrator, "_run_researcher"),
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_sw,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_vp,
+            patch.object(Orchestrator, "_run_visual_director") as mock_vd,
+            patch.object(Orchestrator, "_run_composer") as mock_comp,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
+            mock_sw.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
             mock_vp.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_vd.return_value = {"status": "completed", "assets": []}
-            mock_comp.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": ""}
+            mock_comp.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "",
+            }
             mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
             result = orch.run_pipeline_from(job_id, from_agent="scriptwriter")
 
@@ -1475,36 +2295,55 @@ class TestRunPipelineFrom:
         ac = str(tmp_path / "cache")
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
-            db_initialized, ac, od,
-            completed_agents=["safety", "segment_producer", "scriptwriter",
-                              "voice_producer", "visual_director"],
+            db_initialized,
+            ac,
+            od,
+            completed_agents=[
+                "safety",
+                "segment_producer",
+                "scriptwriter",
+                "voice_producer",
+                "visual_director",
+            ],
             failed_agent="composer",
         )
         # Write valid scriptwriter artifacts
         sw_dir = Path(ac) / f"job_{job_id}" / "agents" / "scriptwriter"
         sw_dir.mkdir(parents=True, exist_ok=True)
-        (sw_dir / "script.json").write_text(json.dumps(
-            [{"scene": 1, "text": "Halo!"}]))
+        (sw_dir / "script.json").write_text(json.dumps([{"scene": 1, "text": "Halo!"}]))
         # Write valid voice producer artifacts
         vp_dir = Path(ac) / f"job_{job_id}" / "agents" / "voice_producer" / "voices"
         vp_dir.mkdir(parents=True, exist_ok=True)
         (vp_dir / "scene_1.mp3").write_bytes(b"x" * 100)
 
         orch = Orchestrator(db_path=db_initialized)
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety, \
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_sw, \
-             patch.object(Orchestrator, "_run_voice_producer") as mock_vp, \
-             patch.object(Orchestrator, "_run_composer") as mock_comp, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
-            mock_comp.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": ""}
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_sw,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_vp,
+            patch.object(Orchestrator, "_run_composer") as mock_comp,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
+            mock_comp.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "",
+            }
             mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
-            result = orch.run_pipeline_from(
-                job_id, from_agent="composer", use_cache=True)
+            result = orch.run_pipeline_from(job_id, from_agent="composer", use_cache=True)
 
         assert result["status"] == "completed"
         mock_safety.assert_not_called()
@@ -1517,31 +2356,57 @@ class TestRunPipelineFrom:
         ac = str(tmp_path / "cache")
         od = str(tmp_path / "outputs")
         job_id = self._setup_completed_job(
-            db_initialized, ac, od,
-            completed_agents=["safety", "segment_producer", "scriptwriter",
-                              "voice_producer", "visual_director"],
+            db_initialized,
+            ac,
+            od,
+            completed_agents=[
+                "safety",
+                "segment_producer",
+                "scriptwriter",
+                "voice_producer",
+                "visual_director",
+            ],
             failed_agent="composer",
         )
         # scriptwriter has output.json but NO script.json → validation fails
         # (the _setup_completed_job only writes output.json, not script.json)
         orch = Orchestrator(db_path=db_initialized)
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
 
-        with patch.object(Orchestrator, "_run_safety"), \
-             patch.object(Orchestrator, "_run_researcher"), \
-             patch.object(Orchestrator, "_run_content_scriptwriter") as mock_sw, \
-             patch.object(Orchestrator, "_run_content_voice"), \
-             patch.object(Orchestrator, "_run_visual_director_phase"), \
-             patch.object(Orchestrator, "_run_composer") as mock_comp, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
-            mock_sw.return_value = {"status": "completed", "script": [], "caption": "", "hashtags": [], "estimated_duration": 0}
-            mock_comp.return_value = {"status": "completed", "video_path": str(video), "thumbnail_path": ""}
+        with (
+            patch.object(Orchestrator, "_run_safety"),
+            patch.object(Orchestrator, "_run_researcher"),
+            patch.object(Orchestrator, "_run_content_scriptwriter") as mock_sw,
+            patch.object(Orchestrator, "_run_content_voice"),
+            patch.object(Orchestrator, "_run_visual_director_phase"),
+            patch.object(Orchestrator, "_run_composer") as mock_comp,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
+            mock_sw.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+            }
+            mock_comp.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "",
+            }
             mock_rev.return_value = {"status": "pass", "score": 80, "feedback": "ok", "issues": []}
-            mock_pkg.return_value = {"status": "completed", "output_dir": "/tmp", "video_path": "", "caption_path": "", "thumbnail_path": "", "metadata_path": ""}
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
 
-            result = orch.run_pipeline_from(
-                job_id, from_agent="scriptwriter", use_cache=True)
+            result = orch.run_pipeline_from(job_id, from_agent="scriptwriter", use_cache=True)
 
         assert result["status"] == "completed"
         # scriptwriter should be re-run because cache was invalid
@@ -1549,34 +2414,43 @@ class TestRunPipelineFrom:
 
     # ── Phase 15a: Template name propagation ────────────────────────
 
-    def test_template_name_propagates_to_package_metadata(
-        self, db_initialized, tmp_path
-    ):
+    def test_template_name_propagates_to_package_metadata(self, db_initialized, tmp_path):
         """Composer template_name must flow through engine to packager metadata."""
         orch = Orchestrator(db_path=db_initialized)
-        audio = tmp_path / "a.mp3"; audio.write_bytes(b"x")
-        asset = tmp_path / "v.mp4"; asset.write_bytes(b"x")
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety, \
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher, \
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_sw, \
-             patch.object(Orchestrator, "_run_voice_producer") as mock_voice, \
-             patch.object(Orchestrator, "_run_visual_director") as mock_visual, \
-             patch.object(Orchestrator, "_run_composer") as mock_composer, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_reviewer, \
-             patch("clipper_agency.orchestrator.engine.OutputPackager") as mock_pkg_cls:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_sw,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch("clipper_agency.orchestrator.engine.OutputPackager") as mock_pkg_cls,
+        ):
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             mock_researcher.return_value = {
-                "status": "completed", "research_brief": "brief",
+                "status": "completed",
+                "research_brief": "brief",
                 "sources": ["https://a.com", "https://b.com"],
             }
             mock_sw.return_value = {
-                "status": "completed", "script": [], "caption": "cap",
-                "hashtags": [], "estimated_duration": 0,
+                "status": "completed",
+                "script": [],
+                "caption": "cap",
+                "hashtags": [],
+                "estimated_duration": 0,
             }
             mock_voice.return_value = {
-                "status": "completed", "audio_files": [str(audio)], "voiceover_path": str(audio),
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
             }
             mock_visual.return_value = {
                 "status": "completed",
@@ -1589,13 +2463,19 @@ class TestRunPipelineFrom:
                 "template_name": "news_card",
             }
             mock_reviewer.return_value = {
-                "status": "pass", "score": 80, "feedback": "ok", "issues": [],
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
             }
             mock_pkg_inst = mock_pkg_cls.return_value
             mock_pkg_inst.package.return_value = {
-                "status": "completed", "output_dir": str(tmp_path),
-                "video_path": str(video), "caption_path": "",
-                "thumbnail_path": "", "metadata_path": "",
+                "status": "completed",
+                "output_dir": str(tmp_path),
+                "video_path": str(video),
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
             }
 
             result = orch.run_pipeline(topic="Test", niche="test_niche")
@@ -1611,13 +2491,22 @@ class TestRunPipelineFrom:
         od = str(tmp_path / "outputs")
         # Create a job with niche_ctx already in the snapshot
         job_id = self._setup_completed_job(
-            db_initialized, ac, od,
-            completed_agents=["safety", "segment_producer", "scriptwriter",
-                              "voice_producer", "visual_director"],
+            db_initialized,
+            ac,
+            od,
+            completed_agents=[
+                "safety",
+                "segment_producer",
+                "scriptwriter",
+                "voice_producer",
+                "visual_director",
+            ],
             failed_agent="composer",
             config_snapshot={
-                "topic": "Test topic", "niche": "test_niche",
-                "output_dir": od, "assets_cache": ac,
+                "topic": "Test topic",
+                "niche": "test_niche",
+                "output_dir": od,
+                "assets_cache": ac,
                 "niche_ctx": {
                     "safety_rules": ["custom_rule"],
                     "channel_description": "Snapshot-based description",
@@ -1628,27 +2517,37 @@ class TestRunPipelineFrom:
             },
         )
         orch = Orchestrator(db_path=db_initialized)
-        video = tmp_path / "out.mp4"; video.write_bytes(b"X" * 2048)
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
 
-        with patch.object(Orchestrator, "_run_safety") as mock_safety, \
-             patch.object(Orchestrator, "_run_researcher") as mock_researcher, \
-             patch.object(Orchestrator, "_run_scriptwriter") as mock_sw, \
-             patch.object(Orchestrator, "_run_voice_producer") as mock_vp, \
-             patch.object(Orchestrator, "_run_visual_director") as mock_vd, \
-             patch.object(Orchestrator, "_run_composer") as mock_comp, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_package_output") as mock_pkg:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_sw,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_vp,
+            patch.object(Orchestrator, "_run_visual_director") as mock_vd,
+            patch.object(Orchestrator, "_run_composer") as mock_comp,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
             mock_comp.return_value = {
                 "status": "completed",
-                "video_path": str(video), "thumbnail_path": "",
+                "video_path": str(video),
+                "thumbnail_path": "",
             }
             mock_rev.return_value = {
-                "status": "pass", "score": 80, "feedback": "ok", "issues": [],
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
             }
             mock_pkg.return_value = {
-                "status": "completed", "output_dir": "/tmp",
-                "video_path": "", "caption_path": "",
-                "thumbnail_path": "", "metadata_path": "",
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
             }
 
             result = orch.run_pipeline_from(job_id, from_agent="composer")
@@ -1699,14 +2598,18 @@ class TestEngineHelpers:
             mock_cls.return_value = mock_agent
 
             result = orch._run_researcher(
-                job_id=2, topic="Topic", safety_rules=["r1"],
+                job_id=2,
+                topic="Topic",
+                safety_rules=["r1"],
                 output_dir="/out",
             )
 
         mock_cls.assert_called_once()
         mock_agent.execute.assert_called_once_with(
-            job_id=2, topic="Topic",
-            safety_rules=["r1"], output_dir="/out",
+            job_id=2,
+            topic="Topic",
+            safety_rules=["r1"],
+            output_dir="/out",
         )
         assert result == {"status": "completed"}
 
@@ -1719,14 +2622,18 @@ class TestEngineHelpers:
             mock_cls.return_value = mock_agent
 
             result = orch._run_scriptwriter(
-                job_id=3, topic="Topic",
-                research_brief="brief", safety_rules=["r1"],
+                job_id=3,
+                topic="Topic",
+                research_brief="brief",
+                safety_rules=["r1"],
             )
 
         mock_cls.assert_called_once()
         mock_agent.execute.assert_called_once_with(
-            job_id=3, topic="Topic",
-            research_brief="brief", safety_rules=["r1"],
+            job_id=3,
+            topic="Topic",
+            research_brief="brief",
+            safety_rules=["r1"],
         )
         assert result == {"status": "completed"}
 
@@ -1739,13 +2646,16 @@ class TestEngineHelpers:
             mock_cls.return_value = mock_agent
 
             result = orch._run_voice_producer(
-                job_id=4, script=[{"scene": 1}],
+                job_id=4,
+                script=[{"scene": 1}],
                 output_dir="/out",
             )
 
         mock_cls.assert_called_once()
         mock_agent.execute.assert_called_once_with(
-            job_id=4, script=[{"scene": 1}], output_dir="/out",
+            job_id=4,
+            script=[{"scene": 1}],
+            output_dir="/out",
         )
         assert result == {"status": "completed"}
 
@@ -1758,15 +2668,19 @@ class TestEngineHelpers:
             mock_cls.return_value = mock_agent
 
             result = orch._run_visual_director(
-                job_id=5, script=[{"scene": 1}],
-                topic="Topic", source_urls=["https://a.com"],
+                job_id=5,
+                script=[{"scene": 1}],
+                topic="Topic",
+                source_urls=["https://a.com"],
                 output_dir="/out",
             )
 
         mock_cls.assert_called_once()
         mock_agent.execute.assert_called_once_with(
-            job_id=5, script=[{"scene": 1}],
-            topic="Topic", source_urls=["https://a.com"],
+            job_id=5,
+            script=[{"scene": 1}],
+            topic="Topic",
+            source_urls=["https://a.com"],
             output_dir="/out",
         )
         assert result == {"status": "completed"}
@@ -1780,14 +2694,18 @@ class TestEngineHelpers:
             mock_cls.return_value = mock_agent
 
             result = orch._run_composer(
-                job_id=6, assets=[{"path": "v.mp4"}],
-                audio_files=["a.mp3"], output_dir="/out",
+                job_id=6,
+                assets=[{"path": "v.mp4"}],
+                audio_files=["a.mp3"],
+                output_dir="/out",
             )
 
         mock_cls.assert_called_once()
         mock_agent.execute.assert_called_once_with(
-            job_id=6, assets=[{"path": "v.mp4"}],
-            audio_files=["a.mp3"], output_dir="/out",
+            job_id=6,
+            assets=[{"path": "v.mp4"}],
+            audio_files=["a.mp3"],
+            output_dir="/out",
         )
         assert result == {"status": "completed"}
 
@@ -1800,15 +2718,19 @@ class TestEngineHelpers:
             mock_cls.return_value = mock_agent
 
             result = orch._run_reviewer(
-                job_id=7, topic="Topic",
-                script=[{"scene": 1}], caption="cap",
+                job_id=7,
+                topic="Topic",
+                script=[{"scene": 1}],
+                caption="cap",
                 safety_rules=["r1"],
             )
 
         mock_cls.assert_called_once()
         mock_agent.execute.assert_called_once_with(
-            job_id=7, topic="Topic",
-            script=[{"scene": 1}], caption="cap",
+            job_id=7,
+            topic="Topic",
+            script=[{"scene": 1}],
+            caption="cap",
             safety_rules=["r1"],
         )
         assert result == {"status": "pass"}
@@ -1851,15 +2773,20 @@ class TestEngineHelpers:
     # ── _try_load_cached (lines 402-415) ──
 
     def test_try_load_cached_returns_output_on_valid_cache(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """_try_load_cached returns cached output when validation passes."""
         orch = Orchestrator(db_path=db_initialized)
         cached_data = {"status": "completed", "from_cache": True}
 
-        with patch("clipper_agency.orchestrator.engine.validate_agent_cache") as mock_validate, \
-             patch.object(orch, "_load_agent_output", return_value=cached_data):
+        with (
+            patch("clipper_agency.orchestrator.engine.validate_agent_cache") as mock_validate,
+            patch.object(orch, "_load_agent_output", return_value=cached_data),
+        ):
             from clipper_agency.core.validation import ValidationResult
+
             mock_validate.return_value = ValidationResult(passed=True)
 
             result = orch._try_load_cached("/cache", 1, "scriptwriter")
@@ -1867,15 +2794,18 @@ class TestEngineHelpers:
         assert result == cached_data
 
     def test_try_load_cached_returns_empty_on_invalid_cache(
-        self, db_initialized,
+        self,
+        db_initialized,
     ):
         """_try_load_cached returns {} when cache validation fails."""
         orch = Orchestrator(db_path=db_initialized)
 
         with patch("clipper_agency.orchestrator.engine.validate_agent_cache") as mock_validate:
             from clipper_agency.core.validation import ValidationResult
+
             mock_validate.return_value = ValidationResult(
-                passed=False, issues=["missing artifact"],
+                passed=False,
+                issues=["missing artifact"],
             )
 
             result = orch._try_load_cached("/cache", 1, "scriptwriter")
@@ -1891,7 +2821,11 @@ class TestEngineHelpers:
 
         with patch.object(orch, "_try_load_cached") as mock_cache:
             result = orch._run_cached_or_fresh(
-                "agent", False, "/cache", 1, run_fn,
+                "agent",
+                False,
+                "/cache",
+                1,
+                run_fn,
             )
 
         mock_cache.assert_not_called()
@@ -1906,7 +2840,11 @@ class TestEngineHelpers:
 
         with patch.object(orch, "_try_load_cached", return_value=cached):
             result = orch._run_cached_or_fresh(
-                "agent", True, "/cache", 1, run_fn,
+                "agent",
+                True,
+                "/cache",
+                1,
+                run_fn,
             )
 
         run_fn.assert_not_called()
@@ -1919,7 +2857,11 @@ class TestEngineHelpers:
 
         with patch.object(orch, "_try_load_cached", return_value={}):
             result = orch._run_cached_or_fresh(
-                "agent", True, "/cache", 1, run_fn,
+                "agent",
+                True,
+                "/cache",
+                1,
+                run_fn,
             )
 
         run_fn.assert_called_once()
@@ -1928,7 +2870,9 @@ class TestEngineHelpers:
     # ── _run_visual_director_phase (lines 429-452) ──
 
     def test_visual_director_phase_passes_research_paths(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """Engine passes research_contract_path and research_brief_path."""
         orch = Orchestrator(db_path=db_initialized)
@@ -1940,13 +2884,21 @@ class TestEngineHelpers:
                 ],
             },
         }
-        with patch.object(orch, "_run_visual_director") as mock_vd, \
-             patch.object(orch, "_complete_agent"):
+        with (
+            patch.object(orch, "_run_visual_director") as mock_vd,
+            patch.object(orch, "_complete_agent"),
+            patch.object(orch, "_apply_asset_qualification", return_value=([], [])),
+        ):
             mock_vd.return_value = {"status": "completed"}
 
             orch._run_visual_director_phase(
-                get_connection(db_initialized), 1, "Topic",
-                research_output, {"script": []}, "/out", "/cache",
+                get_connection(db_initialized),
+                1,
+                "Topic",
+                research_output,
+                {"script": []},
+                "/out",
+                "/cache",
             )
 
         _, kwargs = mock_vd.call_args
@@ -1954,7 +2906,9 @@ class TestEngineHelpers:
         assert "research_brief_path" in kwargs
 
     def test_visual_director_phase_list_sources(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """Engine handles list sources format with research paths."""
         orch = Orchestrator(db_path=db_initialized)
@@ -1964,13 +2918,21 @@ class TestEngineHelpers:
                 {"url": "https://y.com"},
             ],
         }
-        with patch.object(orch, "_run_visual_director") as mock_vd, \
-             patch.object(orch, "_complete_agent"):
+        with (
+            patch.object(orch, "_run_visual_director") as mock_vd,
+            patch.object(orch, "_complete_agent"),
+            patch.object(orch, "_apply_asset_qualification", return_value=([], [])),
+        ):
             mock_vd.return_value = {"status": "completed"}
 
             orch._run_visual_director_phase(
-                get_connection(db_initialized), 1, "Topic",
-                research_output, {"script": []}, "/out", "/cache",
+                get_connection(db_initialized),
+                1,
+                "Topic",
+                research_output,
+                {"script": []},
+                "/out",
+                "/cache",
             )
 
         _, kwargs = mock_vd.call_args
@@ -1978,19 +2940,29 @@ class TestEngineHelpers:
         assert "research_brief_path" in kwargs
 
     def test_visual_director_phase_handles_none_sources(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """Engine handles None sources with empty research paths."""
         orch = Orchestrator(db_path=db_initialized)
         research_output = {"sources": None}
 
-        with patch.object(orch, "_run_visual_director") as mock_vd, \
-             patch.object(orch, "_complete_agent"):
+        with (
+            patch.object(orch, "_run_visual_director") as mock_vd,
+            patch.object(orch, "_complete_agent"),
+            patch.object(orch, "_apply_asset_qualification", return_value=([], [])),
+        ):
             mock_vd.return_value = {"status": "completed"}
 
             orch._run_visual_director_phase(
-                get_connection(db_initialized), 1, "Topic",
-                research_output, {"script": []}, "/out", "/cache",
+                get_connection(db_initialized),
+                1,
+                "Topic",
+                research_output,
+                {"script": []},
+                "/out",
+                "/cache",
             )
 
         _, kwargs = mock_vd.call_args
@@ -2007,7 +2979,8 @@ class TestEngineHelpers:
             mock_safety.return_value = {"status": "pass", "reason": "Safe"}
             # Make researcher raise an exception to hit the except block
             with patch.object(
-                Orchestrator, "_run_researcher",
+                Orchestrator,
+                "_run_researcher",
                 side_effect=RuntimeError("unexpected crash"),
             ):
                 result = orch.run_pipeline(topic="Test", niche="test")
@@ -2024,7 +2997,8 @@ class TestEngineRepairRouting:
     """Engine routes reviewer repair plans to the correct agent."""
 
     def test_engine_persist_repair_plan_from_reviewer(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """When reviewer returns repair_plan, engine persists it to workspace."""
         orch = Orchestrator(db_path=str(tmp_path / "test.db"))
@@ -2059,13 +3033,15 @@ class TestEngineRepairRouting:
         assert len(result["patches"]) == 1
         # Verify persisted to workspace
         from clipper_agency.core.artifacts import read_json
+
         plan_path = Path(ac) / "job_1" / "agents" / "reviewer" / "repair_plan.json"
         assert plan_path.exists()
         persisted = read_json(plan_path)
         assert persisted["decision"] == "revise"
 
     def test_engine_routes_visual_repair_to_visual_director(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """Wrong_event patch routes to visual_director."""
         orch = Orchestrator(db_path=str(tmp_path / "test.db"))
@@ -2097,7 +3073,8 @@ class TestEngineRepairRouting:
         assert result["target_agent"] == "visual_director"
 
     def test_engine_routes_composer_repair_to_composer(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """Black frame patch routes to composer."""
         orch = Orchestrator(db_path=str(tmp_path / "test.db"))
@@ -2173,7 +3150,8 @@ class TestEngineRepairRouting:
         assert result is None
 
     def test_engine_routes_segment_producer_repair(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """Wrong_event with redo_research routes to segment_producer."""
         orch = Orchestrator(db_path=str(tmp_path / "test.db"))
@@ -2214,18 +3192,21 @@ class TestRepairRoutingRules:
     def test_black_frame_routes_to_composer(self, tmp_path):
         """Patch with action=replace_visual + black_frame reason routes to composer."""
         from clipper_agency.core.repair_router import route_repair
+
         patch = {"action": "replace_visual", "reason": "black_frame"}
         assert route_repair(patch) == "composer"
 
     def test_wrong_event_routes_to_visual_director(self, tmp_path):
         """Patch with wrong_event reason routes to visual_director."""
         from clipper_agency.core.repair_router import route_repair
+
         patch = {"action": "replace_visual", "reason": "wrong_event"}
         assert route_repair(patch) == "visual_director"
 
     def test_package_mismatch_routes_to_segment_producer(self, tmp_path):
         """Patch with package_mismatch + narrow_topic routes to segment_producer."""
         from clipper_agency.core.repair_router import route_repair
+
         patch = {"action": "narrow_topic", "reason": "package_mismatch"}
         assert route_repair(patch) == "segment_producer"
 
@@ -2241,8 +3222,9 @@ class TestBoundedRepairLoop:
             "patches": patches,
         }
 
-    def _make_patch(self, beat_id="beat_1", action="replace_visual",
-                    reason="black_frame", rerun_from="composer"):
+    def _make_patch(
+        self, beat_id="beat_1", action="replace_visual", reason="black_frame", rerun_from="composer"
+    ):
         """Build a single patch dict."""
         return {
             "beat_id": beat_id,
@@ -2254,11 +3236,15 @@ class TestBoundedRepairLoop:
     def _setup_repair_job(self, db_path, assets_cache, tmp_path):
         """Create a job with all agents completed, ready for repair."""
         from clipper_agency.db.queries import (
-            create_agent_state, create_job, mark_agent_completed,
+            create_agent_state,
+            create_job,
+            mark_agent_completed,
         )
+
         conn = get_connection(db_path)
         snapshot = {
-            "topic": "Repair test", "niche": "test_niche",
+            "topic": "Repair test",
+            "niche": "test_niche",
             "output_dir": str(tmp_path / "outputs"),
             "assets_cache": assets_cache,
             "niche_ctx": {
@@ -2269,10 +3255,16 @@ class TestBoundedRepairLoop:
                 "content_angle": "Test angle",
             },
         }
-        job_id = create_job(conn, "Repair test", "test_niche",
-                            config_snapshot=snapshot)
-        all_agents = ["safety", "segment_producer", "scriptwriter",
-                      "voice_producer", "visual_director", "composer", "reviewer"]
+        job_id = create_job(conn, "Repair test", "test_niche", config_snapshot=snapshot)
+        all_agents = [
+            "safety",
+            "segment_producer",
+            "scriptwriter",
+            "voice_producer",
+            "visual_director",
+            "composer",
+            "reviewer",
+        ]
         for name in all_agents:
             create_agent_state(conn, job_id, name)
             mark_agent_completed(conn, job_id, name)
@@ -2334,32 +3326,49 @@ class TestBoundedRepairLoop:
             max_cycles=2,
         )
         # first review fails (with different repair patches to avoid repetition), second passes
-        review_outputs = iter([
-            {"status": "fail", "score": 30, "repair_plan": {
-                "decision": "revise", "max_repair_cycles": 2,
-                "patches": [self._make_patch(beat_id="beat_2", reason="freeze_frame",
-                                             rerun_from="composer")],
-            }},
-            {"status": "pass", "score": 90},
-        ])
+        review_outputs = iter(
+            [
+                {
+                    "status": "fail",
+                    "score": 30,
+                    "repair_plan": {
+                        "decision": "revise",
+                        "max_repair_cycles": 2,
+                        "patches": [
+                            self._make_patch(
+                                beat_id="beat_2", reason="freeze_frame", rerun_from="composer"
+                            )
+                        ],
+                    },
+                },
+                {"status": "pass", "score": 90},
+            ]
+        )
 
-        with patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_package_output") as mock_pkg, \
-             patch.object(Orchestrator, "_run_safety"), \
-             patch.object(Orchestrator, "_run_researcher"):
-            mock_comp_stage.return_value = ({
-                "status": "completed",
-                "video_path": str(tmp_path / "out.mp4"),
-                "thumbnail_path": "",
-                "duration_sec": 5.0,
-            }, None)
+        with (
+            patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+            patch.object(Orchestrator, "_run_safety"),
+            patch.object(Orchestrator, "_run_researcher"),
+        ):
+            mock_comp_stage.return_value = (
+                {
+                    "status": "completed",
+                    "video_path": str(tmp_path / "out.mp4"),
+                    "thumbnail_path": "",
+                    "duration_sec": 5.0,
+                },
+                None,
+            )
             mock_rev.side_effect = lambda **kw: next(review_outputs)
             mock_pkg.return_value = {
                 "status": "completed",
                 "output_dir": "/tmp",
-                "video_path": "", "caption_path": "",
-                "thumbnail_path": "", "metadata_path": "",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
             }
 
             result = orch._execute_repair_cycle(
@@ -2391,16 +3400,21 @@ class TestBoundedRepairLoop:
             max_cycles=2,
         )
 
-        with patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_run_safety"), \
-             patch.object(Orchestrator, "_run_researcher"):
-            mock_comp_stage.return_value = ({
-                "status": "completed",
-                "video_path": str(tmp_path / "out.mp4"),
-                "thumbnail_path": "",
-                "duration_sec": 5.0,
-            }, None)
+        with (
+            patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_run_safety"),
+            patch.object(Orchestrator, "_run_researcher"),
+        ):
+            mock_comp_stage.return_value = (
+                {
+                    "status": "completed",
+                    "video_path": str(tmp_path / "out.mp4"),
+                    "thumbnail_path": "",
+                    "duration_sec": 5.0,
+                },
+                None,
+            )
             # Reviewer always fails with a repair plan
             mock_rev.return_value = {
                 "status": "fail",
@@ -2441,8 +3455,9 @@ class TestBoundedRepairLoop:
 
         # Track the patch history — simulate the "before" snapshot having
         # the same patch already
-        from clipper_agency.core.repair_metrics import persist_repair_cycle
         from clipper_agency.config.schema import RepairCycleRecord
+        from clipper_agency.core.repair_metrics import persist_repair_cycle
+
         # Pre-populate a cycle_0 record with the same patch
         record = RepairCycleRecord(
             cycle=0,
@@ -2454,20 +3469,26 @@ class TestBoundedRepairLoop:
         persist_repair_cycle(ac, job_id, record)
         # Also persist the same repair plan as "before"
         from clipper_agency.core.artifacts import write_json
+
         plan_dir = Path(ac) / f"job_{job_id}" / "repair"
         plan_dir.mkdir(parents=True, exist_ok=True)
         write_json(str(plan_dir / "previous_patches.json"), [same_patch])
 
-        with patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_run_safety"), \
-             patch.object(Orchestrator, "_run_researcher"):
-            mock_comp_stage.return_value = ({
-                "status": "completed",
-                "video_path": str(tmp_path / "out.mp4"),
-                "thumbnail_path": "",
-                "duration_sec": 5.0,
-            }, None)
+        with (
+            patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_run_safety"),
+            patch.object(Orchestrator, "_run_researcher"),
+        ):
+            mock_comp_stage.return_value = (
+                {
+                    "status": "completed",
+                    "video_path": str(tmp_path / "out.mp4"),
+                    "thumbnail_path": "",
+                    "duration_sec": 5.0,
+                },
+                None,
+            )
             # First review returns same patches again
             mock_rev.return_value = {
                 "status": "fail",
@@ -2514,23 +3535,30 @@ class TestBoundedRepairLoop:
             max_cycles=2,
         )
 
-        with patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_package_output") as mock_pkg, \
-             patch.object(Orchestrator, "_run_safety"), \
-             patch.object(Orchestrator, "_run_researcher"):
-            mock_comp_stage.return_value = ({
-                "status": "completed",
-                "video_path": str(tmp_path / "out.mp4"),
-                "thumbnail_path": "",
-                "duration_sec": 5.0,
-            }, None)
+        with (
+            patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+            patch.object(Orchestrator, "_run_safety"),
+            patch.object(Orchestrator, "_run_researcher"),
+        ):
+            mock_comp_stage.return_value = (
+                {
+                    "status": "completed",
+                    "video_path": str(tmp_path / "out.mp4"),
+                    "thumbnail_path": "",
+                    "duration_sec": 5.0,
+                },
+                None,
+            )
             mock_rev.return_value = {"status": "pass", "score": 90}
             mock_pkg.return_value = {
                 "status": "completed",
                 "output_dir": "/tmp",
-                "video_path": "", "caption_path": "",
-                "thumbnail_path": "", "metadata_path": "",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
             }
 
             orch._execute_repair_cycle(
@@ -2558,16 +3586,21 @@ class TestBoundedRepairLoop:
             max_cycles=2,
         )
 
-        with patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_run_safety"), \
-             patch.object(Orchestrator, "_run_researcher"):
-            mock_comp_stage.return_value = ({
-                "status": "completed",
-                "video_path": str(tmp_path / "out.mp4"),
-                "thumbnail_path": "",
-                "duration_sec": 5.0,
-            }, None)
+        with (
+            patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_run_safety"),
+            patch.object(Orchestrator, "_run_researcher"),
+        ):
+            mock_comp_stage.return_value = (
+                {
+                    "status": "completed",
+                    "video_path": str(tmp_path / "out.mp4"),
+                    "thumbnail_path": "",
+                    "duration_sec": 5.0,
+                },
+                None,
+            )
             # Reviewer fails without repair plan
             mock_rev.return_value = {"status": "fail", "score": 20}
 
@@ -2600,21 +3633,26 @@ class TestBoundedRepairLoop:
             max_cycles=2,
         )
 
-        with patch.object(Orchestrator, "_run_visual_director_phase") as mock_vd_phase, \
-             patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage, \
-             patch.object(Orchestrator, "_run_reviewer") as mock_rev, \
-             patch.object(Orchestrator, "_run_safety"), \
-             patch.object(Orchestrator, "_run_researcher"):
+        with (
+            patch.object(Orchestrator, "_run_visual_director_phase") as mock_vd_phase,
+            patch.object(Orchestrator, "_retry_composer_stage") as mock_comp_stage,
+            patch.object(Orchestrator, "_run_reviewer") as mock_rev,
+            patch.object(Orchestrator, "_run_safety"),
+            patch.object(Orchestrator, "_run_researcher"),
+        ):
             mock_vd_phase.return_value = {
                 "status": "completed",
                 "assets": [{"scene": 1, "source": "pexels", "path": "v.mp4"}],
             }
-            mock_comp_stage.return_value = ({
-                "status": "completed",
-                "video_path": str(tmp_path / "out.mp4"),
-                "thumbnail_path": "",
-                "duration_sec": 5.0,
-            }, None)
+            mock_comp_stage.return_value = (
+                {
+                    "status": "completed",
+                    "video_path": str(tmp_path / "out.mp4"),
+                    "thumbnail_path": "",
+                    "duration_sec": 5.0,
+                },
+                None,
+            )
             mock_rev.return_value = {"status": "pass", "score": 90}
 
             result = orch._execute_repair_cycle(

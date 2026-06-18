@@ -10,26 +10,23 @@ from pathlib import Path
 from typing import Any
 
 from clipper_agency.agents.composer import ComposerAgent
-from clipper_agency.agents.segment_producer import SegmentProducerAgent
 from clipper_agency.agents.reviewer import ReviewerAgent
 from clipper_agency.agents.safety import SafetyAgent
 from clipper_agency.agents.scriptwriter import ScriptwriterAgent
+from clipper_agency.agents.segment_producer import SegmentProducerAgent
 from clipper_agency.agents.visual_director import VisualDirectorAgent
 from clipper_agency.agents.voice_producer import VoiceProducerAgent
 from clipper_agency.config.loader import (
-    load_settings, load_niche, build_channel_description,
-    get_language_name, get_tone_name, get_angle_name,
-)
-from clipper_agency.core.artifacts import write_json
-from clipper_agency.core.logging import add_job_file_handler, remove_job_file_handler
-from clipper_agency.core.repair_router import route_repair
-from clipper_agency.core.repair_metrics import (
-    compute_repair_cycle_record,
-    extract_quality_snapshot,
-    is_repair_improved,
-    persist_repair_cycle,
+    build_channel_description,
+    get_angle_name,
+    get_language_name,
+    get_tone_name,
+    load_niche,
+    load_settings,
 )
 from clipper_agency.config.schema import RepairPatch, RepairPlan
+from clipper_agency.core.artifacts import write_json
+from clipper_agency.core.logging import add_job_file_handler, remove_job_file_handler
 from clipper_agency.core.manifest import (
     create_manifest,
     update_manifest_agent,
@@ -37,6 +34,13 @@ from clipper_agency.core.manifest import (
     update_manifest_gate,
 )
 from clipper_agency.core.paths import gate_result_file
+from clipper_agency.core.repair_metrics import (
+    compute_repair_cycle_record,
+    extract_quality_snapshot,
+    is_repair_improved,
+    persist_repair_cycle,
+)
+from clipper_agency.core.repair_router import route_repair
 from clipper_agency.core.validation import validate_agent_cache
 from clipper_agency.db.connection import get_connection
 from clipper_agency.db.queries import (
@@ -44,7 +48,6 @@ from clipper_agency.db.queries import (
     append_audit_log,
     create_agent_state,
     create_job,
-    get_agent_state,
     get_job,
     mark_agent_completed,
     mark_agent_failed,
@@ -57,27 +60,27 @@ from clipper_agency.db.queries import (
     update_job_status,
 )
 from clipper_agency.db.schema import initialize_schema
+from clipper_agency.observability.llm_trace import LLMTraceWriter
 from clipper_agency.orchestrator.duration_gate import (
     DurationBudget,
     check_script_duration_budget,
     estimate_script_duration_sec,
 )
 from clipper_agency.orchestrator.gates import (
-    GateResult,
+    GateAssetValidation,
+    GateAudioValidation,
     GateCostEstimate,
+    GateCreativeMemory,
     GateInputPreflight,
     GatePostResearchRisk,
     GateResearchCache,
-    GateSourceQuality,
-    GateCreativeMemory,
+    GateResult,
     GateScriptValidation,
-    GateAudioValidation,
-    GateAssetValidation,
+    GateSourceQuality,
     GateVideoValidation,
 )
 from clipper_agency.orchestrator.validator import validate_content_direction
 from clipper_agency.output.packager import OutputPackager
-from clipper_agency.observability.llm_trace import LLMTraceWriter
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +107,7 @@ _SAME_PATCH_REPEATED = "Identical repair patch repeated"
 @dataclass
 class RepairCycleContext:
     """Shared state for repair cycle helpers (AGENTS.md >5 params rule)."""
+
     cycle: int
     job_id: int
     topic: str
@@ -142,30 +146,33 @@ class Orchestrator:
         update_job_publication_status(conn, job_id, "blocked")
         update_job_repair_status(conn, job_id, "none")
 
-    def _record_gate(self, assets_cache: str, job_id: int,
-                     gate_name: str, result: GateResult) -> str:
+    def _record_gate(
+        self, assets_cache: str, job_id: int, gate_name: str, result: GateResult
+    ) -> str:
         """Persist a gate result to the job workspace."""
         path = gate_result_file(assets_cache, job_id, gate_name)
         write_json(path, asdict(result))
-        update_manifest_gate(assets_cache, job_id, gate_name,
-                            result.passed, result.severity, path)
+        update_manifest_gate(assets_cache, job_id, gate_name, result.passed, result.severity, path)
         return path
 
-    def _complete_agent(self, conn, assets_cache: str, job_id: int,
-                        agent_name: str) -> None:
+    def _complete_agent(self, conn, assets_cache: str, job_id: int, agent_name: str) -> None:
         """Mark agent completed in DB and manifest."""
         mark_agent_completed(conn, job_id, agent_name)
         update_manifest_agent(assets_cache, job_id, agent_name, "completed")
 
     def _fail_agent(
-        self, conn: Any, job_id: int, agent_name: str,
-        output: dict[str, Any], default_reason: str,
+        self,
+        conn: Any,
+        job_id: int,
+        agent_name: str,
+        output: dict[str, Any],
+        default_reason: str,
     ) -> dict[str, Any]:
         """Mark agent failed, update job, return failure dict."""
         error = output.get("error", default_reason)
-        logger.error("%s FAILED: %s",
-                     agent_name.replace("_", " ").title(),
-                     _sanitize_for_log(error))
+        logger.error(
+            "%s FAILED: %s", agent_name.replace("_", " ").title(), _sanitize_for_log(error)
+        )
         mark_agent_failed(conn, job_id, agent_name, error)
         update_job_status(conn, job_id, "FAILED", error)
         return {
@@ -196,7 +203,9 @@ class Orchestrator:
         if current_cycle >= max_cycles:
             logger.warning(
                 "Repair cycle limit reached: %d >= %d for job %d",
-                current_cycle, max_cycles, job_id,
+                current_cycle,
+                max_cycles,
+                job_id,
             )
             return None
 
@@ -231,7 +240,10 @@ class Orchestrator:
         target = route_repair(patches_raw[0])
         logger.info(
             "Repair plan routed to %s (decision=%s, cycle=%d/%d)",
-            target, plan.decision, current_cycle, max_cycles,
+            target,
+            plan.decision,
+            current_cycle,
+            max_cycles,
         )
 
         return {
@@ -243,32 +255,41 @@ class Orchestrator:
     # ── Bounded repair loop (Task 6.2) ──
 
     def _are_patches_identical(
-        self, prev: list[dict], curr: list[dict],
+        self,
+        prev: list[dict],
+        curr: list[dict],
     ) -> bool:
         """Check if two patch lists describe the same repair action."""
         if len(prev) != len(curr):
             return False
         for p, c in zip(prev, curr):
-            if (p.get("beat_id") != c.get("beat_id")
-                    or p.get("action") != c.get("action")
-                    or p.get("reason") != c.get("reason")
-                    or p.get("rerun_from") != c.get("rerun_from")):
+            if (
+                p.get("beat_id") != c.get("beat_id")
+                or p.get("action") != c.get("action")
+                or p.get("reason") != c.get("reason")
+                or p.get("rerun_from") != c.get("rerun_from")
+            ):
                 return False
         return True
 
     def _load_previous_patches(
-        self, assets_cache: str, job_id: int,
+        self,
+        assets_cache: str,
+        job_id: int,
     ) -> list[dict]:
         """Load the previous cycle's patch list for repetition check."""
         repair_dir = Path(assets_cache) / f"job_{job_id}" / "repair"
         prev_path = repair_dir / "previous_patches.json"
         if prev_path.exists():
             from clipper_agency.core.artifacts import read_json
+
             return read_json(str(prev_path))
         return []
 
     def _save_previous_patches(
-        self, assets_cache: str, job_id: int,
+        self,
+        assets_cache: str,
+        job_id: int,
         patches: list[dict],
     ) -> None:
         """Persist the current patch list for next cycle's repetition check."""
@@ -277,9 +298,13 @@ class Orchestrator:
         write_json(str(repair_dir / "previous_patches.json"), patches)
 
     def _handle_review_outcome(
-        self, cycle: int, job_id: int,
-        before_review: dict[str, Any], after_review: dict[str, Any],
-        conn, assets_cache: str,
+        self,
+        cycle: int,
+        job_id: int,
+        before_review: dict[str, Any],
+        after_review: dict[str, Any],
+        conn,
+        assets_cache: str,
     ) -> dict[str, Any]:
         """Handle reviewer outcome: pass, continue with patches, or manual review.
 
@@ -291,8 +316,7 @@ class Orchestrator:
             update_job_quality_status(conn, job_id, "passed")
             update_job_artifact_status(conn, job_id, "approved")
             update_job_publication_status(conn, job_id, "ready")
-            logger.info(
-                "Repair PASSED at cycle %d for job %d", cycle, job_id)
+            logger.info("Repair PASSED at cycle %d for job %d", cycle, job_id)
             return {
                 "_action": "return",
                 "status": "completed",
@@ -316,7 +340,9 @@ class Orchestrator:
         # No LLM repair plan — try deterministic gate failure synthesis
         # (Codex P2 #2: enables multi-gate sequential repair within budget)
         from clipper_agency.core.repair_router import (
-            build_gate_failure_repair_plan,)
+            build_gate_failure_repair_plan,
+        )
+
         gate_plan = build_gate_failure_repair_plan(after_review)
         if gate_plan:
             self._complete_agent(conn, assets_cache, job_id, "reviewer")
@@ -335,7 +361,8 @@ class Orchestrator:
         update_job_quality_status(conn, job_id, "repair_exhausted")
         logger.warning(
             "Repair cycle %d: no repair plan, job %d needs manual review",
-            cycle, job_id,
+            cycle,
+            job_id,
         )
         return {
             "_action": "return",
@@ -346,8 +373,12 @@ class Orchestrator:
         }
 
     def _check_duplicate_patches(
-        self, cycle: int, job_id: int, patches: list[dict],
-        assets_cache: str, conn,
+        self,
+        cycle: int,
+        job_id: int,
+        patches: list[dict],
+        assets_cache: str,
+        conn,
     ) -> dict[str, Any] | None:
         """Return exhaustion dict if patches are identical to previous cycle, else None."""
         prev_patches = self._load_previous_patches(assets_cache, job_id)
@@ -356,17 +387,24 @@ class Orchestrator:
 
         logger.warning(
             "Identical repair patch repeated at cycle %d for job %d",
-            cycle, job_id,
+            cycle,
+            job_id,
         )
         update_job_repair_status(conn, job_id, "exhausted")
         update_job_artifact_status(conn, job_id, "manual_review_required")
         update_job_quality_status(conn, job_id, "repair_exhausted")
         append_audit_log(
-            conn, action="repair_exhausted", actor="engine",
-            resource_type="job", resource_id=job_id,
-            details=json.dumps({
-                "cycle": cycle, "reason": _SAME_PATCH_REPEATED,
-            }),
+            conn,
+            action="repair_exhausted",
+            actor="engine",
+            resource_type="job",
+            resource_id=job_id,
+            details=json.dumps(
+                {
+                    "cycle": cycle,
+                    "reason": _SAME_PATCH_REPEATED,
+                }
+            ),
         )
         return {
             "_action": "return",
@@ -398,12 +436,14 @@ class Orchestrator:
         """
         logger.info(
             "Repair cycle %d/%d: target=%s job=%d",
-            cycle, max_cycles, target_agent, job_id,
+            cycle,
+            max_cycles,
+            target_agent,
+            job_id,
         )
 
         # Check for repeated identical patches
-        exhausted = self._check_duplicate_patches(
-            cycle, job_id, patches, assets_cache, conn)
+        exhausted = self._check_duplicate_patches(cycle, job_id, patches, assets_cache, conn)
         if exhausted:
             return exhausted
 
@@ -412,8 +452,7 @@ class Orchestrator:
 
         # Load niche context
         job = get_job(conn, job_id)
-        snapshot = json.loads(
-            (job.get("config_snapshot") or "{}") if job else "{}")
+        snapshot = json.loads((job.get("config_snapshot") or "{}") if job else "{}")
         niche_ctx = snapshot.get("niche_ctx", {})
 
         # Determine which agent to rerun based on routing
@@ -439,12 +478,10 @@ class Orchestrator:
             if isinstance(cascade, dict):
                 cascade["_action"] = "return"
                 return cascade
-            (research_output, script_output, voice_output,
-             compose_output, beat_timeline) = cascade
+            (research_output, script_output, voice_output, compose_output, beat_timeline) = cascade
         else:
             # VD/Composer repair: reconstruct cached upstream outputs
-            (research_output, script_output, voice_output,
-             compose_output, beat_timeline, abort) = (
+            (research_output, script_output, voice_output, compose_output, beat_timeline, abort) = (
                 self._run_cached_upstream_repair(ctx)
             )
             if abort:
@@ -454,7 +491,8 @@ class Orchestrator:
         # Re-run reviewer
         mark_agent_running(conn, job_id, "reviewer")
         after_review = self._run_reviewer(
-            job_id=job_id, topic=topic,
+            job_id=job_id,
+            topic=topic,
             script=script_output.get("script", []),
             caption=script_output.get("caption", ""),
             safety_rules=niche_ctx.get("safety_rules", []),
@@ -493,8 +531,12 @@ class Orchestrator:
 
         # Check reviewer outcome
         return self._handle_review_outcome(
-            cycle, job_id, before_review, after_review,
-            conn, assets_cache,
+            cycle,
+            job_id,
+            before_review,
+            after_review,
+            conn,
+            assets_cache,
         )
 
     def _rerun_upstream_cascade(
@@ -508,34 +550,39 @@ class Orchestrator:
         """
         # Rerun Segment Producer
         research_output = self._run_researcher(
-            job_id=ctx.job_id, topic=ctx.topic,
+            job_id=ctx.job_id,
+            topic=ctx.topic,
             safety_rules=ctx.niche_ctx.get("safety_rules", []),
             channel_description=ctx.niche_ctx.get("channel_description", ""),
             language=ctx.niche_ctx.get("language", "id"),
             tone=ctx.niche_ctx.get("tone", "informative"),
             content_angle=ctx.niche_ctx.get("content_angle", ""),
-            output_dir=ctx.output_dir, assets_cache=ctx.assets_cache,
+            output_dir=ctx.output_dir,
+            assets_cache=ctx.assets_cache,
         )
         if research_output.get("status") == "failed":
             return self._fail_agent(
-                ctx.conn, ctx.job_id, "segment_producer",
-                research_output, _RESEARCH_FAILED)
+                ctx.conn, ctx.job_id, "segment_producer", research_output, _RESEARCH_FAILED
+            )
         self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "segment_producer")
 
         # Rerun Scriptwriter
         script_output = self._run_content_scriptwriter(
-            ctx.conn, ctx.job_id, ctx.topic,
+            ctx.conn,
+            ctx.job_id,
+            ctx.topic,
             ctx.niche_ctx.get("safety_rules", []),
             ctx.niche_ctx.get("channel_description", ""),
             ctx.niche_ctx.get("language", "id"),
             ctx.niche_ctx.get("tone", "informative"),
             ctx.niche_ctx.get("content_angle", ""),
-            research_output, ctx.assets_cache,
+            research_output,
+            ctx.assets_cache,
         )
         if script_output.get("status") == "failed":
             return self._fail_agent(
-                ctx.conn, ctx.job_id, "scriptwriter", script_output,
-                _SCRIPT_BUDGET_FAILED)
+                ctx.conn, ctx.job_id, "scriptwriter", script_output, _SCRIPT_BUDGET_FAILED
+            )
 
         # Rerun Voice Producer
         mark_agent_running(ctx.conn, ctx.job_id, "voice_producer")
@@ -543,16 +590,18 @@ class Orchestrator:
             job_id=ctx.job_id,
             script=script_output.get("script", []),
             voiceover_text=script_output.get("voiceover_text", ""),
-            output_dir=ctx.output_dir, assets_cache=ctx.assets_cache,
+            output_dir=ctx.output_dir,
+            assets_cache=ctx.assets_cache,
         )
         if voice_output.get("status") == "failed":
             return self._fail_agent(
-                ctx.conn, ctx.job_id, "voice_producer",
-                voice_output, _VOICE_GEN_FAILED)
+                ctx.conn, ctx.job_id, "voice_producer", voice_output, _VOICE_GEN_FAILED
+            )
         self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "voice_producer")
 
         # Rebuild canonical timeline from fresh outputs (ADR 0020)
         from clipper_agency.core.beat_timeline import build_canonical_timeline
+
         beat_timeline = build_canonical_timeline(
             script_output.get("narrative_structure", []),
             voice_output.get("timestamps", []),
@@ -560,26 +609,36 @@ class Orchestrator:
 
         # Rerun Visual Director
         visual_output = self._run_visual_director_phase(
-            ctx.conn, ctx.job_id, ctx.topic, research_output, script_output,
-            ctx.output_dir, ctx.assets_cache, voice_output=voice_output,
+            ctx.conn,
+            ctx.job_id,
+            ctx.topic,
+            research_output,
+            script_output,
+            ctx.output_dir,
+            ctx.assets_cache,
+            voice_output=voice_output,
             beat_timeline=beat_timeline,
         )
         if visual_output.get("status") == "failed":
             return self._fail_agent(
-                ctx.conn, ctx.job_id, "visual_director",
-                visual_output, _ASSET_SOURCING_FAILED)
+                ctx.conn, ctx.job_id, "visual_director", visual_output, _ASSET_SOURCING_FAILED
+            )
 
         # Rerun Composer
         compose_output, abort = self._retry_composer_stage(
-            ctx.conn, ctx.job_id, visual_output, voice_output,
-            ctx.output_dir, ctx.assets_cache, cycle=ctx.cycle,
+            ctx.conn,
+            ctx.job_id,
+            visual_output,
+            voice_output,
+            ctx.output_dir,
+            ctx.assets_cache,
+            cycle=ctx.cycle,
             beat_timeline=beat_timeline,
         )
         if abort:
             return abort
 
-        return (research_output, script_output, voice_output,
-                compose_output, beat_timeline)
+        return (research_output, script_output, voice_output, compose_output, beat_timeline)
 
     def _run_cached_upstream_repair(
         self,
@@ -590,13 +649,17 @@ class Orchestrator:
         Returns (research, script, voice, compose, beat_timeline, abort).
         ``abort`` is None on success, or a failure dict on abort.
         """
-        (research_output, script_output,
-         voice_output, visual_output) = self._reconstruct_upstream_outputs(
-            ctx.target_idx, ctx.assets_cache, ctx.job_id,
+        (research_output, script_output, voice_output, visual_output) = (
+            self._reconstruct_upstream_outputs(
+                ctx.target_idx,
+                ctx.assets_cache,
+                ctx.job_id,
+            )
         )
 
         # Build canonical timeline for repair cycle (ADR 0020)
         from clipper_agency.core.beat_timeline import build_canonical_timeline
+
         beat_timeline = build_canonical_timeline(
             script_output.get("narrative_structure", []),
             voice_output.get("timestamps", []),
@@ -606,24 +669,34 @@ class Orchestrator:
         abort = None
         if ctx.target_agent == "visual_director":
             visual_output = self._run_visual_director_phase(
-                ctx.conn, ctx.job_id, ctx.topic, research_output, script_output,
-                ctx.output_dir, ctx.assets_cache, voice_output=voice_output,
+                ctx.conn,
+                ctx.job_id,
+                ctx.topic,
+                research_output,
+                script_output,
+                ctx.output_dir,
+                ctx.assets_cache,
+                voice_output=voice_output,
                 beat_timeline=beat_timeline,
             )
             if visual_output.get("status") == "failed":
                 abort = self._fail_agent(
-                    ctx.conn, ctx.job_id, "visual_director",
-                    visual_output, _ASSET_SOURCING_FAILED)
+                    ctx.conn, ctx.job_id, "visual_director", visual_output, _ASSET_SOURCING_FAILED
+                )
 
         if not abort and ctx.target_agent in ("visual_director", "composer"):
             compose_output, abort = self._retry_composer_stage(
-                ctx.conn, ctx.job_id, visual_output, voice_output,
-                ctx.output_dir, ctx.assets_cache, cycle=ctx.cycle,
+                ctx.conn,
+                ctx.job_id,
+                visual_output,
+                voice_output,
+                ctx.output_dir,
+                ctx.assets_cache,
+                cycle=ctx.cycle,
                 beat_timeline=beat_timeline,
             )
 
-        return (research_output, script_output, voice_output,
-                compose_output, beat_timeline, abort)
+        return (research_output, script_output, voice_output, compose_output, beat_timeline, abort)
 
     def _execute_repair_cycle(
         self,
@@ -654,14 +727,20 @@ class Orchestrator:
         target_agent = route_repair(patches[0]) if patches else "visual_director"
 
         # Capture before-review snapshot for metrics
-        before_review = self._load_agent_output(
-            assets_cache, job_id, "reviewer")
+        before_review = self._load_agent_output(assets_cache, job_id, "reviewer")
 
         for cycle in range(1, max_cycles + 1):
             result = self._execute_single_repair_cycle(
-                cycle, max_cycles, target_agent, patches,
-                before_review, job_id, assets_cache,
-                output_dir, topic, conn,
+                cycle,
+                max_cycles,
+                target_agent,
+                patches,
+                before_review,
+                job_id,
+                assets_cache,
+                output_dir,
+                topic,
+                conn,
             )
 
             if result["_action"] == "return":
@@ -679,7 +758,8 @@ class Orchestrator:
         update_job_quality_status(conn, job_id, "repair_exhausted")
         logger.warning(
             "Repair EXHAUSTED after %d cycles for job %d",
-            max_cycles, job_id,
+            max_cycles,
+            job_id,
         )
         return {
             "status": "exhausted",
@@ -688,9 +768,9 @@ class Orchestrator:
             "cycle": max_cycles,
         }
 
-    def _enforce_gate(self, conn, job_id: int, gate_name: str,
-                      result: GateResult,
-                      failed_at: str = "") -> dict[str, Any] | None:
+    def _enforce_gate(
+        self, conn, job_id: int, gate_name: str, result: GateResult, failed_at: str = ""
+    ) -> dict[str, Any] | None:
         """Return a failure response dict if gate hard-failed, or None."""
         if not result.passed and result.severity == "hard_fail":
             logger.error("%s FAILED (hard): %s", gate_name, result.message)
@@ -704,20 +784,28 @@ class Orchestrator:
         return None
 
     def _evaluate_and_enforce_gate(
-        self, conn, job_id: int, assets_cache: str,
-        gate_label: str, gate_record_key: str,
-        gate_instance, failed_at: str,
+        self,
+        conn,
+        job_id: int,
+        assets_cache: str,
+        gate_label: str,
+        gate_record_key: str,
+        gate_instance,
+        failed_at: str,
         **evaluate_kwargs: Any,
     ) -> dict[str, Any] | None:
         """Run gate.evaluate(), record result, enforce. Return abort dict or None."""
         g_result = gate_instance.evaluate(**evaluate_kwargs)
         self._record_gate(assets_cache, job_id, gate_record_key, g_result)
-        return self._enforce_gate(
-            conn, job_id, gate_label, g_result, failed_at=failed_at)
+        return self._enforce_gate(conn, job_id, gate_label, g_result, failed_at=failed_at)
 
     def _stage_safety(
-        self, conn: Any, topic: str, niche: str,
-        assets_cache: str, output_dir: str,
+        self,
+        conn: Any,
+        topic: str,
+        niche: str,
+        assets_cache: str,
+        output_dir: str,
         config_snapshot: dict | None = None,
     ) -> tuple[int, dict[str, Any]] | dict[str, Any]:
         """Run G1 preflight, create job, G2 cost, safety agent.
@@ -733,20 +821,32 @@ class Orchestrator:
         if not g1_result.passed:
             logger.error("G1 Preflight FAILED: %s", g1_result.message)
             update_job_status(conn, 0, "FAILED", g1_result.message)
-            return {"status": "failed", "failed_at": "preflight",
-                    "reason": g1_result.message, "job_id": 0}
+            return {
+                "status": "failed",
+                "failed_at": "preflight",
+                "reason": g1_result.message,
+                "job_id": 0,
+            }
 
         # Create job in DB with config snapshot
-        job_id = create_job(conn, topic=topic, niche=niche,
-                            config_snapshot=snapshot)
+        job_id = create_job(conn, topic=topic, niche=niche, config_snapshot=snapshot)
         logger.info("Job #%d created", job_id)
         add_job_file_handler(job_id)
-        create_manifest(assets_cache, job_id, topic,
-                        output_dir if output_dir else "outputs",
-                        config_snapshot=snapshot)
+        create_manifest(
+            assets_cache,
+            job_id,
+            topic,
+            output_dir if output_dir else "outputs",
+            config_snapshot=snapshot,
+        )
         agent_names = [
-            "safety", "segment_producer", "scriptwriter",
-            "voice_producer", "visual_director", "composer", "reviewer",
+            "safety",
+            "segment_producer",
+            "scriptwriter",
+            "voice_producer",
+            "visual_director",
+            "composer",
+            "reviewer",
         ]
         for name in agent_names:
             create_agent_state(conn, job_id, name)
@@ -761,24 +861,35 @@ class Orchestrator:
         logger.info("G2: running Safety agent")
         mark_agent_running(conn, job_id, "safety")
         safety_result = self._run_safety(
-            job_id=job_id, topic=topic, assets_cache=assets_cache,
+            job_id=job_id,
+            topic=topic,
+            assets_cache=assets_cache,
         )
         if safety_result.get("status") == "hard_fail":
             logger.error("Safety FAILED: %s", safety_result.get("reason"))
             mark_agent_failed(conn, job_id, "safety", safety_result["reason"])
             update_job_status(conn, job_id, "FAILED", safety_result["reason"])
             return {
-                "status": "failed", "failed_at": "safety",
-                "reason": safety_result["reason"], "job_id": job_id,
+                "status": "failed",
+                "failed_at": "safety",
+                "reason": safety_result["reason"],
+                "job_id": job_id,
             }
         self._complete_agent(conn, assets_cache, job_id, "safety")
         return job_id, cost_result
 
     def _stage_research(
-        self, conn: Any, job_id: int, topic: str,
-        safety_rules: list[str], channel_description: str,
-        language: str, tone: str, content_angle: str,
-        assets_cache: str, output_dir: str,
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        safety_rules: list[str],
+        channel_description: str,
+        language: str,
+        tone: str,
+        content_angle: str,
+        assets_cache: str,
+        output_dir: str,
     ) -> dict[str, Any]:
         """Run G3→SegmentProducer→G4→G5.
 
@@ -790,10 +901,15 @@ class Orchestrator:
         logger.info("G3: running Segment Producer agent")
         mark_agent_running(conn, job_id, "segment_producer")
         research_output = self._run_researcher(
-            job_id=job_id, topic=topic, safety_rules=safety_rules,
+            job_id=job_id,
+            topic=topic,
+            safety_rules=safety_rules,
             channel_description=channel_description,
-            language=language, tone=tone, content_angle=content_angle,
-            output_dir=output_dir, assets_cache=assets_cache,
+            language=language,
+            tone=tone,
+            content_angle=content_angle,
+            output_dir=output_dir,
+            assets_cache=assets_cache,
         )
         self._complete_agent(conn, assets_cache, job_id, "segment_producer")
 
@@ -801,12 +917,16 @@ class Orchestrator:
         cp_config = load_settings().content_planning
         if cp_config:
             validated = validate_content_direction(
-                research_output.get("content_direction"), cp_config,
+                research_output.get("content_direction"),
+                cp_config,
             )
             research_output["validated_direction"] = validated
-            logger.info("Format validator: format=%s stories=%d fallback=%s",
-                        validated.format, validated.story_count,
-                        validated.fallback)
+            logger.info(
+                "Format validator: format=%s stories=%d fallback=%s",
+                validated.format,
+                validated.story_count,
+                validated.fallback,
+            )
 
         g4 = GatePostResearchRisk()
         g4_result = g4.evaluate(
@@ -816,8 +936,10 @@ class Orchestrator:
         if not g4_result.passed and g4_result.severity == "hard_fail":
             update_job_status(conn, job_id, "FAILED", g4_result.message)
             return {
-                "status": "failed", "failed_at": "post_research_risk",
-                "reason": g4_result.message, "job_id": job_id,
+                "status": "failed",
+                "failed_at": "post_research_risk",
+                "reason": g4_result.message,
+                "job_id": job_id,
             }
 
         g5 = GateSourceQuality()
@@ -825,18 +947,24 @@ class Orchestrator:
             video_sources=research_output.get("sources", []),
         )
         self._record_gate(assets_cache, job_id, "G5_source_quality", g5_result)
-        if abort := self._enforce_gate(conn, job_id, "G5", g5_result,
-                                        failed_at="source_quality"):
+        if abort := self._enforce_gate(conn, job_id, "G5", g5_result, failed_at="source_quality"):
             return abort
 
         return research_output
 
     def _stage_content(
-        self, conn: Any, job_id: int, topic: str,
-        safety_rules: list[str], channel_description: str,
-        language: str, tone: str, content_angle: str,
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        safety_rules: list[str],
+        channel_description: str,
+        language: str,
+        tone: str,
+        content_angle: str,
         research_output: dict[str, Any],
-        assets_cache: str, output_dir: str,
+        assets_cache: str,
+        output_dir: str,
     ) -> tuple[dict[str, Any], dict[str, Any]] | dict[str, Any]:
         """Run G6→Scriptwriter→G7→Voice→G8.
 
@@ -844,14 +972,21 @@ class Orchestrator:
         or a failure dict.
         """
         script_output = self._run_content_scriptwriter(
-            conn, job_id, topic, safety_rules, channel_description,
-            language, tone, content_angle,
-            research_output, assets_cache,
+            conn,
+            job_id,
+            topic,
+            safety_rules,
+            channel_description,
+            language,
+            tone,
+            content_angle,
+            research_output,
+            assets_cache,
         )
         if script_output.get("status") == "failed":
-            return self._fail_agent(conn, job_id, "scriptwriter",
-                                    script_output,
-                                    "Scriptwriter duration exceeded")
+            return self._fail_agent(
+                conn, job_id, "scriptwriter", script_output, "Scriptwriter duration exceeded"
+            )
 
         logger.info("G7: running Voice Producer agent")
         mark_agent_running(conn, job_id, "voice_producer")
@@ -859,28 +994,31 @@ class Orchestrator:
             job_id=job_id,
             script=script_output.get("script", []),
             voiceover_text=script_output.get("voiceover_text", ""),
-            output_dir=output_dir, assets_cache=assets_cache,
+            output_dir=output_dir,
+            assets_cache=assets_cache,
         )
         if voice_output.get("status") == "failed":
-            return self._fail_agent(conn, job_id, "voice_producer",
-                                    voice_output, _VOICE_GEN_FAILED)
+            return self._fail_agent(conn, job_id, "voice_producer", voice_output, _VOICE_GEN_FAILED)
         self._complete_agent(conn, assets_cache, job_id, "voice_producer")
 
         g8 = GateAudioValidation()
-        g8_result = g8.evaluate(
-            audio_path=voice_output.get("voiceover_path"))
+        g8_result = g8.evaluate(audio_path=voice_output.get("voiceover_path"))
         self._record_gate(assets_cache, job_id, "G8_audio_validation", g8_result)
-        if abort := self._enforce_gate(conn, job_id, "G8", g8_result,
-                                        failed_at="audio_validation"):
+        if abort := self._enforce_gate(conn, job_id, "G8", g8_result, failed_at="audio_validation"):
             return abort
 
         return script_output, voice_output
 
     def _stage_composition(
-        self, conn: Any, job_id: int, topic: str,
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
         research_output: dict[str, Any],
-        script_output: dict[str, Any], voice_output: dict[str, Any],
-        assets_cache: str, output_dir: str,
+        script_output: dict[str, Any],
+        voice_output: dict[str, Any],
+        assets_cache: str,
+        output_dir: str,
     ) -> dict[str, Any]:
         """Run Visual→G9→Composer→G10.
 
@@ -889,6 +1027,7 @@ class Orchestrator:
         # Build canonical beat timeline once (ADR 0020) — single source of
         # truth for beat durations consumed by VD, Composer, and Reviewer.
         from clipper_agency.core.beat_timeline import build_canonical_timeline
+
         beat_timeline = build_canonical_timeline(
             script_output.get("narrative_structure", []),
             voice_output.get("timestamps", []),
@@ -896,20 +1035,29 @@ class Orchestrator:
 
         logger.info("G8: running Visual Director agent")
         visual_output = self._run_visual_director_phase(
-            conn, job_id, topic, research_output, script_output,
-            output_dir, assets_cache,
+            conn,
+            job_id,
+            topic,
+            research_output,
+            script_output,
+            output_dir,
+            assets_cache,
             voice_output=voice_output,
             beat_timeline=beat_timeline,
         )
 
         if visual_output.get("status") == "failed":
-            return self._fail_agent(conn, job_id, "visual_director",
-                                    visual_output, _ASSET_SOURCING_FAILED)
+            return self._fail_agent(
+                conn, job_id, "visual_director", visual_output, _ASSET_SOURCING_FAILED
+            )
 
         # G9: Asset validation
         abort = self._evaluate_and_enforce_gate(
-            conn, job_id, assets_cache,
-            gate_label="G9", gate_record_key="G9_asset_validation",
+            conn,
+            job_id,
+            assets_cache,
+            gate_label="G9",
+            gate_record_key="G9_asset_validation",
             gate_instance=GateAssetValidation(),
             failed_at="asset_validation",
             asset_paths=[a.get("path", "") for a in visual_output.get("assets", [])],
@@ -921,10 +1069,12 @@ class Orchestrator:
         logger.info("G9: running Composer agent")
         mark_agent_running(conn, job_id, "composer")
         compose_output = self._run_composer(
-            job_id=job_id, assets=visual_output.get("assets", []),
+            job_id=job_id,
+            assets=visual_output.get("assets", []),
             audio_files=voice_output.get("audio_files", []),
             script_scenes=script_output.get("script", []),
-            output_dir=output_dir, assets_cache=assets_cache,
+            output_dir=output_dir,
+            assets_cache=assets_cache,
             voiceover_path=voice_output.get("voiceover_path", ""),
             timestamps=voice_output.get("timestamps", []),
             narrative_structure=script_output.get("narrative_structure", []),
@@ -932,16 +1082,18 @@ class Orchestrator:
         )
 
         if compose_output.get("status") == "failed":
-            return self._fail_agent(conn, job_id, "composer",
-                                    compose_output, _COMPOSER_FAILED)
+            return self._fail_agent(conn, job_id, "composer", compose_output, _COMPOSER_FAILED)
         self._complete_agent(conn, assets_cache, job_id, "composer")
 
         # G10: Video validation
         cp_config = load_settings().content_planning
         hard_limit = getattr(cp_config, "hard_limit_sec", 60)
         abort = self._evaluate_and_enforce_gate(
-            conn, job_id, assets_cache,
-            gate_label="G10", gate_record_key="G10_video_validation",
+            conn,
+            job_id,
+            assets_cache,
+            gate_label="G10",
+            gate_record_key="G10_video_validation",
             gate_instance=GateVideoValidation(),
             failed_at="video_validation",
             video_path=compose_output.get("video_path"),
@@ -972,7 +1124,8 @@ class Orchestrator:
         routing = review_output["repair_routing"]
         logger.info(
             "Starting repair loop: job #%d → %s",
-            job_id, routing["target_agent"],
+            job_id,
+            routing["target_agent"],
         )
         repair_result = self._execute_repair_cycle(
             repair_plan=routing,
@@ -984,33 +1137,32 @@ class Orchestrator:
         if repair_result.get("status") == "completed":
             # Repair passed — package and promote to final/
             repair_cycle = repair_result.get("cycle", 0)
-            compose_output = self._load_agent_output(
-                assets_cache, job_id, "composer")
+            compose_output = self._load_agent_output(assets_cache, job_id, "composer")
             pkg_output = self._package_output(
                 job_id=job_id,
                 video_path=compose_output.get("video_path", ""),
                 caption=script_output.get("caption", ""),
-                topic=topic, niche=niche,
+                topic=topic,
+                niche=niche,
                 output_dir=output_dir,
                 template_name=compose_output.get("template_name"),
             )
             # Promote cycle artifacts to final/
             if pkg_output.get("status") != "failed":
                 self._promote_to_final(
-                    output_dir=output_dir, job_id=job_id,
+                    output_dir=output_dir,
+                    job_id=job_id,
                     cycle=repair_cycle,
                 )
             update_job_status(conn, job_id, "COMPLETED")
-            logger.info(
-                "Pipeline COMPLETED after repair: job #%d", job_id)
+            logger.info("Pipeline COMPLETED after repair: job #%d", job_id)
             remove_job_file_handler()
             return {
                 "status": "completed",
                 "job_id": job_id,
                 "output": pkg_output,
                 "cost_estimate": {
-                    "estimate_cents": cost_result.data.get(
-                        "estimate_cents", 0.0),
+                    "estimate_cents": cost_result.data.get("estimate_cents", 0.0),
                 },
                 "review": {
                     "score": review_output.get("score", 0),
@@ -1020,9 +1172,7 @@ class Orchestrator:
             }
 
         # Repair exhausted or manual review needed
-        update_job_status(
-            conn, job_id, "FAILED",
-            repair_result.get("reason", _REPAIR_EXHAUSTED))
+        update_job_status(conn, job_id, "FAILED", repair_result.get("reason", _REPAIR_EXHAUSTED))
         remove_job_file_handler()
         return {
             "status": "failed",
@@ -1054,8 +1204,7 @@ class Orchestrator:
             niche_config = load_niche(niche)
         except FileNotFoundError:
             logger.error("Niche config not found: %r — aborting pipeline", niche)
-            return {"status": "failed",
-                    "reason": f"Niche config {niche!r} not found"}
+            return {"status": "failed", "reason": f"Niche config {niche!r} not found"}
         safety_rules = niche_config.safety_rules
         channel_description = build_channel_description(niche_config)
         language_name = get_language_name(niche_config)
@@ -1078,8 +1227,9 @@ class Orchestrator:
         }
 
         # Stage 1: Preflight + Safety
-        stage1 = self._stage_safety(conn, topic, niche, assets_cache,
-                                     output_dir, config_snapshot=config_snapshot)
+        stage1 = self._stage_safety(
+            conn, topic, niche, assets_cache, output_dir, config_snapshot=config_snapshot
+        )
         if isinstance(stage1, dict):
             return stage1
         job_id, cost_result = stage1
@@ -1087,18 +1237,33 @@ class Orchestrator:
         try:
             # Stage 2: Research (G3→G5)
             research_output = self._stage_research(
-                conn, job_id, topic, safety_rules, channel_description,
-                language_name, tone_name, angle_name,
-                assets_cache, output_dir,
+                conn,
+                job_id,
+                topic,
+                safety_rules,
+                channel_description,
+                language_name,
+                tone_name,
+                angle_name,
+                assets_cache,
+                output_dir,
             )
             if isinstance(research_output, dict) and research_output.get("status") == "failed":
                 return research_output
 
             # Stage 3: Content creation (G6→G8)
             stage3 = self._stage_content(
-                conn, job_id, topic, safety_rules, channel_description,
-                language_name, tone_name, angle_name,
-                research_output, assets_cache, output_dir,
+                conn,
+                job_id,
+                topic,
+                safety_rules,
+                channel_description,
+                language_name,
+                tone_name,
+                angle_name,
+                research_output,
+                assets_cache,
+                output_dir,
             )
             if isinstance(stage3, dict) and stage3.get("status") == "failed":
                 return stage3
@@ -1106,9 +1271,14 @@ class Orchestrator:
 
             # Stage 4: Composition (Visual→G10)
             compose_output = self._stage_composition(
-                conn, job_id, topic, research_output,
-                script_output, voice_output,
-                assets_cache, output_dir,
+                conn,
+                job_id,
+                topic,
+                research_output,
+                script_output,
+                voice_output,
+                assets_cache,
+                output_dir,
             )
             if isinstance(compose_output, dict) and compose_output.get("status") == "failed":
                 return compose_output
@@ -1116,8 +1286,15 @@ class Orchestrator:
             # Stage 5: Review + Package
             logger.info("G10: running Reviewer agent")
             abort, review_output, pkg_output = self._retry_review_and_package(
-                conn, job_id, topic, script_output, compose_output,
-                safety_rules, niche, output_dir, assets_cache,
+                conn,
+                job_id,
+                topic,
+                script_output,
+                compose_output,
+                safety_rules,
+                niche,
+                output_dir,
+                assets_cache,
                 voice_output=voice_output,
                 research_output=research_output,
             )
@@ -1126,9 +1303,16 @@ class Orchestrator:
 
             # Handle repair routing from reviewer
             repair_result = self._handle_repair_routing(
-                conn, job_id, review_output, script_output,
-                compose_output, cost_result,
-                assets_cache, output_dir, topic, niche,
+                conn,
+                job_id,
+                review_output,
+                script_output,
+                compose_output,
+                cost_result,
+                assets_cache,
+                output_dir,
+                topic,
+                niche,
             )
             if repair_result is not None:
                 return repair_result
@@ -1155,11 +1339,11 @@ class Orchestrator:
             remove_job_file_handler()
             return {"status": "failed", "error": str(e), "job_id": job_id}
 
-    def _load_agent_output(self, assets_cache: str, job_id: int,
-                           agent_name: str) -> dict[str, Any]:
+    def _load_agent_output(self, assets_cache: str, job_id: int, agent_name: str) -> dict[str, Any]:
         """Load a completed agent's output.json from the artifact workspace."""
-        from clipper_agency.core.paths import agent_output_file
         from clipper_agency.core.artifacts import read_json
+        from clipper_agency.core.paths import agent_output_file
+
         path = agent_output_file(assets_cache, job_id, agent_name)
         try:
             return read_json(path)
@@ -1168,16 +1352,23 @@ class Orchestrator:
 
     @staticmethod
     def _persist_agent_output(
-        assets_cache: str, job_id: int, agent_name: str, output: dict,
+        assets_cache: str,
+        job_id: int,
+        agent_name: str,
+        output: dict,
     ) -> None:
         """Write an agent's output.json to the artifact workspace."""
-        from clipper_agency.core.paths import agent_output_file, ensure_agent_dir
         from clipper_agency.core.artifacts import write_json
+        from clipper_agency.core.paths import agent_output_file, ensure_agent_dir
+
         ensure_agent_dir(assets_cache, job_id, agent_name)
         write_json(agent_output_file(assets_cache, job_id, agent_name), output)
 
     def _try_load_cached(
-        self, assets_cache: str, job_id: int, agent_name: str,
+        self,
+        assets_cache: str,
+        job_id: int,
+        agent_name: str,
     ) -> dict[str, Any]:
         """Validate cached artifacts and return output.json if valid.
 
@@ -1186,14 +1377,19 @@ class Orchestrator:
         """
         vr = validate_agent_cache(assets_cache, job_id, agent_name)
         if not vr.passed:
-            logger.info("Cache invalid for %s job #%d: %s",
-                        agent_name, job_id, "; ".join(vr.issues))
+            logger.info(
+                "Cache invalid for %s job #%d: %s", agent_name, job_id, "; ".join(vr.issues)
+            )
             return {}
         return self._load_agent_output(assets_cache, job_id, agent_name)
 
     def _run_cached_or_fresh(
-        self, agent_name: str, use_cache: bool, assets_cache: str,
-        job_id: int, run_fn,
+        self,
+        agent_name: str,
+        use_cache: bool,
+        assets_cache: str,
+        job_id: int,
+        run_fn,
     ) -> dict[str, Any]:
         """Try cached output when use_cache is True; fall back to fresh run."""
         if not use_cache:
@@ -1203,10 +1399,107 @@ class Orchestrator:
             return cached
         return run_fn()
 
+    def _apply_asset_qualification(
+        self,
+        research_output: dict[str, Any],
+        job_id: int,
+        topic: str,
+        assets_cache: str,
+    ) -> tuple[list[dict], list[dict]]:
+        """Pre-Visual-Director asset-qualification boundary (PR 5 / design §6).
+
+        Qualifies each beat's candidates BEFORE Visual Director consumes them and runs
+        source recovery BEFORE the text-card fallback (the Job #8 fix). Returns the
+        immutably-rewritten ``(qualified_story_beats, qualified_flat)`` pool for VD.
+
+        The per-beat ``asset_candidates`` is rebuilt from each beat's qualified set only,
+        so rejected candidates never reach VD's live per-beat surface (design §6 step 4 /
+        [V4]); the flat pool is defense-in-depth-filtered by the union of reject_reasons.
+        ``qualification_report.json`` is written for observability.
+
+        The inspection cache namespace MUST match VD's (``visual_director``/
+        ``inspection_cache``) so VD's re-inspection of a pre-qualified candidate is a
+        cache hit → 0 double-VLM (SLICE 1 cache-key parity; design §12 HIGHEST risk).
+        Note: design §6 step 1 says "segment_producer" for the agent dir — that is
+        incorrect; it must be "visual_director" or the cache namespace forks and VLM is
+        re-spent. ADR 0027: inspect via VD's own bound method (byte-identical cached
+        output, frame ownership in VD, no double extraction).
+        """
+        from clipper_agency.core import asset_qualification
+        from clipper_agency.core.paths import ensure_agent_dir, job_cache_dir
+
+        settings = load_settings()
+        # Same cache + frame dir VD uses, so the pre-VD pass populates VD's cache.
+        vd_agent_dir = ensure_agent_dir(assets_cache, job_id, "visual_director")
+        cache_dir = f"{vd_agent_dir}/inspection_cache"
+
+        story_beats = research_output.get("story_beats", [])
+        sp = SegmentProducerAgent(trace_writer=self._trace_writer)
+        discover_fn = asset_qualification._build_sp_discovery_adapter(
+            sp, topic, research_output.get("entities", []), settings, beats=story_beats
+        )
+        recovery = asset_qualification.RecoveryPolicy(
+            enabled=True, max_cycles=1, discover_fn=discover_fn
+        )
+        # Lightweight construct (no API); inspect via VD's own bound method.
+        inspector = VisualDirectorAgent(trace_writer=self._trace_writer)._run_multimodal_inspection
+
+        results = asset_qualification.qualify_research_candidates(
+            research_output,
+            job_id,
+            cache_dir,
+            vd_agent_dir,
+            inspector=inspector,
+            recovery=recovery,
+        )
+
+        # Immutable rewrite (new dicts per beat — CLAUDE.md immutability rule). Filter the
+        # ORIGINAL candidate dicts by each beat's qualified asset_ids so every candidate
+        # field VD may read is preserved (model_dump would drop non-schema fields).
+        results_by_beat = {r.beat_id: r for r in results}
+        qualified_story_beats: list[dict] = []
+        for beat_dict in story_beats:
+            result = results_by_beat.get(str(beat_dict.get("beat_id", "")))
+            if result is None:
+                qualified_story_beats.append(beat_dict)
+                continue
+            qualified_ids = {c["asset_id"] for c in result.qualified}
+            kept = [
+                ac
+                for ac in beat_dict.get("asset_candidates", [])
+                if f"{ac.get('type', '')}_{ac.get('url', '')[:40]}" in qualified_ids
+            ]
+            rewritten = {**beat_dict, "asset_candidates": kept}
+            if result.verdict == "exhausted_text_card" and result.fallback_card is not None:
+                rewritten["qualification_text_card"] = result.fallback_card
+            qualified_story_beats.append(rewritten)
+
+        # Flat-pool defense-in-depth filter (design §6 step 4 / [V4]): drop any candidate
+        # whose asset_id appears in any beat's reject_reasons.
+        rejected_ids: set[str] = set()
+        for r in results:
+            rejected_ids.update(r.reject_reasons.keys())
+        qualified_flat = [
+            c
+            for c in research_output.get("asset_candidates", [])
+            if f"{c.get('type', '')}_{c.get('url', '')[:40]}" not in rejected_ids
+        ]
+
+        write_json(
+            f"{job_cache_dir(assets_cache, job_id)}/qualification_report.json",
+            asset_qualification.build_qualification_report(job_id, results),
+        )
+        return qualified_story_beats, qualified_flat
+
     def _run_visual_director_phase(
-        self, conn: Any, job_id: int, topic: str,
-        research_output: dict[str, Any], script_output: dict[str, Any],
-        output_dir: str, assets_cache: str,
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        research_output: dict[str, Any],
+        script_output: dict[str, Any],
+        output_dir: str,
+        assets_cache: str,
         voice_output: dict[str, Any] | None = None,
         beat_timeline: list | None = None,
     ) -> dict[str, Any]:
@@ -1219,6 +1512,7 @@ class Orchestrator:
         research_brief_path = ""
         if assets_cache:
             from clipper_agency.core.paths import agent_dir as get_agent_dir
+
             rd = get_agent_dir(assets_cache, job_id, "segment_producer")
             cp = Path(rd) / "research_contract.json"
             bp = Path(rd) / "research_brief.md"
@@ -1227,16 +1521,24 @@ class Orchestrator:
             if bp.exists():
                 research_brief_path = str(bp)
 
+        # PR 5: pre-VD asset qualification (design §6). Qualify candidates before VD
+        # consumes them + run source recovery before the text-card fallback.
+        qualified_story_beats, qualified_flat = self._apply_asset_qualification(
+            research_output, job_id, topic, assets_cache
+        )
+
         visual_output = self._run_visual_director(
-            job_id=job_id, script=script_output.get("script", []),
+            job_id=job_id,
+            script=script_output.get("script", []),
             topic=topic,
-            output_dir=output_dir, assets_cache=assets_cache,
+            output_dir=output_dir,
+            assets_cache=assets_cache,
             research_contract_path=research_contract_path,
             research_brief_path=research_brief_path,
-            story_beats=research_output.get("story_beats", []),
+            story_beats=qualified_story_beats,
             timestamps=vo.get("timestamps", []),
             do_not_use=research_output.get("do_not_use", []),
-            asset_candidates=research_output.get("asset_candidates", []),
+            asset_candidates=qualified_flat,
             voiceover_duration_sec=vo.get("voiceover_duration_sec", 0.0),
             beat_timeline=beat_timeline,
         )
@@ -1245,8 +1547,13 @@ class Orchestrator:
         return visual_output
 
     def _retry_composer_stage(
-        self, conn, job_id: int, visual_output: dict[str, Any],
-        voice_output: dict[str, Any], output_dir: str, assets_cache: str,
+        self,
+        conn,
+        job_id: int,
+        visual_output: dict[str, Any],
+        voice_output: dict[str, Any],
+        output_dir: str,
+        assets_cache: str,
         cycle: int = 0,
         beat_timeline: list | None = None,
     ) -> tuple[dict[str, Any], dict | None]:
@@ -1274,7 +1581,8 @@ class Orchestrator:
             job_id=job_id,
             assets=visual_output.get("assets", []),
             audio_files=voice_output.get("audio_files", []),
-            output_dir=composer_output_dir, assets_cache=assets_cache,
+            output_dir=composer_output_dir,
+            assets_cache=assets_cache,
             script_scenes=script_output.get("script", []),
             voiceover_path=voice_output.get("voiceover_path", ""),
             timestamps=voice_output.get("timestamps", []),
@@ -1298,7 +1606,8 @@ class Orchestrator:
 
         if compose_output.get("status") == "failed":
             return compose_output, self._fail_agent(
-                conn, job_id, "composer", compose_output, _COMPOSER_FAILED)
+                conn, job_id, "composer", compose_output, _COMPOSER_FAILED
+            )
         self._complete_agent(conn, assets_cache, job_id, "composer")
 
         cp_config = load_settings().content_planning
@@ -1308,19 +1617,27 @@ class Orchestrator:
             video_path=compose_output.get("video_path"),
             hard_limit_sec=hard_limit,
         )
-        self._record_gate(assets_cache, job_id,
-                          "G10_video_validation", g10_result)
+        self._record_gate(assets_cache, job_id, "G10_video_validation", g10_result)
         abort = self._enforce_gate(
-            conn, job_id, "G10", g10_result,
+            conn,
+            job_id,
+            "G10",
+            g10_result,
             failed_at="video_validation",
         )
         return compose_output, abort
 
     def _retry_review_and_package(
-        self, conn, job_id: int, topic: str,
-        script_output: dict[str, Any], compose_output: dict[str, Any],
-        safety_rules: list[str], niche: str,
-        output_dir: str, assets_cache: str,
+        self,
+        conn,
+        job_id: int,
+        topic: str,
+        script_output: dict[str, Any],
+        compose_output: dict[str, Any],
+        safety_rules: list[str],
+        niche: str,
+        output_dir: str,
+        assets_cache: str,
         voice_output: dict[str, Any] | None = None,
         research_output: dict[str, Any] | None = None,
     ) -> tuple[dict | None, dict | None, dict | None]:
@@ -1330,12 +1647,14 @@ class Orchestrator:
         rp = research_output or {}
         # Build canonical timeline for reviewer (ADR 0020)
         from clipper_agency.core.beat_timeline import build_canonical_timeline
+
         beat_timeline = build_canonical_timeline(
             script_output.get("narrative_structure", []),
             vo.get("timestamps", []),
         )
         review_output = self._run_reviewer(
-            job_id=job_id, topic=topic,
+            job_id=job_id,
+            topic=topic,
             script=script_output.get("script", []),
             caption=script_output.get("caption", ""),
             safety_rules=safety_rules,
@@ -1368,13 +1687,14 @@ class Orchestrator:
             from clipper_agency.core.repair_router import (
                 build_gate_failure_repair_plan,
             )
+
             repair_routing = build_gate_failure_repair_plan(review_output)
             if repair_routing:
                 logger.info(
-                    "Deterministic gate failure '%s' → repair routed to %s "
-                    "for job #%d",
+                    "Deterministic gate failure '%s' → repair routed to %s for job #%d",
                     review_output.get("reason"),
-                    repair_routing["target_agent"], job_id,
+                    repair_routing["target_agent"],
+                    job_id,
                 )
 
         if repair_routing:
@@ -1386,7 +1706,8 @@ class Orchestrator:
             review_output["repair_routing"] = repair_routing
             logger.info(
                 "Reviewer repair plan routed to %s for job #%d",
-                repair_routing["target_agent"], job_id,
+                repair_routing["target_agent"],
+                job_id,
             )
             return None, review_output, None
 
@@ -1405,7 +1726,8 @@ class Orchestrator:
             update_job_publication_status(conn, job_id, "blocked")
             logger.info(
                 "Reviewer failed without repair plan for job #%d — "
-                "artifacts kept, publication blocked", job_id,
+                "artifacts kept, publication blocked",
+                job_id,
             )
             return None, review_output, None
 
@@ -1414,103 +1736,164 @@ class Orchestrator:
             job_id=job_id,
             video_path=compose_output.get("video_path", ""),
             caption=script_output.get("caption", ""),
-            topic=topic, niche=niche, output_dir=output_dir,
+            topic=topic,
+            niche=niche,
+            output_dir=output_dir,
             template_name=compose_output.get("template_name"),
         )
 
         if pkg_output.get("status") == "failed":
-            update_job_status(conn, job_id, "FAILED",
-                              pkg_output.get("error", _PACKAGING_FAILED))
-            return {
-                "status": "failed", "failed_at": "packaging",
-                "reason": pkg_output.get("error", _PACKAGING_FAILED),
-                "job_id": job_id,
-            }, review_output, pkg_output
+            update_job_status(conn, job_id, "FAILED", pkg_output.get("error", _PACKAGING_FAILED))
+            return (
+                {
+                    "status": "failed",
+                    "failed_at": "packaging",
+                    "reason": pkg_output.get("error", _PACKAGING_FAILED),
+                    "job_id": job_id,
+                },
+                review_output,
+                pkg_output,
+            )
 
         # Promote to final/ directory
         promotion = self._promote_to_final(
-            output_dir=output_dir, job_id=job_id,
+            output_dir=output_dir,
+            job_id=job_id,
         )
         if promotion.get("status") == "failed":
             logger.warning(
                 "Promotion failed for job #%d: %s — "
                 "approved artifact stays, publication stays blocked until retry",
-                job_id, promotion.get("error", "unknown"),
+                job_id,
+                promotion.get("error", "unknown"),
             )
 
-        update_manifest_final(assets_cache, job_id, {
-            "video": pkg_output.get("video_path", ""),
-            "caption": pkg_output.get("caption_path", ""),
-            "thumbnail": pkg_output.get("thumbnail_path", ""),
-            "metadata": pkg_output.get("metadata_path", ""),
-        })
+        update_manifest_final(
+            assets_cache,
+            job_id,
+            {
+                "video": pkg_output.get("video_path", ""),
+                "caption": pkg_output.get("caption_path", ""),
+                "thumbnail": pkg_output.get("thumbnail_path", ""),
+                "metadata": pkg_output.get("metadata_path", ""),
+            },
+        )
         return None, review_output, pkg_output
 
     def _reconstruct_upstream_outputs(
-        self, from_idx: int, assets_cache: str, job_id: int,
-    ) -> tuple[dict[str, Any], dict[str, Any],
-               dict[str, Any], dict[str, Any]]:
+        self,
+        from_idx: int,
+        assets_cache: str,
+        job_id: int,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
         """Load completed upstream agent outputs."""
         loader = self._load_agent_output
-        research = loader(assets_cache, job_id, "segment_producer") \
-            if from_idx > PIPELINE_ORDER.index("segment_producer") else {}
-        script = loader(assets_cache, job_id, "scriptwriter") \
-            if from_idx > PIPELINE_ORDER.index("scriptwriter") else {}
-        voice = loader(assets_cache, job_id, "voice_producer") \
-            if from_idx > PIPELINE_ORDER.index("voice_producer") else {}
-        visual = loader(assets_cache, job_id, "visual_director") \
-            if from_idx > PIPELINE_ORDER.index("visual_director") else {}
+        research = (
+            loader(assets_cache, job_id, "segment_producer")
+            if from_idx > PIPELINE_ORDER.index("segment_producer")
+            else {}
+        )
+        script = (
+            loader(assets_cache, job_id, "scriptwriter")
+            if from_idx > PIPELINE_ORDER.index("scriptwriter")
+            else {}
+        )
+        voice = (
+            loader(assets_cache, job_id, "voice_producer")
+            if from_idx > PIPELINE_ORDER.index("voice_producer")
+            else {}
+        )
+        visual = (
+            loader(assets_cache, job_id, "visual_director")
+            if from_idx > PIPELINE_ORDER.index("visual_director")
+            else {}
+        )
         return research, script, voice, visual
 
     def _retry_safety_stage(
-        self, conn: Any, job_id: int, topic: str,
-        assets_cache: str, from_idx: int,
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        assets_cache: str,
+        from_idx: int,
     ) -> dict | None:
         """Run safety if needed during retry. Returns abort on hard_fail."""
         if from_idx > PIPELINE_ORDER.index("safety"):
             return None
         mark_agent_running(conn, job_id, "safety")
         safety_result = self._run_safety(
-            job_id=job_id, topic=topic, assets_cache=assets_cache,
+            job_id=job_id,
+            topic=topic,
+            assets_cache=assets_cache,
         )
         if safety_result.get("status") == "hard_fail":
             reason = safety_result.get("reason", "Safety failed")
             mark_agent_failed(conn, job_id, "safety", reason)
             update_job_status(conn, job_id, "FAILED", reason)
             return {
-                "status": "failed", "failed_at": "safety",
-                "reason": reason, "job_id": job_id,
+                "status": "failed",
+                "failed_at": "safety",
+                "reason": reason,
+                "job_id": job_id,
             }
         self._complete_agent(conn, assets_cache, job_id, "safety")
         return None
 
     def _retry_research_stage(
-        self, conn: Any, job_id: int, topic: str,
-        safety_rules: list[str], channel_description: str,
-        language: str, tone: str, content_angle: str,
-        assets_cache: str, output_dir: str, from_idx: int,
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        safety_rules: list[str],
+        channel_description: str,
+        language: str,
+        tone: str,
+        content_angle: str,
+        assets_cache: str,
+        output_dir: str,
+        from_idx: int,
     ) -> tuple[dict[str, Any] | None, dict | None]:
         """Run research if needed. Returns (research_output, abort)."""
         if from_idx > PIPELINE_ORDER.index("segment_producer"):
             return None, None
         research_result = self._stage_research(
-            conn, job_id, topic, safety_rules, channel_description,
-            language, tone, content_angle,
-            assets_cache, output_dir,
+            conn,
+            job_id,
+            topic,
+            safety_rules,
+            channel_description,
+            language,
+            tone,
+            content_angle,
+            assets_cache,
+            output_dir,
         )
-        if isinstance(research_result, dict) and research_result.get(
-            "status",
-        ) == "failed":
+        if (
+            isinstance(research_result, dict)
+            and research_result.get(
+                "status",
+            )
+            == "failed"
+        ):
             return {}, research_result
         return research_result, None
 
     def _retry_downstream_stages(
-        self, conn: Any, job_id: int, topic: str,
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
         niche_ctx: dict[str, Any],
-        niche: str, output_dir: str, assets_cache: str,
-        from_idx: int, use_cache: bool,
-        research_output: dict[str, Any], script_output: dict[str, Any],
-        voice_output: dict[str, Any], visual_output: dict[str, Any],
+        niche: str,
+        output_dir: str,
+        assets_cache: str,
+        from_idx: int,
+        use_cache: bool,
+        research_output: dict[str, Any],
+        script_output: dict[str, Any],
+        voice_output: dict[str, Any],
+        visual_output: dict[str, Any],
     ) -> dict | None:
         """Run retry stages after research. Returns abort on failure."""
         safety_rules = niche_ctx["safety_rules"]
@@ -1520,28 +1903,46 @@ class Orchestrator:
         content_angle = niche_ctx["content_angle"]
         if from_idx <= PIPELINE_ORDER.index("scriptwriter"):
             script_output = self._run_cached_or_fresh(
-                "scriptwriter", use_cache, assets_cache, job_id,
+                "scriptwriter",
+                use_cache,
+                assets_cache,
+                job_id,
                 lambda: self._run_content_scriptwriter(
-                    conn, job_id, topic, safety_rules,
-                    channel_description, language, tone, content_angle,
-                    research_output, assets_cache,
+                    conn,
+                    job_id,
+                    topic,
+                    safety_rules,
+                    channel_description,
+                    language,
+                    tone,
+                    content_angle,
+                    research_output,
+                    assets_cache,
                 ),
             )
             if script_output.get("status") == "failed":
-                return self._fail_agent(conn, job_id, "scriptwriter",
-                                        script_output, _SCRIPT_BUDGET_FAILED)
+                return self._fail_agent(
+                    conn, job_id, "scriptwriter", script_output, _SCRIPT_BUDGET_FAILED
+                )
 
         if from_idx <= PIPELINE_ORDER.index("voice_producer"):
             voice_output = self._run_cached_or_fresh(
-                "voice_producer", use_cache, assets_cache, job_id,
+                "voice_producer",
+                use_cache,
+                assets_cache,
+                job_id,
                 lambda: self._run_content_voice(
-                    conn, job_id, script_output,
-                    output_dir, assets_cache,
+                    conn,
+                    job_id,
+                    script_output,
+                    output_dir,
+                    assets_cache,
                 ),
             )
 
         # Build canonical timeline for retry (ADR 0020)
         from clipper_agency.core.beat_timeline import build_canonical_timeline
+
         beat_timeline = build_canonical_timeline(
             script_output.get("narrative_structure", []),
             voice_output.get("timestamps", []),
@@ -1549,31 +1950,47 @@ class Orchestrator:
 
         if from_idx <= PIPELINE_ORDER.index("visual_director"):
             visual_output = self._run_visual_director_phase(
-                conn, job_id, topic, research_output, script_output,
-                output_dir, assets_cache,
+                conn,
+                job_id,
+                topic,
+                research_output,
+                script_output,
+                output_dir,
+                assets_cache,
                 voice_output=voice_output,
                 beat_timeline=beat_timeline,
             )
             if visual_output.get("status") == "failed":
-                return self._fail_agent(conn, job_id, "visual_director",
-                                        visual_output, _ASSET_SOURCING_FAILED)
+                return self._fail_agent(
+                    conn, job_id, "visual_director", visual_output, _ASSET_SOURCING_FAILED
+                )
 
         if from_idx <= PIPELINE_ORDER.index("composer"):
             compose_output, abort = self._retry_composer_stage(
-                conn, job_id, visual_output, voice_output,
-                output_dir, assets_cache,
+                conn,
+                job_id,
+                visual_output,
+                voice_output,
+                output_dir,
+                assets_cache,
                 beat_timeline=beat_timeline,
             )
             if abort:
                 return abort
         else:
-            compose_output = self._load_agent_output(
-                assets_cache, job_id, "composer")
+            compose_output = self._load_agent_output(assets_cache, job_id, "composer")
 
         if from_idx <= PIPELINE_ORDER.index("reviewer"):
             abort, _, _ = self._retry_review_and_package(
-                conn, job_id, topic, script_output, compose_output,
-                safety_rules, niche, output_dir, assets_cache,
+                conn,
+                job_id,
+                topic,
+                script_output,
+                compose_output,
+                safety_rules,
+                niche,
+                output_dir,
+                assets_cache,
                 voice_output=voice_output,
                 research_output=research_output,
             )
@@ -1582,7 +1999,10 @@ class Orchestrator:
         return None
 
     def run_pipeline_from(
-        self, job_id: int, from_agent: str, use_cache: bool = False,
+        self,
+        job_id: int,
+        from_agent: str,
+        use_cache: bool = False,
     ) -> dict[str, Any]:
         """Re-run pipeline from a specific agent, reusing completed outputs.
 
@@ -1592,8 +2012,7 @@ class Orchestrator:
         conn = get_connection(self.db_path)
         job = get_job(conn, job_id)
         if not job:
-            return {"status": "failed", "reason": f"Job {job_id} not found",
-                    "job_id": job_id}
+            return {"status": "failed", "reason": f"Job {job_id} not found", "job_id": job_id}
 
         # Load config snapshot
         snapshot_raw = job.get("config_snapshot")
@@ -1607,21 +2026,26 @@ class Orchestrator:
 
         update_job_status(conn, job_id, "RUNNING")
         add_job_file_handler(job_id)
-        append_audit_log(conn, action="pipeline_retry", actor="engine",
-                         resource_type="job", resource_id=job_id,
-                         details=json.dumps({"from_agent": from_agent,
-                                              "use_cache": use_cache}))
+        append_audit_log(
+            conn,
+            action="pipeline_retry",
+            actor="engine",
+            resource_type="job",
+            resource_id=job_id,
+            details=json.dumps({"from_agent": from_agent, "use_cache": use_cache}),
+        )
 
         if from_agent not in PIPELINE_ORDER:
-            update_job_status(conn, job_id, "FAILED",
-                               f"Unknown agent: {from_agent}")
-            return {"status": "failed", "reason": f"Unknown agent: {from_agent}",
-                    "job_id": job_id}
+            update_job_status(conn, job_id, "FAILED", f"Unknown agent: {from_agent}")
+            return {"status": "failed", "reason": f"Unknown agent: {from_agent}", "job_id": job_id}
 
         from_idx = PIPELINE_ORDER.index(from_agent)
-        (research_output, script_output,
-         voice_output, visual_output) = self._reconstruct_upstream_outputs(
-            from_idx, assets_cache, job_id,
+        (research_output, script_output, voice_output, visual_output) = (
+            self._reconstruct_upstream_outputs(
+                from_idx,
+                assets_cache,
+                job_id,
+            )
         )
 
         # Load niche config from snapshot for deterministic retry
@@ -1639,10 +2063,10 @@ class Orchestrator:
                 niche_config = load_niche(niche)
             except FileNotFoundError:
                 logger.error(
-                    "Niche config not found: %r — aborting retry", niche,
+                    "Niche config not found: %r — aborting retry",
+                    niche,
                 )
-                return {"status": "failed",
-                        "reason": f"Niche config {niche!r} not found"}
+                return {"status": "failed", "reason": f"Niche config {niche!r} not found"}
             safety_rules = niche_config.safety_rules
             channel_description = build_channel_description(niche_config)
             language_name = get_language_name(niche_config)
@@ -1659,16 +2083,28 @@ class Orchestrator:
         try:
             # Stage: Safety
             abort = self._retry_safety_stage(
-                conn, job_id, topic, assets_cache, from_idx,
+                conn,
+                job_id,
+                topic,
+                assets_cache,
+                from_idx,
             )
             if abort:
                 return abort
 
             # Stage: Research (segment_producer + gates G3-G5)
             fresh, abort = self._retry_research_stage(
-                conn, job_id, topic, safety_rules, channel_description,
-                language_name, tone_name, angle_name,
-                assets_cache, output_dir, from_idx,
+                conn,
+                job_id,
+                topic,
+                safety_rules,
+                channel_description,
+                language_name,
+                tone_name,
+                angle_name,
+                assets_cache,
+                output_dir,
+                from_idx,
             )
             if abort:
                 return abort
@@ -1676,9 +2112,19 @@ class Orchestrator:
                 research_output = fresh
 
             abort = self._retry_downstream_stages(
-                conn, job_id, topic, niche_ctx,
-                niche, output_dir, assets_cache, from_idx, use_cache,
-                research_output, script_output, voice_output, visual_output,
+                conn,
+                job_id,
+                topic,
+                niche_ctx,
+                niche,
+                output_dir,
+                assets_cache,
+                from_idx,
+                use_cache,
+                research_output,
+                script_output,
+                voice_output,
+                visual_output,
             )
             if abort:
                 return abort
@@ -1695,16 +2141,21 @@ class Orchestrator:
             return {"status": "failed", "error": str(e), "job_id": job_id}
 
     def _run_content_scriptwriter(
-        self, conn: Any, job_id: int, topic: str,
-        safety_rules: list[str], channel_description: str,
-        language: str, tone: str, content_angle: str,
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        safety_rules: list[str],
+        channel_description: str,
+        language: str,
+        tone: str,
+        content_angle: str,
         research_output: dict[str, Any],
         assets_cache: str,
     ) -> dict[str, Any]:
         """Run scriptwriter stage of content creation."""
         g6 = GateCreativeMemory()
-        self._record_gate(assets_cache, job_id, "G6_creative_memory",
-                          g6.evaluate())
+        self._record_gate(assets_cache, job_id, "G6_creative_memory", g6.evaluate())
 
         mark_agent_running(conn, job_id, "scriptwriter")
 
@@ -1733,11 +2184,14 @@ class Orchestrator:
             blueprint["estimated_words_per_second"] = cp_config.estimated_words_per_second
 
         script_output = self._run_scriptwriter(
-            job_id=job_id, topic=topic,
+            job_id=job_id,
+            topic=topic,
             research_brief=research_output.get("research_brief", ""),
             safety_rules=safety_rules,
             channel_description=channel_description,
-            language=language, tone=tone, content_angle=resolved_angle,
+            language=language,
+            tone=tone,
+            content_angle=resolved_angle,
             assets_cache=assets_cache,
             blueprint=blueprint if blueprint else None,
         )
@@ -1745,15 +2199,16 @@ class Orchestrator:
 
         g7 = GateScriptValidation()
         script_scenes = script_output.get("script", [])
-        script_text = " ".join(
-            s.get("text", "") for s in script_scenes
-        ) if isinstance(script_scenes, list) else str(script_scenes)
+        script_text = (
+            " ".join(s.get("text", "") for s in script_scenes)
+            if isinstance(script_scenes, list)
+            else str(script_scenes)
+        )
         g7_result = g7.evaluate(
             script=script_text,
             caption=script_output.get("caption", ""),
         )
-        self._record_gate(assets_cache, job_id, "G7_script_validation",
-                          g7_result)
+        self._record_gate(assets_cache, job_id, "G7_script_validation", g7_result)
 
         # Duration Gate: check script fits within time budget
         cp_config = load_settings().content_planning
@@ -1768,13 +2223,9 @@ class Orchestrator:
             )
             budget_check = check_script_duration_budget(estimated, budget)
             script_output["_duration_check"] = budget_check
-            logger.info("Duration gate: estimated=%.1fs %s",
-                        estimated, budget_check["reason"])
+            logger.info("Duration gate: estimated=%.1fs %s", estimated, budget_check["reason"])
             if not budget_check["pass"]:
-                reason = (
-                    f"Script duration {estimated:.1f}s exceeds "
-                    f"hard limit {budget.hard}s"
-                )
+                reason = f"Script duration {estimated:.1f}s exceeds hard limit {budget.hard}s"
                 mark_agent_failed(conn, job_id, "scriptwriter", reason)
                 update_job_status(conn, job_id, "FAILED", reason)
                 script_output["status"] = "failed"
@@ -1783,9 +2234,12 @@ class Orchestrator:
         return script_output
 
     def _run_content_voice(
-        self, conn: Any, job_id: int,
+        self,
+        conn: Any,
+        job_id: int,
         script_output: dict[str, Any],
-        output_dir: str, assets_cache: str,
+        output_dir: str,
+        assets_cache: str,
     ) -> dict[str, Any]:
         """Run voice producer stage of content creation."""
         mark_agent_running(conn, job_id, "voice_producer")
@@ -1793,105 +2247,139 @@ class Orchestrator:
             job_id=job_id,
             script=script_output.get("script", []),
             voiceover_text=script_output.get("voiceover_text", ""),
-            output_dir=output_dir, assets_cache=assets_cache,
+            output_dir=output_dir,
+            assets_cache=assets_cache,
         )
         self._complete_agent(conn, assets_cache, job_id, "voice_producer")
 
         g8 = GateAudioValidation()
-        g8_result = g8.evaluate(
-            audio_path=voice_output.get("voiceover_path"))
-        self._record_gate(assets_cache, job_id, "G8_audio_validation",
-                          g8_result)
+        g8_result = g8.evaluate(audio_path=voice_output.get("voiceover_path"))
+        self._record_gate(assets_cache, job_id, "G8_audio_validation", g8_result)
         return voice_output
 
     # ── Agent runner methods (extracted for testability) ──
 
-    def _run_safety(self, job_id: int, topic: str,
-                    **kwargs: Any) -> dict[str, Any]:
+    def _run_safety(self, job_id: int, topic: str, **kwargs: Any) -> dict[str, Any]:
         agent = SafetyAgent(trace_writer=self._trace_writer)
         return agent.execute(job_id=job_id, topic=topic, **kwargs)
 
-    def _run_researcher(self, job_id: int, topic: str,
-                        safety_rules: list[str] | None = None,
-                        output_dir: str = "outputs",
-                        **kwargs: Any) -> dict[str, Any]:
+    def _run_researcher(
+        self,
+        job_id: int,
+        topic: str,
+        safety_rules: list[str] | None = None,
+        output_dir: str = "outputs",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         agent = SegmentProducerAgent(trace_writer=self._trace_writer)
-        return agent.execute(job_id=job_id, topic=topic,
-                             safety_rules=safety_rules or [],
-                             output_dir=output_dir, **kwargs)
+        return agent.execute(
+            job_id=job_id,
+            topic=topic,
+            safety_rules=safety_rules or [],
+            output_dir=output_dir,
+            **kwargs,
+        )
 
-    def _run_scriptwriter(self, job_id: int, topic: str,
-                          research_brief: str = "",
-                          safety_rules: list[str] | None = None,
-                          **kwargs: Any) -> dict[str, Any]:
+    def _run_scriptwriter(
+        self,
+        job_id: int,
+        topic: str,
+        research_brief: str = "",
+        safety_rules: list[str] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         agent = ScriptwriterAgent(trace_writer=self._trace_writer)
         return agent.execute(
-            job_id=job_id, topic=topic,
+            job_id=job_id,
+            topic=topic,
             research_brief=research_brief,
             safety_rules=safety_rules or [],
             **kwargs,
         )
 
-    def _run_voice_producer(self, job_id: int,
-                            script: list[dict] | None = None,
-                            output_dir: str = "outputs",
-                            **kwargs: Any) -> dict[str, Any]:
+    def _run_voice_producer(
+        self,
+        job_id: int,
+        script: list[dict] | None = None,
+        output_dir: str = "outputs",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         agent = VoiceProducerAgent(trace_writer=self._trace_writer)
         return agent.execute(
-            job_id=job_id, script=script or [],
+            job_id=job_id,
+            script=script or [],
             output_dir=output_dir,
             **kwargs,
         )
 
-    def _run_visual_director(self, job_id: int,
-                             script: list[dict] | None = None,
-                             topic: str = "",
-                             source_urls: list[str] | None = None,
-                             output_dir: str = "outputs",
-                             **kwargs: Any) -> dict[str, Any]:
+    def _run_visual_director(
+        self,
+        job_id: int,
+        script: list[dict] | None = None,
+        topic: str = "",
+        source_urls: list[str] | None = None,
+        output_dir: str = "outputs",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         agent = VisualDirectorAgent(trace_writer=self._trace_writer)
         return agent.execute(
-            job_id=job_id, script=script or [],
+            job_id=job_id,
+            script=script or [],
             topic=topic,
             source_urls=source_urls or [],
             output_dir=output_dir,
             **kwargs,
         )
 
-    def _run_composer(self, job_id: int,
-                      assets: list[dict] | None = None,
-                      audio_files: list[str] | None = None,
-                      output_dir: str = "outputs",
-                      **kwargs: Any) -> dict[str, Any]:
+    def _run_composer(
+        self,
+        job_id: int,
+        assets: list[dict] | None = None,
+        audio_files: list[str] | None = None,
+        output_dir: str = "outputs",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         agent = ComposerAgent(trace_writer=self._trace_writer)
         return agent.execute(
-            job_id=job_id, assets=assets or [],
+            job_id=job_id,
+            assets=assets or [],
             audio_files=audio_files or [],
             output_dir=output_dir,
             **kwargs,
         )
 
-    def _run_reviewer(self, job_id: int, topic: str,
-                      script: list[dict] | None = None,
-                      caption: str = "",
-                      safety_rules: list[str] | None = None,
-                      **kwargs: Any) -> dict[str, Any]:
+    def _run_reviewer(
+        self,
+        job_id: int,
+        topic: str,
+        script: list[dict] | None = None,
+        caption: str = "",
+        safety_rules: list[str] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         agent = ReviewerAgent(trace_writer=self._trace_writer)
         return agent.execute(
-            job_id=job_id, topic=topic,
+            job_id=job_id,
+            topic=topic,
             script=script or [],
             caption=caption,
             safety_rules=safety_rules or [],
             **kwargs,
         )
 
-    def _package_output(self, job_id: int, video_path: str,
-                        caption: str,
-                        topic: str, niche: str,
-                        output_dir: str = "outputs",
-                        **kwargs: Any) -> dict[str, Any]:
+    def _package_output(
+        self,
+        job_id: int,
+        video_path: str,
+        caption: str,
+        topic: str,
+        niche: str,
+        output_dir: str = "outputs",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         packager = OutputPackager()
         from pathlib import Path
+
         caption_dir = Path(output_dir) / f"job_{job_id}"
         caption_dir.mkdir(parents=True, exist_ok=True)
         caption_path_file = caption_dir / "caption.txt"
@@ -1909,7 +2397,10 @@ class Orchestrator:
         )
 
     def _promote_to_final(
-        self, output_dir: str, job_id: int, cycle: int = 0,
+        self,
+        output_dir: str,
+        job_id: int,
+        cycle: int = 0,
     ) -> dict[str, Any]:
         """Atomically promote cycle artifacts to outputs/final/job_{id}/.
 
