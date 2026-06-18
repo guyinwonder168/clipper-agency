@@ -183,27 +183,52 @@ class TestScoreCandidateNoneInspection:
         assert result is None
 
 
-class TestRunInspectionStub:
-    """SLICE 1 skeleton: ``_run_inspection`` is a stub until SLICE 6 lands.
+class TestRunInspectionDelegates:
+    """SLICE 6 — ``_run_inspection`` delegates to the injected inspector.
 
-    Pins that a cache miss currently fails loudly (NotImplementedError) rather than
-    silently returning None and rejecting every candidate. SLICE 6 replaces this test
-    with real inspection behavior.
+    Per ADR 0027, rather than verbatim-lifting ``VD._run_multimodal_inspection`` (which
+    would duplicate ~140 lines of OCR/face/enhanced ML machinery and risk cache-namespace
+    drift), ``_run_inspection`` delegates to an injected callable the engine seam binds to
+    ``VisualDirectorAgent._run_multimodal_inspection``. This reuses VD's EXACT inspection
+    (same cached output → no double-VLM, no drift) and keeps frame ownership in VD.
     """
 
-    def test_raises_not_implemented(self) -> None:
-        import pytest
+    def test_delegates_to_inspector_and_returns_result(self) -> None:
+        cand = _make_candidate()
+        beat = _make_beat()
+        sentinel = {"decision": "accept", "person_match": 0.9}
+        received: dict[str, Any] = {}
 
-        with pytest.raises(NotImplementedError):
-            asset_qualification._run_inspection(
-                _make_candidate(),
-                _make_beat(),
-                1,
-                "/tmp/cache",
-                "key",
-                "/tmp/agent",
-                inspector=None,
-            )
+        def inspector(
+            candidate: Any,
+            beat_arg: Any,
+            job_id: int,
+            cache_dir: str,
+            cache_key: str,
+            agent_dir: str,
+        ) -> dict:
+            received["candidate"] = candidate
+            received["beat"] = beat_arg
+            received["job_id"] = job_id
+            received["cache_key"] = cache_key
+            received["agent_dir"] = agent_dir
+            return sentinel
+
+        result = asset_qualification._run_inspection(cand, beat, 1, "/c", "k", "/a", inspector)
+
+        assert result is sentinel  # returns the inspector's result unchanged
+        assert received["candidate"] is cand
+        assert received["beat"] is beat
+        assert received["job_id"] == 1
+        assert received["cache_key"] == "k"
+        assert received["agent_dir"] == "/a"
+
+    def test_returns_none_when_no_inspector(self) -> None:
+        """No inspector injected → graceful None (candidate rejected downstream), not a crash."""
+        result = asset_qualification._run_inspection(
+            _make_candidate(), _make_beat(), 1, "/c", "k", "/a", None
+        )
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

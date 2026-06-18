@@ -187,28 +187,35 @@ def _run_inspection(
     cache_dir: str,
     cache_key: str,
     agent_dir: str,
-    inspector: Any,
+    inspector: Callable[..., dict | None] | None,
 ) -> dict | None:
-    """Run a multimodal inspection on a cache miss.
+    """Run a multimodal inspection on a cache miss by delegating to the injected inspector.
 
-    SLICE 6 will implement this as the verbatim lift of
-    ``VD._run_multimodal_inspection`` (visual_director.py:895-952): frame extraction
-    via the same ``_extract_candidate_frames`` path VD uses (frame ownership stays in
-    VD — no double extraction), ``inspect_asset``, ``store()`` only when
-    ``decision != 'error'``, and ``None`` on exception.
+    Per ADR 0027 (SLICE 6 decision), rather than verbatim-lifting
+    ``VD._run_multimodal_inspection`` (visual_director.py:895-952) — which would
+    duplicate ~140 lines of OCR/face/enhanced ML machinery (ADR 0026 "do not rebuild"
+    tension) and risk the two inspection paths drifting under the same cache key
+    (design §12 HIGHEST risk) — this delegates to an injected callable that the engine
+    seam binds to ``VisualDirectorAgent._run_multimodal_inspection``. That bound method
+    has signature ``(candidate, beat, job_id, cache_dir, cache_key, agent_dir) -> dict | None``
+    and returns ``None`` on its own internal exceptions, so this function just forwards
+    the call. Frame ownership stays in VD (no double extraction) and the cached output is
+    byte-identical to VD's (no cache-namespace drift, no double-VLM). The module still
+    imports neither ``visual_director`` nor ``segment_producer`` (the inspector is
+    injected, like ``RecoveryPolicy.discover_fn``).
 
-    Reached only on a cache miss, so SLICE 1 (cache-key parity, which forces cache
-    hits) never exercises it. It fails loudly if invoked before SLICE 6 lands rather
-    than silently returning ``None`` and rejecting every candidate. The message
-    reports the full request context so an unexpected miss during slices 1-5 is
-    easy to diagnose.
+    Returns ``None`` when no inspector is configured (candidate cannot be inspected →
+    rejected downstream by ``_score_candidate``). The engine seam injects an inspector
+    for cache-miss capability.
     """
-    raise NotImplementedError(
-        "SLICE 6: _run_inspection (verbatim lift of VD._run_multimodal_inspection) "
-        f"is not yet implemented for candidate={candidate.url!r} beat_id={beat.beat_id!r} "
-        f"job_id={job_id!r} cache_dir={cache_dir!r} cache_key={cache_key!r} "
-        f"agent_dir={agent_dir!r} inspector={type(inspector).__name__}."
-    )
+    if inspector is None:
+        logger.warning(
+            "asset_qualification: cache miss for %s but no inspector injected; "
+            "candidate cannot be inspected and will be rejected.",
+            getattr(candidate, "url", candidate),
+        )
+        return None
+    return inspector(candidate, beat, job_id, cache_dir, cache_key, agent_dir)
 
 
 # ---------------------------------------------------------------------------
