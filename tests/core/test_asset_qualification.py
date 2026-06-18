@@ -1039,3 +1039,67 @@ class TestBuildSpDiscoveryAdapter:
         assert recorded["beats"] is None
         assert candidate_dicts == []
         assert len(atts) == 1
+
+
+# ---------------------------------------------------------------------------
+# SLICE 10 — VD hand-off transparency: 0 double-VLM.
+#
+# The 0-double-VLM property is a CONSEQUENCE of SLICE 1 cache-key parity + the seam
+# feeding VD only pre-qualified (already-inspected) candidates: when VD re-scores such a
+# candidate its ``lookup`` is a hit, so ``_run_multimodal_inspection`` is never invoked.
+# This regression pins that behavioral cost outcome (distinct from SLICE 1's static
+# cache-key parity assertion) so a future literal drift at either scorer fails loudly.
+# ---------------------------------------------------------------------------
+
+
+class TestZeroDoubleVlmHandoff:
+    """SLICE 10 — VD re-inspection of a pre-qualified candidate is a cache hit."""
+
+    def test_vd_reinspection_hits_cache_after_pre_vd_score(self, tmp_path: Any) -> None:
+        from clipper_agency.agents.visual_director import VisualDirectorAgent
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        cand = _make_candidate("tiktok_clip", "https://a.com/shared.mp4")
+        beat = _make_beat(beat_id=1)
+        plan_item = _make_plan_item()
+        cache_dir = str(tmp_path / "inspection_cache")
+        inspection = _high_inspection()
+
+        # Pre-VD pass: cache MISS -> inspect -> STORE under the shared cache key.
+        def fake_inspect(
+            candidate: Any,
+            beat_arg: Any,
+            job_id: int,
+            cdir: str,
+            cache_key: str,
+            agent_dir: str,
+            inspector: Any,
+        ) -> dict:
+            cache_store(cdir, cache_key, inspection)
+            return inspection
+
+        with (
+            patch("clipper_agency.core.asset_qualification.lookup", return_value=None),
+            patch(
+                "clipper_agency.core.asset_qualification._run_inspection",
+                side_effect=fake_inspect,
+            ),
+        ):
+            aq_result = asset_qualification._score_candidate(
+                cand, beat, plan_item, 1, cache_dir, "/agent", inspector=object()
+            )
+        assert aq_result is not None  # pre-VD pass scored + populated the cache
+
+        # VD re-scores the SAME candidate/beat/cache_dir. Its lookup MUST hit the cache the
+        # pre-VD pass populated, so VD's multimodal inspector is never invoked (0 double-VLM).
+        agent = VisualDirectorAgent()
+        with patch.object(
+            agent,
+            "_run_multimodal_inspection",
+            side_effect=AssertionError("VLM re-spent on a pre-qualified candidate"),
+        ) as mock_inspect:
+            vd_result = agent._score_one_candidate(cand, beat, plan_item, 1, cache_dir, "/agent")
+
+        assert mock_inspect.call_count == 0
+        assert vd_result is not None
+        assert vd_result["inspection_diag"]["from_cache"] is True
