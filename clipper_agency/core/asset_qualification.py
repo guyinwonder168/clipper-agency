@@ -11,9 +11,15 @@ design that drives this module.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from clipper_agency.config.schema import StoryBeat
+from clipper_agency.core.candidate_semantic_ranker import (
+    apply_rejection_rules,
+    rank_candidates,
+)
 from clipper_agency.core.inspection_cache import (
     compute_asset_content_hash,
     compute_cache_key,
@@ -36,6 +42,63 @@ from clipper_agency.core.semantic_visual_review import score_visual_relevance
 _CACHE_MODEL = "multimodal"
 _CACHE_PROMPT_VERSION = "1.0"
 _CACHE_EVIDENCE_CONTRACT_HASH = ""
+
+# Recovery bound (design §7 / §12): one recovery cycle per failing beat — prevents
+# an unbounded discovery loop. SLICE 5 pins the bound behavior.
+MAX_RECOVERY_CYCLES: int = 1
+
+
+# ---------------------------------------------------------------------------
+# Contract types (module-local, NOT promoted to config/schema.py — YAGNI/DRY).
+# See design doc §5.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RecoveryPolicy:
+    """Source-recovery policy for a beat with zero qualified candidates.
+
+    ``discover_fn`` is an opaque ``Callable`` (bound to Segment Producer discovery by
+    the orchestrator via ``_build_sp_discovery_adapter``) so this module imports
+    NEITHER ``segment_producer`` NOR ``visual_director`` — breaking the import cycle
+    (design §4). Recovery itself lands in SLICE 3.
+    """
+
+    enabled: bool = True
+    max_cycles: int = MAX_RECOVERY_CYCLES
+    discover_fn: Callable[[list[str]], tuple[list[dict], list[dict]]] | None = None
+
+
+@dataclass(frozen=True)
+class AssetQualificationContext:
+    """Per-job invariants bundled for ``_qualify_beat`` (the >5-scalar rule, §5).
+
+    The per-beat ``StoryBeat`` is passed separately to ``_qualify_beat`` (it varies
+    each beat); this context holds the values that are constant across every beat in
+    one qualification pass.
+    """
+
+    job_id: int
+    cache_dir: str
+    agent_dir: str
+    inspector: Any
+    recovery: RecoveryPolicy | None
+    plan_item: dict | None = None
+
+
+@dataclass(frozen=True)
+class BeatQualificationResult:
+    """Outcome of qualifying one beat's candidate pool (design §5)."""
+
+    beat_id: str
+    verdict: str  # 'qualified' | 'recovered' | 'exhausted_text_card'
+    recovery_outcome: str  # 'none' | 'ran' | 'exhausted' | 'no_fn'
+    recovery_attempts: int
+    qualified: list[dict] = field(default_factory=list)
+    scored: list[dict] = field(default_factory=list)
+    reject_reasons: dict[str, str] = field(default_factory=dict)
+    fallback_card: dict | None = None
+    provider_attempts_added: list[dict] = field(default_factory=list)
 
 
 def _score_candidate(
@@ -141,4 +204,119 @@ def _run_inspection(
         f"is not yet implemented for candidate={candidate.url!r} beat_id={beat.beat_id!r} "
         f"job_id={job_id!r} cache_dir={cache_dir!r} cache_key={cache_key!r} "
         f"agent_dir={agent_dir!r} inspector={type(inspector).__name__}."
+    )
+
+
+# ---------------------------------------------------------------------------
+# SLICE 2 — per-beat qualification orchestration (public entry).
+# ---------------------------------------------------------------------------
+
+
+def qualify_research_candidates(
+    research_output: dict,
+    job_id: int,
+    cache_dir: str,
+    agent_dir: str,
+    *,
+    inspector: Any = None,
+    recovery: RecoveryPolicy | None = None,
+    min_claim_support: float = 0.30,
+    max_misleading_risk: float = 0.50,
+) -> list[BeatQualificationResult]:
+    """Pre-VD qualification boundary — public entry (design §4).
+
+    Parses each ``research_output['story_beats']`` entry into a ``StoryBeat`` and
+    qualifies it via ``_qualify_beat``, returning one ``BeatQualificationResult`` per
+    beat. The orchestrator's engine seam uses the results to rewrite the candidate
+    pool Visual Director receives and to write ``qualification_report.json``.
+
+    The locked design (§4) also accepts ``sp`` / ``config`` / ``topic`` / ``entities``
+    for the recovery stage and the SP discovery adapter; those land with SLICE 3 /
+    SLICE 7 (the slices that consume them) and are omitted here to avoid
+    unused-parameter issues (per-slice YAGNI).
+    """
+    story_beats_raw: list[dict] = (
+        research_output.get("story_beats", []) if isinstance(research_output, dict) else []
+    )
+    ctx = AssetQualificationContext(
+        job_id=job_id,
+        cache_dir=cache_dir,
+        agent_dir=agent_dir,
+        inspector=inspector,
+        recovery=recovery,
+        plan_item=None,
+    )
+    results: list[BeatQualificationResult] = []
+    for beat_dict in story_beats_raw:
+        beat = StoryBeat(**beat_dict)
+        results.append(_qualify_beat(beat, ctx, min_claim_support, max_misleading_risk))
+    return results
+
+
+def _qualify_beat(
+    beat: StoryBeat,
+    ctx: AssetQualificationContext,
+    min_claim_support: float,
+    max_misleading_risk: float,
+) -> BeatQualificationResult:
+    """Score → rank → qualify one beat's candidate pool (design §7 steps 1-3).
+
+    Scores every candidate via ``_score_candidate`` (cache-key literals byte-identical
+    to VD:759-766), ranks via ``candidate_semantic_ranker.rank_candidates``, and if any
+    ranked candidate is ``{accept, revise}`` returns ``verdict='qualified'`` with the
+    accept+revised scored dicts in rank order, populated ``reject_reasons`` for the
+    rejects, and NO recovery / text card.
+
+    The zero-qualified path (all reject / empty pool) is the recovery-before-text-card
+    fix and lands in SLICE 3; until then it fails loud (NotImplementedError) rather
+    than silently emitting a text card — which is the exact Job #8 bug this boundary
+    exists to fix.
+    """
+    scored: list[dict] = []
+    for candidate in beat.asset_candidates:
+        scored_one = _score_candidate(
+            candidate,
+            beat,
+            ctx.plan_item,
+            ctx.job_id,
+            ctx.cache_dir,
+            ctx.agent_dir,
+            ctx.inspector,
+        )
+        if scored_one:
+            scored.append(scored_one)
+
+    ranked = rank_candidates(
+        {"beat_id": str(beat.beat_id)}, scored, min_claim_support, max_misleading_risk
+    )
+
+    reject_reasons: dict[str, str] = {}
+    for scored_one in scored:
+        reason = apply_rejection_rules(
+            scored_one,
+            min_claim_support=min_claim_support,
+            max_misleading_risk=max_misleading_risk,
+        )
+        if reason:
+            reject_reasons[scored_one["asset_id"]] = reason
+
+    scored_by_id = {s["asset_id"]: s for s in scored}
+    qualified = [scored_by_id[r.asset_id] for r in ranked if r.decision in ("accept", "revise")]
+
+    if qualified:
+        return BeatQualificationResult(
+            beat_id=str(beat.beat_id),
+            verdict="qualified",
+            recovery_outcome="none",
+            recovery_attempts=0,
+            qualified=qualified,
+            scored=scored,
+            reject_reasons=reject_reasons,
+            fallback_card=None,
+            provider_attempts_added=[],
+        )
+
+    raise NotImplementedError(
+        "SLICE 3: recovery-before-text-card not yet implemented for "
+        f"beat_id={beat.beat_id!r} (zero of {len(scored)} candidate(s) qualified)."
     )

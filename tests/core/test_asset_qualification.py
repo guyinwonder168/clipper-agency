@@ -204,3 +204,314 @@ class TestRunInspectionStub:
                 "/tmp/agent",
                 inspector=None,
             )
+
+
+# ---------------------------------------------------------------------------
+# SLICE 2 — happy-path qualified set (accept + revised)
+#
+# Drives the public entry ``qualify_research_candidates`` + ``_qualify_beat``:
+# score every candidate (cache-hit) → rank via ``rank_candidates`` → if any
+# candidate is {accept, revise} the beat is ``verdict='qualified'`` with no
+# recovery and no text card. The recovery-before-text-card path is SLICE 3;
+# here it must NOT fire, and the not-qualified branch raises fail-loud
+# (mirroring the SLICE 1 ``_run_inspection`` stub discipline).
+# ---------------------------------------------------------------------------
+
+
+def _high_inspection() -> dict:
+    """Inspection that clears every rejection rule and the accept threshold (~0.84)."""
+    return {
+        "decision": "accept",
+        "person_match": 0.9,
+        "event_match": 0.85,
+        "claim_support": 0.9,
+        "visual_quality": 0.8,
+        "misleading_risk": 0.1,
+        "source_credibility": 0.8,
+    }
+
+
+def _low_inspection() -> dict:
+    """Inspection that fails the HIGH_MISLEADING_RISK hard rule (misleading_risk=0.8)."""
+    return {
+        "decision": "reject",
+        "person_match": 0.1,
+        "event_match": 0.1,
+        "claim_support": 0.2,
+        "visual_quality": 0.2,
+        "misleading_risk": 0.8,
+        "source_credibility": 0.1,
+    }
+
+
+def _mid_inspection() -> dict:
+    """Inspection scoring 'revise' (final ~0.54, below the 0.60 accept threshold)
+    while clearing every rejection rule. Verifies rank order + the revise-qualified
+    contract."""
+    return {
+        "decision": "revise",
+        "person_match": 0.5,
+        "event_match": 0.5,
+        "claim_support": 0.6,
+        "visual_quality": 0.5,
+        "misleading_risk": 0.2,
+        "source_credibility": 0.0,
+    }
+
+
+class TestQualifyBeatHappyPath:
+    """SLICE 2 — accept-scoring candidates yield ``verdict='qualified'``.
+
+    The pre-VD orchestration (score → rank → qualified-check) must assemble a
+    ``BeatQualificationResult`` with the accept+revised candidates in rank order,
+    populated ``reject_reasons`` for the rejects, and NO recovery / text card.
+    """
+
+    def test_accept_candidate_yields_qualified(self) -> None:
+        cand = _make_candidate("tiktok_clip", "https://a.com/clip1.mp4")
+        beat = _make_beat(beat_id=1, asset_candidates=[cand])
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir="/tmp/cache",
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=None,
+            plan_item=None,
+        )
+
+        with patch(
+            "clipper_agency.core.asset_qualification.lookup",
+            return_value=_high_inspection(),
+        ):
+            result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        assert isinstance(result, asset_qualification.BeatQualificationResult)
+        assert result.beat_id == "1"
+        assert result.verdict == "qualified"
+        assert result.recovery_outcome == "none"
+        assert result.recovery_attempts == 0
+        assert result.fallback_card is None
+        assert len(result.qualified) == 1
+        # Rank order preserved + the scored dict is the exact rank_candidates shape
+        # (carries the live AssetCandidate for the engine-seam rewrite).
+        assert result.qualified[0]["candidate"] is cand
+        assert result.qualified[0]["candidate"].url == "https://a.com/clip1.mp4"
+        assert len(result.scored) == 1
+        assert result.reject_reasons == {}
+        assert result.provider_attempts_added == []
+
+    def test_mixed_accept_andreject_aggregates_qualified_set(self, tmp_path: Any) -> None:
+        good = _make_candidate("tiktok_clip", "https://a.com/good.mp4")
+        bad = _make_candidate("tiktok_clip", "https://b.com/bad.mp4")
+        beat = _make_beat(beat_id=2, asset_candidates=[good, bad])
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        # Pre-populate the REAL inspection cache per candidate (real cache keys,
+        # matching _score_candidate's literals) so good→accept, bad→reject with
+        # no compute_cache_key/lookup mocking. Mirrors the VD cache-test idiom and
+        # implicitly re-verifies SLICE 1 cache-key parity.
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        for cand, insp in ((good, _high_inspection()), (bad, _low_inspection())):
+            cache_store(
+                cache_dir,
+                compute_cache_key(
+                    asset_path=cand.url,
+                    asset_hash=inspection_cache.compute_asset_content_hash(cand),
+                    beat_claim=beat.spoken_point,
+                    evidence_contract_hash="",
+                    model="multimodal",
+                    prompt_version="1.0",
+                ),
+                insp,
+            )
+
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir=cache_dir,
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=None,
+            plan_item=None,
+        )
+        result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        # The accept candidate qualifies the beat; the reject is recorded, not rendered.
+        assert result.verdict == "qualified"
+        assert len(result.qualified) == 1
+        assert result.qualified[0]["candidate"] is good
+        assert len(result.scored) == 2
+        assert len(result.reject_reasons) == 1
+        bad_id = f"tiktok_clip_{bad.url[:40]}"
+        assert result.reject_reasons[bad_id] == "HIGH_MISLEADING_RISK"
+
+    def test_uninspectable_candidate_is_skipped(self, tmp_path: Any) -> None:
+        """A candidate whose inspection yields None is dropped — not fatal to the beat."""
+        good = _make_candidate("tiktok_clip", "https://a.com/good.mp4")
+        broken = _make_candidate("tiktok_clip", "https://x.com/broken.mp4")
+        beat = _make_beat(beat_id=4, asset_candidates=[good, broken])
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        # good hits the real cache (accept); broken misses cache and its
+        # inspection yields None (patched) → _score_candidate returns None → skipped.
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        cache_store(
+            cache_dir,
+            compute_cache_key(
+                asset_path=good.url,
+                asset_hash=inspection_cache.compute_asset_content_hash(good),
+                beat_claim=beat.spoken_point,
+                evidence_contract_hash="",
+                model="multimodal",
+                prompt_version="1.0",
+            ),
+            _high_inspection(),
+        )
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir=cache_dir,
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=None,
+            plan_item=None,
+        )
+        with patch(
+            "clipper_agency.core.asset_qualification._run_inspection",
+            return_value=None,
+        ):
+            result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        assert result.verdict == "qualified"
+        assert len(result.qualified) == 1
+        assert result.qualified[0]["candidate"] is good
+        # broken was dropped before ranking — it is absent from the scored set.
+        assert len(result.scored) == 1
+
+    def test_rank_order_two_qualified_candidates(self, tmp_path: Any) -> None:
+        """The qualified list preserves rank order — highest score first.
+
+        Two candidates both clear the qualified bar: one accept (high score), one
+        revise (mid score). qualified[0] must be the higher-scoring accept. A
+        single-accept test cannot verify this load-bearing contract; this one does.
+        """
+        high = _make_candidate("tiktok_clip", "https://a.com/high.mp4")
+        mid = _make_candidate("tiktok_clip", "https://m.com/mid.mp4")
+        beat = _make_beat(beat_id=6, asset_candidates=[high, mid])
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        for cand, insp in ((high, _high_inspection()), (mid, _mid_inspection())):
+            cache_store(
+                cache_dir,
+                compute_cache_key(
+                    asset_path=cand.url,
+                    asset_hash=inspection_cache.compute_asset_content_hash(cand),
+                    beat_claim=beat.spoken_point,
+                    evidence_contract_hash="",
+                    model="multimodal",
+                    prompt_version="1.0",
+                ),
+                insp,
+            )
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir=cache_dir,
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=None,
+            plan_item=None,
+        )
+        result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        assert result.verdict == "qualified"
+        assert len(result.qualified) == 2
+        # Rank order: the higher-scoring accept precedes the lower-scoring revise.
+        assert result.qualified[0]["candidate"] is high
+        assert result.qualified[1]["candidate"] is mid
+
+    def test_revise_only_beat_is_qualified(self) -> None:
+        """A beat whose only candidate scores 'revise' is still verdict='qualified'.
+
+        Design §7 step 3 treats {accept, revise} as qualified. Note (design §8):
+        VD._apply_best_candidate only RENDERS on decision=='accept'
+        (visual_director.py:1104), so a revise-only 'qualified' beat may still
+        render as a text card — VD retains that authority as defense-in-depth.
+        This test pins the qualification verdict, not VD's render decision.
+        """
+        mid = _make_candidate("tiktok_clip", "https://m.com/mid.mp4")
+        beat = _make_beat(beat_id=7, asset_candidates=[mid])
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir="/tmp/cache",
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=None,
+            plan_item=None,
+        )
+        with patch(
+            "clipper_agency.core.asset_qualification.lookup",
+            return_value=_mid_inspection(),
+        ):
+            result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        assert result.verdict == "qualified"
+        assert len(result.qualified) == 1
+        assert result.qualified[0]["candidate"] is mid
+
+    def test_empty_pool_raises_not_implemented(self) -> None:
+        """Zero qualified candidates is SLICE 3 territory — fail loud, never silently text-card."""
+        import pytest
+
+        cand = _make_candidate("tiktok_clip", "https://b.com/bad.mp4")
+        beat = _make_beat(beat_id=3, asset_candidates=[cand])
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir="/tmp/cache",
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=None,
+            plan_item=None,
+        )
+
+        with patch(
+            "clipper_agency.core.asset_qualification.lookup",
+            return_value=_low_inspection(),
+        ):
+            with pytest.raises(NotImplementedError):
+                asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+
+class TestQualifyResearchCandidatesPublicEntry:
+    """SLICE 2 — the public entry parses ``research_output['story_beats']`` into
+    StoryBeats and qualifies each beat, returning one result per beat.
+    """
+
+    def test_parses_beats_and_qualifies_each(self) -> None:
+        beat_a = _make_beat(
+            beat_id=1, asset_candidates=[_make_candidate("tiktok_clip", "https://a.com/1.mp4")]
+        )
+        beat_b = _make_beat(
+            beat_id=2, asset_candidates=[_make_candidate("tiktok_clip", "https://a.com/2.mp4")]
+        )
+        research_output = {"story_beats": [beat_a.model_dump(), beat_b.model_dump()]}
+
+        with patch(
+            "clipper_agency.core.asset_qualification.lookup",
+            return_value=_high_inspection(),
+        ):
+            results = asset_qualification.qualify_research_candidates(
+                research_output, 1, "/tmp/cache", "/tmp/agent"
+            )
+
+        assert len(results) == 2
+        assert all(r.verdict == "qualified" for r in results)
+        assert [r.beat_id for r in results] == ["1", "2"]
+        assert all(len(r.qualified) == 1 for r in results)
+
+    def test_empty_story_beats_returns_empty_list(self) -> None:
+        results = asset_qualification.qualify_research_candidates(
+            {"story_beats": []}, 1, "/tmp/cache", "/tmp/agent"
+        )
+        assert results == []
