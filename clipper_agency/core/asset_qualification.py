@@ -352,6 +352,20 @@ def _attempt_recovery(
     return new_candidates, list(provider_attempts or [])
 
 
+def _build_fallback_card(beat: StoryBeat) -> dict:
+    """Build the terminal text-card fallback.
+
+    Mirrors VD._apply_best_candidate's fallback shape (visual_director.py:1126-1130)
+    so the engine seam / VD consume a consistent text-card dict. A shared
+    ``build_fallback_card()`` across both sites is a later cleanup (design §8).
+    """
+    return {
+        "type": "text_card",
+        "headline": (beat.overlay_text or f"Beat {beat.beat_id}")[:60],
+        "style": "news_card",
+    }
+
+
 def _qualify_beat(
     beat: StoryBeat,
     ctx: AssetQualificationContext,
@@ -371,9 +385,10 @@ def _qualify_beat(
     VD's ``_apply_best_candidate`` goes straight to a text card on all-reject
     (visual_director.py:1117-1130) with zero recovery.
 
-    Step 5 (SLICE 4 — terminal text-card fallback) is not yet implemented; if recovery
-    does not qualify the beat (or is disabled), this fails loud (NotImplementedError)
-    rather than silently emitting a text card.
+    Step 5 (SLICE 4 — terminal text-card fallback): if recovery does not qualify the
+    beat (or is disabled / has no discover_fn), return ``verdict='exhausted_text_card'``
+    with ``recovery_outcome`` in {'exhausted', 'no_fn'} and a ``fallback_card`` — the
+    ONLY path that emits a text card, and only as a last resort.
     """
     scored = _score_candidates(beat.asset_candidates, beat, ctx)
     qualified, reject_reasons = _rank_and_select(
@@ -395,8 +410,11 @@ def _qualify_beat(
 
     # SLICE 3: RECOVER stage — recovery BEFORE the text-card fallback.
     # max_cycles is a 0/1 gate today (1 = one recovery pass, 0 = skip); _attempt_recovery
-    # runs a single synchronous pass with no loop. SLICE 5 formalizes the bound — raising
-    # MAX_RECOVERY_CYCLES alone would NOT add iteration until a loop is introduced there.
+    # runs a single synchronous pass with no loop. SLICE 5 pins the bound with a test.
+    scored_pool = scored
+    reject_reasons_pool = reject_reasons
+    provider_attempts: list[dict] = []
+    recovery_attempted = False
     recovery = ctx.recovery
     if (
         recovery is not None
@@ -404,13 +422,14 @@ def _qualify_beat(
         and recovery.discover_fn is not None
         and recovery.max_cycles > 0
     ):
+        recovery_attempted = True
         recovered_candidates, provider_attempts = _attempt_recovery(
             beat, recovery.discover_fn, cycle=0
         )
         recovered_scored = _score_candidates(recovered_candidates, beat, ctx)
-        all_scored = scored + recovered_scored
-        qualified, reject_reasons = _rank_and_select(
-            beat, all_scored, min_claim_support, max_misleading_risk
+        scored_pool = scored + recovered_scored
+        qualified, reject_reasons_pool = _rank_and_select(
+            beat, scored_pool, min_claim_support, max_misleading_risk
         )
         if qualified:
             return BeatQualificationResult(
@@ -419,14 +438,22 @@ def _qualify_beat(
                 recovery_outcome="ran",
                 recovery_attempts=1,
                 qualified=qualified,
-                scored=all_scored,
-                reject_reasons=reject_reasons,
+                scored=scored_pool,
+                reject_reasons=reject_reasons_pool,
                 fallback_card=None,
                 provider_attempts_added=list(provider_attempts),
             )
 
-    # SLICE 4: terminal text-card fallback (last resort) — not yet implemented.
-    raise NotImplementedError(
-        "SLICE 4: terminal text-card fallback not yet implemented for "
-        f"beat_id={beat.beat_id!r} (recovery did not yield a qualified candidate)."
+    # SLICE 4: terminal text-card fallback — the ONLY path that emits a text card,
+    # and only as a last resort after qualification (and recovery, if enabled) fail.
+    return BeatQualificationResult(
+        beat_id=str(beat.beat_id),
+        verdict="exhausted_text_card",
+        recovery_outcome="exhausted" if recovery_attempted else "no_fn",
+        recovery_attempts=1 if recovery_attempted else 0,
+        qualified=[],
+        scored=scored_pool,
+        reject_reasons=reject_reasons_pool,
+        fallback_card=_build_fallback_card(beat),
+        provider_attempts_added=list(provider_attempts),
     )

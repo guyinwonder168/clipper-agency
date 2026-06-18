@@ -460,10 +460,13 @@ class TestQualifyBeatHappyPath:
         assert len(result.qualified) == 1
         assert result.qualified[0]["candidate"] is mid
 
-    def test_empty_pool_raises_not_implemented(self) -> None:
-        """No recovery policy → SLICE 4 terminal stub (never silently text-cards)."""
-        import pytest
+    def test_exhausted_text_card_when_no_recovery(self) -> None:
+        """SLICE 4 — all-reject with no recovery policy → terminal text-card fallback.
 
+        recovery_outcome='no_fn' (recovery not configured); fallback_card mirrors
+        VD's text-card shape; qualified is empty. This is the ONLY path that emits a
+        text card — and it never fires silently (only after qualification fails).
+        """
         cand = _make_candidate("tiktok_clip", "https://b.com/bad.mp4")
         beat = _make_beat(beat_id=3, asset_candidates=[cand])
         ctx = asset_qualification.AssetQualificationContext(
@@ -479,8 +482,18 @@ class TestQualifyBeatHappyPath:
             "clipper_agency.core.asset_qualification.lookup",
             return_value=_low_inspection(),
         ):
-            with pytest.raises(NotImplementedError):
-                asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+            result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        assert result.verdict == "exhausted_text_card"
+        assert result.recovery_outcome == "no_fn"
+        assert result.recovery_attempts == 0
+        assert result.qualified == []
+        assert result.fallback_card is not None
+        assert result.fallback_card["type"] == "text_card"
+        assert (
+            result.fallback_card["headline"] == (beat.overlay_text or f"Beat {beat.beat_id}")[:60]
+        )
+        assert result.fallback_card["style"] == "news_card"
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +613,126 @@ class TestQualifyBeatRecoveryBeforeTextCard:
         assert result.verdict == "recovered"
         assert len(result.qualified) == 1
         assert result.qualified[0]["candidate"].url == rescued.url
+
+    def test_exhausted_text_card_when_recovery_yields_nothing(self, tmp_path: Any) -> None:
+        """SLICE 4 — recovery ran but yielded no qualified candidate → terminal text card.
+
+        recovery_outcome='exhausted', recovery_attempts=1; recovery WAS attempted
+        (discover_fn called) before the fallback. The text card is the last resort.
+        """
+        bad = _make_candidate("tiktok_clip", "https://b.com/bad.mp4")
+        still_bad = _make_candidate("tiktok_clip", "https://r.com/stillbad.mp4")
+        beat = _make_beat(beat_id=10, asset_candidates=[bad])
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        for cand, insp in ((bad, _low_inspection()), (still_bad, _low_inspection())):
+            cache_store(
+                cache_dir,
+                compute_cache_key(
+                    asset_path=cand.url,
+                    asset_hash=inspection_cache.compute_asset_content_hash(cand),
+                    beat_claim=beat.spoken_point,
+                    evidence_contract_hash="",
+                    model="multimodal",
+                    prompt_version="1.0",
+                ),
+                insp,
+            )
+
+        discover_calls: list[list[str]] = []
+
+        def discover_fn(queries: list[str]) -> tuple[list[dict], list[dict]]:
+            discover_calls.append(list(queries))
+            # Recovery re-discovers a candidate that ALSO rejects.
+            return (
+                [{"type": "tiktok_clip", "url": still_bad.url, "reason": "r"}],
+                [{"provider": "youtube"}],
+            )
+
+        recovery = asset_qualification.RecoveryPolicy(
+            enabled=True, max_cycles=1, discover_fn=discover_fn
+        )
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir=cache_dir,
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=recovery,
+            plan_item=None,
+        )
+        result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        # Recovery was attempted (discover_fn called once) but still no qualified candidate.
+        assert len(discover_calls) == 1
+        assert result.verdict == "exhausted_text_card"
+        assert result.recovery_outcome == "exhausted"
+        assert result.recovery_attempts == 1
+        assert result.qualified == []
+        assert result.fallback_card is not None
+        assert result.fallback_card["type"] == "text_card"
+        assert result.fallback_card["style"] == "news_card"
+        assert len(result.provider_attempts_added) == 1
+        assert result.provider_attempts_added[0]["provider"] == "youtube"
+
+
+# ---------------------------------------------------------------------------
+# SLICE 5 — MAX_RECOVERY_CYCLES bound: recovery runs at most one pass (no loop).
+#
+# Recovery is structurally single-cycle (no while/for loop; max_cycles is a 0/1 gate).
+# SLICE 4's recovery-exhausted test already pins the 1-cycle path (discover_fn called
+# exactly once, recovery_attempts==1). This slice pins the 0-side of the gate.
+# ---------------------------------------------------------------------------
+
+
+class TestRecoveryBoundMaxOneCycle:
+    """SLICE 5 — the recovery bound: max_cycles=0 skips recovery; =1 runs one pass."""
+
+    def test_max_cycles_zero_skips_recovery(self, tmp_path: Any) -> None:
+        """max_cycles=0 disables recovery — discover_fn is never called, no loop risk."""
+        bad = _make_candidate("tiktok_clip", "https://b.com/bad.mp4")
+        beat = _make_beat(beat_id=11, asset_candidates=[bad])
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        cache_store(
+            cache_dir,
+            compute_cache_key(
+                asset_path=bad.url,
+                asset_hash=inspection_cache.compute_asset_content_hash(bad),
+                beat_claim=beat.spoken_point,
+                evidence_contract_hash="",
+                model="multimodal",
+                prompt_version="1.0",
+            ),
+            _low_inspection(),
+        )
+
+        discover_calls: list[list[str]] = []
+
+        def discover_fn(queries: list[str]) -> tuple[list[dict], list[dict]]:
+            discover_calls.append(queries)
+            return ([], [])
+
+        recovery = asset_qualification.RecoveryPolicy(
+            enabled=True, max_cycles=0, discover_fn=discover_fn
+        )
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir=cache_dir,
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=recovery,
+            plan_item=None,
+        )
+        result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        assert discover_calls == []  # recovery skipped entirely
+        assert result.recovery_attempts == 0
+        assert result.recovery_outcome == "no_fn"
+        assert result.verdict == "exhausted_text_card"
 
 
 class TestToAssetCandidate:
