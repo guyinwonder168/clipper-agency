@@ -203,3 +203,19 @@ def test_app_settings_include_frame_inspection_cost_defaults():
         settings = AppSettings(_env_file=None)
         assert settings.frame_inspection_max_frames == 48
         assert settings.frame_inspection_interval_sec == 1.0
+
+
+def test_frame_inspection_fields_reject_invalid_values():
+    """PR 8 Codex P2#2: zero/negative values fail validation instead of hanging
+    frame_sampler's `while t < duration` loop (interval <= 0 never advances)."""
+    from clipper_agency.config.schema import AppSettings
+
+    with patch.dict("os.environ", {"FRAME_INSPECTION_INTERVAL_SEC": "0"}, clear=True):
+        with pytest.raises(ValidationError):
+            AppSettings(_env_file=None)
+    with patch.dict("os.environ", {"FRAME_INSPECTION_INTERVAL_SEC": "-0.5"}, clear=True):
+        with pytest.raises(ValidationError):
+            AppSettings(_env_file=None)
+    with patch.dict("os.environ", {"FRAME_INSPECTION_MAX_FRAMES": "0"}, clear=True):
+        with pytest.raises(ValidationError):
+            AppSettings(_env_file=None)

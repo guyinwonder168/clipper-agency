@@ -218,9 +218,11 @@ class AppSettings(BaseSettings):
 
     # Candidate frame-extraction for multimodal inspection (PR 8 cost optimization).
     # Conservative from the prior 120 frames @ 0.5s (~7.5x fewer VLM-bound frames);
-    # tunable via env. Resolves the job_11 frame-extraction storm.
-    frame_inspection_max_frames: int = 48
-    frame_inspection_interval_sec: float = 1.0
+    # tunable via env. Resolves the job_11 frame-extraction storm. Validated: a
+    # bad deployment value fails fast instead of hanging frame_sampler's
+    # `while t < duration` loop (interval <= 0 never advances).
+    frame_inspection_max_frames: int = Field(default=48, ge=1)
+    frame_inspection_interval_sec: float = Field(default=1.0, gt=0)
 
     # Default LLM
     llm: LLMConfig = Field(default_factory=LLMConfig)

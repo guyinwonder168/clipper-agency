@@ -1207,3 +1207,54 @@ class TestPr8CostOptimization:
         # 13 recovered -> capped to MAX_RECOVERED_PER_BEAT; beat.asset_candidates=[]
         # contributes 0, so scored_urls == the capped recover set only.
         assert len(scored_urls) == asset_qualification.MAX_RECOVERED_PER_BEAT
+
+    def test_recovery_ranks_relevant_candidate_above_cap(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Codex P2#1: the most relevant recovered candidate is kept even when it
+        lands past the cap in provider order (ranked by keyword overlap first)."""
+        beat = _make_beat(beat_id=7, spoken_point="Mount Fuji sunrise climb")
+        cap = asset_qualification.MAX_RECOVERED_PER_BEAT
+        # `cap` zero-overlap candidates first, then ONE relevant candidate at the
+        # tail — without rank-then-cap it would be sliced off and the beat would
+        # regress to a text card despite recovery finding a usable candidate.
+        irrelevant = [
+            _make_candidate("tiktok_clip", f"https://x.com/irr/{i}", reason="basketball playoffs")
+            for i in range(cap)
+        ]
+        relevant = _make_candidate(
+            "tiktok_clip", "https://x.com/relevant", reason="Fuji sunrise summit"
+        )
+
+        def discover_fn(queries: list[str]) -> tuple[list[dict], list[dict]]:
+            return (
+                [
+                    {"type": c.type, "url": c.url, "reason": c.reason}
+                    for c in [*irrelevant, relevant]
+                ],
+                [],
+            )
+
+        recovery = asset_qualification.RecoveryPolicy(
+            enabled=True, max_cycles=1, discover_fn=discover_fn
+        )
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir="",
+            agent_dir=str(tmp_path),
+            inspector=None,
+            recovery=recovery,
+            plan_item=None,
+        )
+
+        scored_urls: list[str] = []
+
+        def counting(candidate: Any, _beat: Any, *_a: Any, **_kw: Any) -> None:
+            scored_urls.append(candidate.url)
+            return None
+
+        monkeypatch.setattr(asset_qualification, "_score_candidate", counting)
+        asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+        # Ranked by overlap, the relevant candidate outranks the zero-overlap ones,
+        # so it is within the cap and gets scored.
+        assert "https://x.com/relevant" in scored_urls

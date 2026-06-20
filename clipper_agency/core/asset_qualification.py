@@ -560,9 +560,19 @@ def _qualify_beat(
         )
         # PR 8 (option 9) — bound the number of recovered candidates scored so one
         # all-reject beat can't flood MAX_RECOVERED_PER_BEAT+ fresh VLM inspections.
+        # Rank by cheap keyword-overlap relevance to THIS failing beat BEFORE
+        # capping (Codex P2#1): recovery discovery returns candidates in provider
+        # order, so the most relevant ones could land past the cap and regress the
+        # beat to a text card despite recovery finding usable candidates.
+        recovered_candidates = sorted(
+            recovered_candidates,
+            key=lambda c: _WINDOW_SELECTOR.relevance_score(c.model_dump(), beat),
+            reverse=True,
+        )
         if len(recovered_candidates) > MAX_RECOVERED_PER_BEAT:
             logger.info(
-                "asset_qualification.recovery beat_id=%s capping recovered %d -> %d",
+                "asset_qualification.recovery beat_id=%s capping recovered %d -> %d "
+                "(ranked by keyword overlap)",
                 beat.beat_id,
                 len(recovered_candidates),
                 MAX_RECOVERED_PER_BEAT,
