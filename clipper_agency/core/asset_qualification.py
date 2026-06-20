@@ -23,6 +23,7 @@ from clipper_agency.core.candidate_semantic_ranker import (
     compute_final_score,
     rank_candidates,
 )
+from clipper_agency.core.clip_window import KeywordOverlapWindowSelector
 from clipper_agency.core.inspection_cache import (
     compute_asset_content_hash,
     compute_cache_key,
@@ -51,6 +52,18 @@ _CACHE_EVIDENCE_CONTRACT_HASH = ""
 # Recovery bound (design §7 / §12): one recovery cycle per failing beat — prevents
 # an unbounded discovery loop. SLICE 5 pins the bound behavior.
 MAX_RECOVERY_CYCLES: int = 1
+
+# PR 8 — cost-optimization knobs (resolve the job_11 rejection storm).
+# Pre-VLM keyword-overlap skip gate (option 1): a candidate with ZERO textual
+# overlap to the beat is almost certainly irrelevant (job_11: thousands of VLM
+# calls, ~all claim_support=0.00). Skip the expensive inspection entirely.
+# 0.0 = skip ONLY on literally-zero overlap (minimal recall risk); cached
+# candidates are never re-decided (see _score_candidate).
+_PREFILTER_MIN_OVERLAP: float = 0.0
+# RECOVER cap (option 9): one all-reject beat can no longer flood N fresh VLM
+# inspections — only the top MAX_RECOVERED_PER_BEAT recovered candidates are scored.
+MAX_RECOVERED_PER_BEAT: int = 8
+_WINDOW_SELECTOR = KeywordOverlapWindowSelector()
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +148,24 @@ def _score_candidate(
         prompt_version=_CACHE_PROMPT_VERSION,
     )
     cached = lookup(cache_dir, cache_key) if cache_dir else None
+    if cached is None:
+        # PR 8 (option 1) — pre-VLM keyword-overlap skip gate. A candidate with
+        # zero textual overlap to the beat is almost certainly irrelevant (the
+        # job_11 storm: thousands of Gemini VLM calls, ~all claim_support=0.00).
+        # Skip the expensive inspection entirely. Threshold 0.0 = skip ONLY on
+        # zero overlap (minimal recall risk); cached candidates are never
+        # re-decided (the cached branch below returns regardless of overlap).
+        overlap = _WINDOW_SELECTOR.relevance_score(candidate.model_dump(), beat)
+        if overlap <= _PREFILTER_MIN_OVERLAP:
+            logger.info(
+                "asset_qualification.prefilter beat_id=%s asset_id=%s overlap=%.2f "
+                "<= %.2f — skipping VLM inspection (LOW_KEYWORD_OVERLAP)",
+                beat.beat_id,
+                asset_id,
+                overlap,
+                _PREFILTER_MIN_OVERLAP,
+            )
+            return None
     inspection = cached or _run_inspection(
         candidate, beat, job_id, cache_dir, cache_key, agent_dir, inspector
     )
@@ -527,6 +558,26 @@ def _qualify_beat(
         recovered_candidates, provider_attempts = _attempt_recovery(
             beat, recovery.discover_fn, cycle=0
         )
+        # PR 8 (option 9) — bound the number of recovered candidates scored so one
+        # all-reject beat can't flood MAX_RECOVERED_PER_BEAT+ fresh VLM inspections.
+        # Rank by cheap keyword-overlap relevance to THIS failing beat BEFORE
+        # capping (Codex P2#1): recovery discovery returns candidates in provider
+        # order, so the most relevant ones could land past the cap and regress the
+        # beat to a text card despite recovery finding usable candidates.
+        recovered_candidates = sorted(
+            recovered_candidates,
+            key=lambda c: _WINDOW_SELECTOR.relevance_score(c.model_dump(), beat),
+            reverse=True,
+        )
+        if len(recovered_candidates) > MAX_RECOVERED_PER_BEAT:
+            logger.info(
+                "asset_qualification.recovery beat_id=%s capping recovered %d -> %d "
+                "(ranked by keyword overlap)",
+                beat.beat_id,
+                len(recovered_candidates),
+                MAX_RECOVERED_PER_BEAT,
+            )
+            recovered_candidates = recovered_candidates[:MAX_RECOVERED_PER_BEAT]
         recovered_scored = _score_candidates(recovered_candidates, beat, ctx)
         scored_pool = scored + recovered_scored
         qualified, reject_reasons_pool = _rank_and_select(
