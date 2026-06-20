@@ -890,6 +890,16 @@ Resolution order: `*_MODEL` env var (`.env`) → `budget_east` preset → metada
 
 `config/preflight.py` → `preflight_agent_models()` runs at the `Orchestrator.run_pipeline` / `run_pipeline_from` chokepoint (the single source of truth covering CLI, dashboard create, retry, and resume) and on `--dry-run`: it force-refreshes the cache, resolves every LLM-backed agent's model, and validates each slug is a key in the live catalog. A miss against a **populated** catalog fails fast (clear error → failed status / exit 1) before billing research credits; when no catalog is reachable (offline + no cache) it logs a warning and continues rather than block every run. `refresh_model_cache` dedupes refresh attempts within a 30s window so an offline run degrades promptly instead of stacking 30s `/models` timeouts. The dead `llm/router.py` (`ModelPreset`/`resolve_model`, 0 production consumers) was removed in the same PR.
 
+### Asset-Qualification Cost Optimization (PR 8)
+
+The PR 5 qualification boundary had no cheap filter before the VLM (`candidate_semantic_ranker` is post-VLM arithmetic; `_score_candidate` *is* the VLM), so every irrelevant candidate paid a full inspection (job_11: ~9,078 frame extractions + thousands of VLM calls, ~all `claim_support=0.00`). PR 8 adds three additive knobs — the qualification contract is unchanged:
+
+- **Pre-VLM skip gate (option 1):** on a cache miss, `_score_candidate` computes `KeywordOverlapWindowSelector().relevance_score(candidate.model_dump(), beat)` and returns `None` without calling the VLM when overlap ≤ `_PREFILTER_MIN_OVERLAP` (default 0.0 → skips only literally-zero-overlap candidates). Cached candidates are never re-decided.
+- **Frame multiplier (option 2):** `AppSettings.frame_inspection_max_frames` (48, was 120) + `frame_inspection_interval_sec` (1.0, was 0.5), threaded into Visual Director's `run_frame_inspection_pipeline` call (~7.5× fewer VLM-bound frames).
+- **RECOVER cap (option 9):** `_qualify_beat` caps recovered candidates to `MAX_RECOVERED_PER_BEAT` (8) before scoring, bounding fresh inspections per all-reject beat.
+
+All three reuse existing pure-python machinery (no torch/embeddings; ADR 0026/0027).
+
 ---
 
 ## 13. Deterministic Quality Gates and Repair Routing (Phase 21)
