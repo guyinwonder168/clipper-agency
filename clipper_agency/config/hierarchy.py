@@ -7,14 +7,18 @@ class AgentDefaults:
     """Default LLM/model settings per agent."""
 
     PRESETS = {
+        # Canonical OpenRouter slugs: vendor/model. Bare slugs (e.g. "mimo-v2-flash")
+        # 404 with "No endpoints found"; removed models (e.g. "xiaomi/mimo-v2-flash")
+        # return deprecation errors mid-pipeline. Startup preflight validates these
+        # against the live catalog (see config/preflight.py).
         "budget_east": {
-            "safety": {"model": "glm-4.7-flash", "temperature": 0.1},
-            "segment_producer": {"model": "mimo-v2-flash", "temperature": 0.3},
-            "scriptwriter": {"model": "qwen3-32b", "temperature": 0.7},
+            "safety": {"model": "z-ai/glm-4.7-flash", "temperature": 0.1},
+            "segment_producer": {"model": "xiaomi/mimo-v2.5", "temperature": 0.3},
+            "scriptwriter": {"model": "qwen/qwen3-32b", "temperature": 0.7},
             "voice_producer": {"model": None},
-            "visual_director": {"model": "mimo-v2-flash", "temperature": 0.5},
+            "visual_director": {"model": "xiaomi/mimo-v2.5", "temperature": 0.5},
             "composer": {"model": None},
-            "reviewer": {"model": "gemini-2.5-flash", "temperature": 0.2},
+            "reviewer": {"model": "google/gemini-2.5-flash", "temperature": 0.2},
         }
     }
 

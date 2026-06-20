@@ -27,6 +27,19 @@ def get_model_metadata(model_name: str) -> dict[str, Any] | None:
     return cache.get("models", {}).get(model_name)
 
 
+def list_catalog_models() -> dict[str, Any]:
+    """Return the cached catalog ``{model_id: metadata}``, refreshing if stale.
+
+    Empty dict when no cache is available (refresh failed and nothing on disk).
+    Used by the startup preflight (``config/preflight.py``) to validate that
+    resolved agent slugs exist in the live OpenRouter catalog.
+    """
+    cache = _load_cache()
+    if cache is None:
+        return {}
+    return cache.get("models", {})
+
+
 def refresh_model_cache(force: bool = False) -> None:
     """Fetch model list from OpenRouter and write to disk.
 
@@ -64,9 +77,16 @@ def refresh_model_cache(force: bool = False) -> None:
 
 
 def _load_cache() -> dict[str, Any] | None:
-    """Load cache from disk, triggering refresh if stale."""
-    if not _CACHE_PATH.exists():
-        refresh_model_cache()
+    """Load cache from disk, refreshing when missing OR stale (older than TTL).
+
+    Previously this only refreshed when the file was *missing*, which made the
+    7-day ``_TTL_SECONDS`` check in ``_cache_is_fresh`` effectively dead code —
+    a present-but-stale cache was never refreshed, so removed/deprecated models
+    lingered. Now staleness triggers a force-refresh; ``refresh_model_cache``
+    swallows network errors so this degrades to the stale cache offline.
+    """
+    if not _cache_is_fresh():
+        refresh_model_cache(force=True)
 
     if not _CACHE_PATH.exists():
         return None

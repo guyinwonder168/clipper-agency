@@ -8,7 +8,8 @@ from dotenv import load_dotenv
 
 from clipper_agency import __version__
 from clipper_agency.config.loader import get_agent_config, load_niche, load_settings
-from clipper_agency.core.logging import setup_logging, get_logger
+from clipper_agency.config.preflight import preflight_agent_models
+from clipper_agency.core.logging import get_logger, setup_logging
 from clipper_agency.db.queries import PIPELINE_ORDER
 from clipper_agency.orchestrator.engine import Orchestrator
 
@@ -62,16 +63,29 @@ def _log_startup_info() -> None:
     )
     # API key status (presence only — no values leaked)
     for key in [
-        "OPENROUTER_API_KEY", "ELEVENLABS_API_KEY", "FISHAUDIO_API_KEY",
-        "PEXELS_API_KEY", "SCRAPECREATORS_API_KEY", "FIRECRAWL_API_KEY",
-        "GEMINI_API_KEY", "TAVILY_API_KEY", "BRAVE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "FISHAUDIO_API_KEY",
+        "PEXELS_API_KEY",
+        "SCRAPECREATORS_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "GEMINI_API_KEY",
+        "TAVILY_API_KEY",
+        "BRAVE_API_KEY",
     ]:
         status = "CONFIGURED" if os.getenv(key) else "MISSING"
         logger.info("API key %s: %s", key, status)
 
 
 @click.group()
-@click.option("--version", is_flag=True, callback=_print_version, expose_value=False, is_eager=True, help="Show version and exit")
+@click.option(
+    "--version",
+    is_flag=True,
+    callback=_print_version,
+    expose_value=False,
+    is_eager=True,
+    help="Show version and exit",
+)
 @click.option("--log-level", default=None, help="Logging level (DEBUG, INFO, WARNING, ERROR)")
 def cli(log_level: str | None) -> None:
     """Clipper Agency — automated video content production."""
@@ -88,7 +102,9 @@ def cli(log_level: str | None) -> None:
 @click.option("--topic", "-t", required=True, help="Topic for video generation")
 @click.option("--niche", "-n", default="indonesian_artists", help="Niche profile")
 @click.option("--db", default=None, help="Database path (default: from .env or data/clipper.db)")
-@click.option("--output-dir", "-o", default=None, help="Output directory (default: from .env or outputs)")
+@click.option(
+    "--output-dir", "-o", default=None, help="Output directory (default: from .env or outputs)"
+)
 @click.option("--dry-run", is_flag=True, help="Validate input without running pipeline")
 def run(topic: str, niche: str, db: str | None, output_dir: str | None, dry_run: bool) -> None:
     """Run the full pipeline for a topic."""
@@ -99,7 +115,18 @@ def run(topic: str, niche: str, db: str | None, output_dir: str | None, dry_run:
     try:
         load_niche(niche)
     except FileNotFoundError:
-        click.echo(f"Error: Niche '{niche}' not found. Check available niches in niches/ directory.")
+        click.echo(
+            f"Error: Niche '{niche}' not found. Check available niches in niches/ directory."
+        )
+        raise SystemExit(1)
+
+    # Preflight: validate resolved agent models against the OpenRouter catalog
+    # before billing any research credits (job_9/job_11 root cause: bad slugs
+    # surfaced as mid-pipeline 404s). Runs on dry-run too — it is input validation.
+    try:
+        preflight_agent_models()
+    except RuntimeError as exc:
+        click.echo(f"Error: Model preflight failed: {exc}")
         raise SystemExit(1)
 
     if dry_run:
@@ -114,7 +141,7 @@ def run(topic: str, niche: str, db: str | None, output_dir: str | None, dry_run:
     result = orch.run_pipeline(topic=topic, niche=niche, output_dir=resolved_output)
 
     if result["status"] == "completed":
-        click.echo(f"\N{check mark} Pipeline completed! Job ID: {result['job_id']}")
+        click.echo(f"\N{CHECK MARK} Pipeline completed! Job ID: {result['job_id']}")
         out = result.get("output", {})
         if out.get("video_path"):
             click.echo(f"  Video: {out['video_path']}")
@@ -122,7 +149,7 @@ def run(topic: str, niche: str, db: str | None, output_dir: str | None, dry_run:
         reason = result.get("reason") or result.get("error") or "Unknown error"
         failed_at = result.get("failed_at", "")
         loc = f" at {failed_at}" if failed_at else ""
-        click.echo(f"\N{cross mark} Pipeline failed{loc}: {reason}")
+        click.echo(f"\N{CROSS MARK} Pipeline failed{loc}: {reason}")
 
 
 @cli.command()
@@ -149,16 +176,20 @@ def jobs() -> None:
         job_rows = summarize_jobs(conn, raw_jobs)
     except Exception:
         job_rows = [
-            job | {"current_stage": job.get("status", "unknown"), "failure_summary": job.get("error_message", "")}
+            job
+            | {
+                "current_stage": job.get("status", "unknown"),
+                "failure_summary": job.get("error_message", ""),
+            }
             for job in raw_jobs
         ]
     for job in job_rows:
         if job["status"] == "COMPLETED":
-            status_icon = "\N{check mark}"
+            status_icon = "\N{CHECK MARK}"
         elif job["status"] == "FAILED":
-            status_icon = "\N{cross mark}"
+            status_icon = "\N{CROSS MARK}"
         else:
-            status_icon = "\N{hourglass}"
+            status_icon = "\N{HOURGLASS}"
         updated_at = job.get("updated_at") or job.get("created_at") or "unknown"
         failure = job.get("failure_summary") or ""
         failure_text = f" failure={failure}" if failure else ""
@@ -261,10 +292,16 @@ _RETRY_AGENTS = click.Choice(PIPELINE_ORDER)
 
 @cli.command("job-retry")
 @click.argument("job_id", type=int)
-@click.option("--from", "from_agent", type=_RETRY_AGENTS, required=True,
-              help="Agent to retry from (resets this agent + downstream)")
-@click.option("--use-cache", is_flag=True, default=False,
-              help="Reuse cached artifacts when available")
+@click.option(
+    "--from",
+    "from_agent",
+    type=_RETRY_AGENTS,
+    required=True,
+    help="Agent to retry from (resets this agent + downstream)",
+)
+@click.option(
+    "--use-cache", is_flag=True, default=False, help="Reuse cached artifacts when available"
+)
 def job_retry(job_id: int, from_agent: str, use_cache: bool) -> None:
     """Retry a FAILED job from a specific agent.
 
@@ -278,7 +315,9 @@ def job_retry(job_id: int, from_agent: str, use_cache: bool) -> None:
     """
     from clipper_agency.db.connection import get_connection
     from clipper_agency.db.queries import (
-        append_audit_log, get_job, reset_agents_from,
+        append_audit_log,
+        get_job,
+        reset_agents_from,
     )
 
     conn = get_connection(_db_path())
@@ -293,10 +332,14 @@ def job_retry(job_id: int, from_agent: str, use_cache: bool) -> None:
     cache_flag = " --use-cache" if use_cache else ""
     reset_names = reset_agents_from(conn, job_id, from_agent)
     append_audit_log(
-        conn, action="job_retry", actor="cli",
-        resource_type="job", resource_id=job_id,
-        details=json.dumps({"from_agent": from_agent, "use_cache": use_cache,
-                             "reset_agents": reset_names}),
+        conn,
+        action="job_retry",
+        actor="cli",
+        resource_type="job",
+        resource_id=job_id,
+        details=json.dumps(
+            {"from_agent": from_agent, "use_cache": use_cache, "reset_agents": reset_names}
+        ),
     )
 
     click.echo(f"Job #{job_id}: reset agents {reset_names} to pending.")
@@ -304,14 +347,13 @@ def job_retry(job_id: int, from_agent: str, use_cache: bool) -> None:
 
     # Execute the pipeline from the target agent
     orch = Orchestrator(db_path=_db_path())
-    result = orch.run_pipeline_from(job_id, from_agent=from_agent,
-                                    use_cache=use_cache)
+    result = orch.run_pipeline_from(job_id, from_agent=from_agent, use_cache=use_cache)
 
     if result.get("status") == "completed":
-        click.echo(f"\N{check mark} Retry completed! Job #{job_id}")
+        click.echo(f"\N{CHECK MARK} Retry completed! Job #{job_id}")
     else:
         reason = result.get("reason") or result.get("error") or "Unknown"
-        click.echo(f"\N{cross mark} Retry failed: {reason}")
+        click.echo(f"\N{CROSS MARK} Retry failed: {reason}")
 
 
 @cli.command("job-resume")
@@ -328,7 +370,10 @@ def job_resume(job_id: int) -> None:
     """
     from clipper_agency.db.connection import get_connection
     from clipper_agency.db.queries import (
-        append_audit_log, get_agent_state, get_job, reset_agents_from,
+        append_audit_log,
+        get_agent_state,
+        get_job,
+        reset_agents_from,
     )
 
     conn = get_connection(_db_path())
@@ -361,8 +406,11 @@ def job_resume(job_id: int) -> None:
 
     reset_names = reset_agents_from(conn, job_id, target_agent)
     append_audit_log(
-        conn, action="job_resume", actor="cli",
-        resource_type="job", resource_id=job_id,
+        conn,
+        action="job_resume",
+        actor="cli",
+        resource_type="job",
+        resource_id=job_id,
         details=json.dumps({"from_agent": target_agent, "reset_agents": reset_names}),
     )
 
@@ -371,24 +419,32 @@ def job_resume(job_id: int) -> None:
 
     # Execute the pipeline from the resume point
     orch = Orchestrator(db_path=_db_path())
-    result = orch.run_pipeline_from(job_id, from_agent=target_agent,
-                                    use_cache=True)
+    result = orch.run_pipeline_from(job_id, from_agent=target_agent, use_cache=True)
 
     if result.get("status") == "completed":
-        click.echo(f"\N{check mark} Resume completed! Job #{job_id}")
+        click.echo(f"\N{CHECK MARK} Resume completed! Job #{job_id}")
     else:
         reason = result.get("reason") or result.get("error") or "Unknown"
-        click.echo(f"\N{cross mark} Resume failed: {reason}")
+        click.echo(f"\N{CROSS MARK} Resume failed: {reason}")
 
 
 # ── test-agent subcommand ──────────────────────────────────────────────────
 
-AGENT_NAMES = ["safety", "segment_producer", "scriptwriter", "voice", "visual", "composer", "reviewer"]
+AGENT_NAMES = [
+    "safety",
+    "segment_producer",
+    "scriptwriter",
+    "voice",
+    "visual",
+    "composer",
+    "reviewer",
+]
 
 
 def _parse_script(script: str | None, fallback: list[dict]) -> list[dict]:
     """Parse JSON script string or return fallback."""
     import json
+
     return json.loads(script) if script else fallback
 
 
@@ -396,8 +452,12 @@ def _run_safety(instance: object, topic: str, rules: list[str]) -> dict:
     return instance.execute(job_id=0, topic=topic, safety_rules=rules)
 
 
-def _run_segment_producer(instance: object, topic: str, rules: list[str], max_results: int, output_dir: str) -> dict:
-    return instance.execute(job_id=0, topic=topic, safety_rules=rules, max_results=max_results, output_dir=output_dir)
+def _run_segment_producer(
+    instance: object, topic: str, rules: list[str], max_results: int, output_dir: str
+) -> dict:
+    return instance.execute(
+        job_id=0, topic=topic, safety_rules=rules, max_results=max_results, output_dir=output_dir
+    )
 
 
 def _run_scriptwriter(instance: object, topic: str, rules: list[str], brief: str) -> dict:
@@ -409,11 +469,15 @@ def _run_voice(instance: object, script: str | None, output_dir: str) -> dict:
     return instance.execute(job_id=0, script=parsed, output_dir=output_dir)
 
 
-def _run_visual(instance: object, topic: str, script: str | None, auto_research_output: dict, output_dir: str) -> dict:
+def _run_visual(
+    instance: object, topic: str, script: str | None, auto_research_output: dict, output_dir: str
+) -> dict:
     parsed = _parse_script(script, [{"scene": 1, "duration": 5}])
     source_urls = auto_research_output.get("sources", {}).get("sources", [])
     urls = [s.get("share_url", "") for s in source_urls if isinstance(s, dict)]
-    return instance.execute(job_id=0, script=parsed, topic=topic, source_urls=urls, output_dir=output_dir)
+    return instance.execute(
+        job_id=0, script=parsed, topic=topic, source_urls=urls, output_dir=output_dir
+    )
 
 
 def _run_composer(instance: object, script: str | None, output_dir: str) -> dict:
@@ -421,9 +485,13 @@ def _run_composer(instance: object, script: str | None, output_dir: str) -> dict
     return instance.execute(job_id=0, assets=parsed, audio_files=[], output_dir=output_dir)
 
 
-def _run_reviewer(instance: object, topic: str, script: str | None, caption: str, rules: list[str]) -> dict:
+def _run_reviewer(
+    instance: object, topic: str, script: str | None, caption: str, rules: list[str]
+) -> dict:
     parsed = _parse_script(script, [{"scene": 1, "text": "Test review content.", "duration": 5}])
-    return instance.execute(job_id=0, topic=topic, script=parsed, caption=caption, safety_rules=rules)
+    return instance.execute(
+        job_id=0, topic=topic, script=parsed, caption=caption, safety_rules=rules
+    )
 
 
 def _dispatch_test_agent(
@@ -439,11 +507,15 @@ def _dispatch_test_agent(
     output_dir: str,
 ) -> dict:
     """Execute the selected agent and return its result dict."""
-    brief = research_brief or auto_research_output.get("research_brief", "No research brief provided.")
+    brief = research_brief or auto_research_output.get(
+        "research_brief", "No research brief provided."
+    )
 
     dispatch = {
         "safety": lambda: _run_safety(instance, topic, rules),
-        "segment_producer": lambda: _run_segment_producer(instance, topic, rules, max_results, output_dir),
+        "segment_producer": lambda: _run_segment_producer(
+            instance, topic, rules, max_results, output_dir
+        ),
         "scriptwriter": lambda: _run_scriptwriter(instance, topic, rules, brief),
         "voice": lambda: _run_voice(instance, script, output_dir),
         "visual": lambda: _run_visual(instance, topic, script, auto_research_output, output_dir),
@@ -462,10 +534,16 @@ def _dispatch_test_agent(
 @cli.command("test-agent")
 @click.argument("agent", type=click.Choice(AGENT_NAMES))
 @click.option("--topic", "-t", default="Test topic", help="Topic for the agent")
-@click.option("--safety-rules", default="no_defamation,mark_rumors_as_unconfirmed", help="Comma-separated safety rules")
+@click.option(
+    "--safety-rules",
+    default="no_defamation,mark_rumors_as_unconfirmed",
+    help="Comma-separated safety rules",
+)
 @click.option("--max-results", default=3, help="Max search results (segment_producer only)")
 @click.option("--research-brief", default=None, help="Research brief text (scriptwriter only)")
-@click.option("--auto-research", is_flag=True, help="Run researcher first to feed scriptwriter/visual")
+@click.option(
+    "--auto-research", is_flag=True, help="Run researcher first to feed scriptwriter/visual"
+)
 @click.option("--script", default=None, help="Script JSON string (voice/visual/reviewer/composer)")
 @click.option("--caption", default="Test caption", help="Caption text (reviewer only)")
 @click.option("--output-dir", "-o", default=None, help="Output directory (default: test_outputs)")
@@ -493,13 +571,14 @@ def test_agent(
     """
     import json
     import time
-    from clipper_agency.agents.safety import SafetyAgent
-    from clipper_agency.agents.segment_producer import SegmentProducerAgent
-    from clipper_agency.agents.scriptwriter import ScriptwriterAgent
-    from clipper_agency.agents.voice_producer import VoiceProducerAgent
-    from clipper_agency.agents.visual_director import VisualDirectorAgent
+
     from clipper_agency.agents.composer import ComposerAgent
     from clipper_agency.agents.reviewer import ReviewerAgent
+    from clipper_agency.agents.safety import SafetyAgent
+    from clipper_agency.agents.scriptwriter import ScriptwriterAgent
+    from clipper_agency.agents.segment_producer import SegmentProducerAgent
+    from clipper_agency.agents.visual_director import VisualDirectorAgent
+    from clipper_agency.agents.voice_producer import VoiceProducerAgent
 
     resolved_output = output_dir or _output_dir()
     rules = [r.strip() for r in safety_rules.split(",") if r.strip()]
@@ -527,14 +606,27 @@ def test_agent(
         click.echo("\n[auto-research] Running segment_producer first...")
         researcher = SegmentProducerAgent()
         auto_research_output = researcher.execute(
-            job_id=0, topic=topic, safety_rules=rules,
-            max_results=max_results, output_dir=resolved_output,
+            job_id=0,
+            topic=topic,
+            safety_rules=rules,
+            max_results=max_results,
+            output_dir=resolved_output,
         )
-        click.echo(f"[auto-research] Research brief: {len(auto_research_output.get('research_brief', ''))} chars")
+        click.echo(
+            f"[auto-research] Research brief: {len(auto_research_output.get('research_brief', ''))} chars"
+        )
 
     result = _dispatch_test_agent(
-        agent, instance, topic, rules, max_results,
-        research_brief, auto_research_output, script, caption, resolved_output,
+        agent,
+        instance,
+        topic,
+        rules,
+        max_results,
+        research_brief,
+        auto_research_output,
+        script,
+        caption,
+        resolved_output,
     )
 
     elapsed = time.monotonic() - start

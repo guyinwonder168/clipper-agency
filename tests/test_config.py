@@ -73,7 +73,7 @@ def test_content_planning_config_aliases():
 
 def test_config_hierarchy_defaults():
     hierarchy = ConfigHierarchy()
-    assert hierarchy.get("segment_producer", "model") == "mimo-v2-flash"
+    assert hierarchy.get("segment_producer", "model") == "xiaomi/mimo-v2.5"
 
 
 def test_config_hierarchy_niche_override():
@@ -92,7 +92,7 @@ def test_config_hierarchy_job_override_wins():
 def test_agent_defaults_preset():
     ad = AgentDefaults()
     assert "segment_producer" in ad.agents
-    assert ad.agents["segment_producer"]["model"] == "mimo-v2-flash"
+    assert ad.agents["segment_producer"]["model"] == "xiaomi/mimo-v2.5"
 
 
 def test_config_hierarchy_account_override():
@@ -187,7 +187,9 @@ def test_app_settings_include_tavily_brave_keys():
         assert settings.tavily_api_key == ""
         assert settings.brave_api_key == ""
 
-    with patch.dict("os.environ", {"TAVILY_API_KEY": "tvly-123", "BRAVE_API_KEY": "brv-456"}, clear=True):
+    with patch.dict(
+        "os.environ", {"TAVILY_API_KEY": "tvly-123", "BRAVE_API_KEY": "brv-456"}, clear=True
+    ):
         settings = AppSettings(_env_file=None)
         assert settings.tavily_api_key == "tvly-123"
         assert settings.brave_api_key == "brv-456"
