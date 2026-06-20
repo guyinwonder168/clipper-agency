@@ -17,7 +17,9 @@ IS the contract.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from clipper_agency.agents.visual_director import VisualDirectorAgent
 from clipper_agency.config.schema import AssetCandidate, BeatFallback, StoryBeat
@@ -32,7 +34,11 @@ from clipper_agency.core.inspection_cache import compute_cache_key
 def _make_candidate(
     ctype: str = "tiktok_clip",
     url: str = "https://example.com/clip1.mp4",
-    reason: str = "test candidate",
+    # Reason tokens overlap the default beat's keywords (spoken_point="Point N",
+    # visual_must_show="Visual N", narration_goal="Beat N") so cache-miss tests
+    # exercise the inspection path instead of being skipped by the PR 8
+    # pre-VLM keyword-overlap gate (which skips only on ZERO overlap).
+    reason: str = "test point visual beat candidate",
 ) -> AssetCandidate:
     return AssetCandidate(type=ctype, url=url, reason=reason)
 
@@ -1103,3 +1109,101 @@ class TestZeroDoubleVlmHandoff:
         assert mock_inspect.call_count == 0
         assert vd_result is not None
         assert vd_result["inspection_diag"]["from_cache"] is True
+
+
+class TestPr8CostOptimization:
+    """PR 8 — pre-VLM keyword-overlap skip gate (option 1) + RECOVER cap (option 9).
+
+    Resolves the job_11 rejection storm: no cheap filter existed before the VLM, so
+    every irrelevant candidate paid a full Gemini call. The skip gate drops zero-
+    overlap candidates without inspection; the RECOVER cap bounds fresh inspections
+    per all-reject beat.
+    """
+
+    def test_prefilter_skips_zero_overlap_without_vlm(self, tmp_path: Any) -> None:
+        """Zero keyword-overlap candidate is skipped before the VLM (option 1)."""
+        beat = _make_beat(beat_id=42, spoken_point="Mount Fuji sunrise climb")
+        # 'basketball playoffs' shares NO tokens with the beat -> overlap 0.0.
+        cand = _make_candidate(
+            "tiktok_clip", "https://x.com/a", reason="basketball playoffs highlights"
+        )
+        inspector = MagicMock()
+        result = asset_qualification._score_candidate(
+            cand, beat, _make_plan_item(42), 1, "", str(tmp_path), inspector=inspector
+        )
+        assert result is None
+        inspector.assert_not_called()  # VLM NOT spent on a zero-overlap candidate
+
+    def test_prefilter_inspects_positive_overlap(self, tmp_path: Any) -> None:
+        """Positive keyword-overlap candidate IS inspected (option 1 recall)."""
+        beat = _make_beat(beat_id=42, spoken_point="Mount Fuji sunrise climb")
+        cand = _make_candidate("tiktok_clip", "https://x.com/a", reason="Fuji summit at sunrise")
+        inspector = MagicMock(return_value=_cached_inspection())
+        result = asset_qualification._score_candidate(
+            cand, beat, _make_plan_item(42), 1, "", str(tmp_path), inspector=inspector
+        )
+        assert result is not None
+        inspector.assert_called_once()
+
+    def test_prefilter_never_skips_cached_candidate(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cache hit bypasses the gate even at zero overlap (never re-decide cached)."""
+        beat = _make_beat(beat_id=42, spoken_point="Mount Fuji climb")
+        cand = _make_candidate(
+            "tiktok_clip", "https://x.com/a", reason="basketball"
+        )  # zero overlap
+        monkeypatch.setattr(asset_qualification, "lookup", lambda d, k: _cached_inspection())
+        inspector = MagicMock()
+        result = asset_qualification._score_candidate(
+            cand,
+            beat,
+            _make_plan_item(42),
+            1,
+            str(tmp_path),
+            str(tmp_path),
+            inspector=inspector,
+        )
+        assert result is not None  # scored from cache
+        inspector.assert_not_called()
+
+    def test_recovery_caps_recovered_candidates(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RECOVER scores at most MAX_RECOVERED_PER_BEAT recovered candidates (option 9)."""
+        beat = _make_beat(beat_id=7, asset_candidates=[])  # nothing qualifies initially
+        overflow = asset_qualification.MAX_RECOVERED_PER_BEAT + 5
+        recovered = [
+            _make_candidate("tiktok_clip", f"https://x.com/{i}", reason="Fuji climb")
+            for i in range(overflow)
+        ]
+
+        def discover_fn(queries: list[str]) -> tuple[list[dict], list[dict]]:
+            return (
+                [{"type": c.type, "url": c.url, "reason": c.reason} for c in recovered],
+                [],
+            )
+
+        recovery = asset_qualification.RecoveryPolicy(
+            enabled=True, max_cycles=1, discover_fn=discover_fn
+        )
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir="",
+            agent_dir=str(tmp_path),
+            inspector=None,
+            recovery=recovery,
+            plan_item=None,
+        )
+
+        scored_urls: list[str] = []
+
+        def counting(candidate: Any, _beat: Any, *_a: Any, **_kw: Any) -> None:
+            scored_urls.append(candidate.url)
+            return None  # reject all -> beat exhausted, but we count recover scoring
+
+        monkeypatch.setattr(asset_qualification, "_score_candidate", counting)
+        asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+        # 13 recovered -> capped to MAX_RECOVERED_PER_BEAT; beat.asset_candidates=[]
+        # contributes 0, so scored_urls == the capped recover set only.
+        assert len(scored_urls) == asset_qualification.MAX_RECOVERED_PER_BEAT

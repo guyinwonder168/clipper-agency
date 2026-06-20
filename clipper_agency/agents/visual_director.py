@@ -1017,6 +1017,9 @@ class VisualDirectorAgent(BaseAgent):
                 return None
 
             asset_id = f"{candidate.type}_{candidate.url[:40]}"
+            from clipper_agency.config.loader import load_settings
+
+            _fi = load_settings()
             manifest = run_frame_inspection_pipeline(
                 video_path=str(video_path),
                 job_id=job_id,
@@ -1024,6 +1027,8 @@ class VisualDirectorAgent(BaseAgent):
                 asset_id=asset_id,
                 cache_root=agent_dir,
                 allowed_base_dir=agent_dir,
+                max_frames=_fi.frame_inspection_max_frames,
+                interval_sec=_fi.frame_inspection_interval_sec,
             )
 
             paths = [f.path for f in manifest.frames if f.path]

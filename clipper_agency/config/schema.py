@@ -216,6 +216,12 @@ class AppSettings(BaseSettings):
     visual_director_model: str = ""
     reviewer_model: str = ""
 
+    # Candidate frame-extraction for multimodal inspection (PR 8 cost optimization).
+    # Conservative from the prior 120 frames @ 0.5s (~7.5x fewer VLM-bound frames);
+    # tunable via env. Resolves the job_11 frame-extraction storm.
+    frame_inspection_max_frames: int = 48
+    frame_inspection_interval_sec: float = 1.0
+
     # Default LLM
     llm: LLMConfig = Field(default_factory=LLMConfig)
 

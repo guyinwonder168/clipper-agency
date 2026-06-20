@@ -193,3 +193,13 @@ def test_app_settings_include_tavily_brave_keys():
         settings = AppSettings(_env_file=None)
         assert settings.tavily_api_key == "tvly-123"
         assert settings.brave_api_key == "brv-456"
+
+
+def test_app_settings_include_frame_inspection_cost_defaults():
+    """PR 8: conservative frame-extraction defaults (resolve the job_11 storm)."""
+    from clipper_agency.config.schema import AppSettings
+
+    with patch.dict("os.environ", {}, clear=True):
+        settings = AppSettings(_env_file=None)
+        assert settings.frame_inspection_max_frames == 48
+        assert settings.frame_inspection_interval_sec == 1.0
