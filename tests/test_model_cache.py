@@ -4,6 +4,22 @@ import json
 import time
 from unittest.mock import patch
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_refresh_dedupe(monkeypatch):
+    """Reset the process-local refresh-dedupe window before each test.
+
+    ``refresh_model_cache`` skips refreshes attempted within ``_REFRESH_MIN_GAP``
+    (30s). Without this reset, a test that triggers a real refresh would suppress
+    refreshes in every later test in the same session — breaking the
+    ``triggers_refresh`` assertions.
+    """
+    from clipper_agency.config import model_cache
+
+    monkeypatch.setattr(model_cache, "_last_refresh_attempt_at", 0.0)
+
 
 def test_get_model_metadata_returns_cached_data(tmp_path, monkeypatch):
     """get_model_metadata reads from cache file."""

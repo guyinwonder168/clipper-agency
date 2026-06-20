@@ -120,16 +120,16 @@ def run(topic: str, niche: str, db: str | None, output_dir: str | None, dry_run:
         )
         raise SystemExit(1)
 
-    # Preflight: validate resolved agent models against the OpenRouter catalog
-    # before billing any research credits (job_9/job_11 root cause: bad slugs
-    # surfaced as mid-pipeline 404s). Runs on dry-run too — it is input validation.
-    try:
-        preflight_agent_models()
-    except RuntimeError as exc:
-        click.echo(f"Error: Model preflight failed: {exc}")
-        raise SystemExit(1)
-
     if dry_run:
+        # Dry-run is the explicit input-validation tool, so it force-refreshes +
+        # validates agent models here. Real runs self-preflight at the
+        # Orchestrator.run_pipeline chokepoint (covers CLI, dashboard, retry,
+        # resume — Codex P2#1).
+        try:
+            preflight_agent_models()
+        except RuntimeError as exc:
+            click.echo(f"Error: Model preflight failed: {exc}")
+            raise SystemExit(1)
         click.echo("Dry run: input valid. Pipeline execution coming soon...")
         return
 
