@@ -4,7 +4,7 @@
 **Branch:** `phase/26-pr6-clip-window`
 **Parent plan:** [`2026-06-15-phase26-production-correctness-asset-qualification.md`](./2026-06-15-phase26-production-correctness-asset-qualification.md) §PR 6
 **Needs:** PR 5 (MERGED) — the qualification boundary delivers qualified source videos.
-**Version:** stays `v2.3.0` (PR 8 owns the `v2.4.0` bump).
+**Version:** stays `v2.3.0` (PR 10 owns the `v2.4.0` bump).
 
 ---
 
