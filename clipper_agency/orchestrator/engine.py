@@ -24,6 +24,7 @@ from clipper_agency.config.loader import (
     load_niche,
     load_settings,
 )
+from clipper_agency.config.preflight import preflight_agent_models
 from clipper_agency.config.schema import RepairPatch, RepairPlan
 from clipper_agency.core.artifacts import write_json
 from clipper_agency.core.logging import add_job_file_handler, remove_job_file_handler
@@ -1195,6 +1196,19 @@ class Orchestrator:
                        Composer→G10→Reviewer→Package
         """
         conn = get_connection(self.db_path)
+        # Preflight: validate resolved agent models against the OpenRouter catalog
+        # before billing research credits (PR 7). Placed at this orchestrator
+        # chokepoint so the CLI, dashboard create, retry, and resume paths ALL
+        # validate (Codex P2#1). Returns a failed status on a bad slug.
+        try:
+            preflight_agent_models()
+        except RuntimeError as exc:
+            logger.error("Model preflight failed: %s", exc)
+            return {
+                "status": "failed",
+                "failed_at": "model_preflight",
+                "reason": str(exc),
+            }
         settings = load_settings()
         assets_cache = str(kwargs.get("assets_cache") or settings.assets_cache)
         logger.info("Pipeline START: niche='%s'", niche)
@@ -2022,6 +2036,18 @@ class Orchestrator:
         and skips agents that completed before ``from_agent``.
         """
         conn = get_connection(self.db_path)
+        # Preflight (PR 7 Codex P2#1): validate agent models on retry/resume too,
+        # so a changed *_MODEL override can't reach OpenRouter mid-pipeline.
+        try:
+            preflight_agent_models()
+        except RuntimeError as exc:
+            logger.error("Model preflight failed: %s", exc)
+            return {
+                "status": "failed",
+                "failed_at": "model_preflight",
+                "reason": str(exc),
+                "job_id": job_id,
+            }
         job = get_job(conn, job_id)
         if not job:
             return {"status": "failed", "reason": f"Job {job_id} not found", "job_id": job_id}

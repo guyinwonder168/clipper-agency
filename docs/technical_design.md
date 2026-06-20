@@ -874,6 +874,22 @@ SQLite for MVP (same schema migrates to PostgreSQL). Multi-tenant from day one.
 | **Premium East** | Kimi K2.5, Qwen Max, GLM-5.1 | ~$0.015 |
 | **Premium West** | Claude Sonnet 4, GPT-5, Gemini Pro | ~$0.04 |
 
+### Model Slug Resolution + Startup Preflight (PR 7)
+
+OpenRouter requires canonical `vendor/model` slugs. Bare slugs (e.g. `mimo-v2-flash`) 404 with "No endpoints found", and removed models (e.g. `xiaomi/mimo-v2-flash`) return deprecation errors — both surfaced mid-pipeline after paid research (job_9/job_11 root causes). The `budget_east` preset (`config/hierarchy.py`) now stores canonical slugs and is the source of truth when no `*_MODEL` env override is set:
+
+| Agent | Canonical slug |
+|-------|----------------|
+| safety | `z-ai/glm-4.7-flash` |
+| segment_producer | `xiaomi/mimo-v2.5` |
+| scriptwriter | `qwen/qwen3-32b` |
+| visual_director | `xiaomi/mimo-v2.5` |
+| reviewer | `google/gemini-2.5-flash` |
+
+Resolution order: `*_MODEL` env var (`.env`) → `budget_east` preset → metadata from `data/model_cache.json`. The cache refreshes on a 7-day TTL (`model_cache._load_cache` now force-refreshes when stale, not only when missing) and exposes `list_catalog_models()` for validation.
+
+`config/preflight.py` → `preflight_agent_models()` runs at the `Orchestrator.run_pipeline` / `run_pipeline_from` chokepoint (the single source of truth covering CLI, dashboard create, retry, and resume) and on `--dry-run`: it force-refreshes the cache, resolves every LLM-backed agent's model, and validates each slug is a key in the live catalog. A miss against a **populated** catalog fails fast (clear error → failed status / exit 1) before billing research credits; when no catalog is reachable (offline + no cache) it logs a warning and continues rather than block every run. `refresh_model_cache` dedupes refresh attempts within a 30s window so an offline run degrades promptly instead of stacking 30s `/models` timeouts. The dead `llm/router.py` (`ModelPreset`/`resolve_model`, 0 production consumers) was removed in the same PR.
+
 ---
 
 ## 13. Deterministic Quality Gates and Repair Routing (Phase 21)
@@ -1145,7 +1161,7 @@ PR 5 is the real Job #8 fix. Job #8 root cause was **candidate rejection, not sc
 | **Module** | `clipper_agency/core/asset_qualification.py` (pure orchestration) |
 | **Engine seam** | `Engine._run_visual_director_phase` via helper `_apply_asset_qualification` — runs after voicing, before the `_run_visual_director` call |
 | **DB state machine** | Unchanged (no new state, no new gate) |
-| **Version** | Stays `v2.3.0` (PR 8 owns the `v2.4.0` bump) |
+| **Version** | Stays `v2.3.0` (PR 10 owns the `v2.4.0` bump) |
 
 The module imports and calls only existing modules (`inspection_cache`, `MultimodalInspectionClient`, `semantic_visual_review`, `candidate_semantic_ranker`); it imports **neither** `segment_producer` nor `visual_director` — the Segment Producer discovery callable is injected as an opaque `Callable` via `RecoveryPolicy.discover_fn` to break the import cycle.
 
@@ -1188,7 +1204,7 @@ PR 6 freezes the clip-window **data-flow contract** so the propagation path (qua
 | **v1 default selector** | `KeywordOverlapWindowSelector` — **conservative**: returns `ClipWindow(0.0, None)` for every candidate because keyword overlap cannot localize a spoken point to a timestamp (returns the full-clip window, equivalent to today's from-zero trim) |
 | **Schema** | `AssetCandidate` gains optional `source_start_sec: float = 0.0` and `source_end_sec: float | None = None` (additive — defaults preserve today's from-zero trim) |
 | **Cache parity** | The two new fields are **excluded** from `compute_asset_content_hash` (`type`/`url`/`source_type` only), so PR 5's cache-key parity holds — identical content still hits the inspection cache regardless of window |
-| **Version** | Stays `v2.3.0` (PR 8 owns the `v2.4.0` bump) |
+| **Version** | Stays `v2.3.0` (PR 10 owns the `v2.4.0` bump) |
 
 ### Propagation (qualification → VD → Composer)
 

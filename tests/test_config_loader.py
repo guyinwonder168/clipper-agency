@@ -1,12 +1,17 @@
 """Tests for config YAML loader (load_niche, load_template, load_config)."""
 
 import os
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from clipper_agency.config.loader import build_channel_description, load_config, load_niche, load_settings, load_template
+from clipper_agency.config.loader import (
+    build_channel_description,
+    load_config,
+    load_niche,
+    load_settings,
+    load_template,
+)
 from clipper_agency.config.schema import AppSettings, NicheConfig, TemplateConfig
 
 
@@ -127,6 +132,7 @@ class TestBuildChannelDescription:
 
     def test_custom_niche_builds_description(self):
         from clipper_agency.config.schema import NicheConfig
+
         niche = NicheConfig(
             name="tech_reviews",
             language="en",
@@ -151,6 +157,7 @@ class TestGetAgentConfig:
         # Mock load_settings to return settings with empty model fields
         # (simulates no .env overrides, hierarchy is the source of truth)
         from clipper_agency.config.schema import AppSettings
+
         empty_settings = AppSettings(
             _env_file=None,
             OPENROUTER_API_KEY="test",
@@ -165,7 +172,7 @@ class TestGetAgentConfig:
             lambda: empty_settings,
         )
         result = get_agent_config("safety")
-        assert result["model"] == "glm-4.7-flash"
+        assert result["model"] == "z-ai/glm-4.7-flash"
         assert result["temperature"] == 0.1
         assert result["max_completion_tokens"] == 4096
 
@@ -178,6 +185,7 @@ class TestGetAgentConfig:
             lambda _: {"context_length": 8192, "max_completion_tokens": 4096},
         )
         from clipper_agency.config.schema import AppSettings
+
         override_settings = AppSettings(
             _env_file=None,
             OPENROUTER_API_KEY="test",

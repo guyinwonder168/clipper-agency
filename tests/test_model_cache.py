@@ -2,10 +2,23 @@
 
 import json
 import time
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_refresh_dedupe(monkeypatch):
+    """Reset the process-local refresh-dedupe window before each test.
+
+    ``refresh_model_cache`` skips refreshes attempted within ``_REFRESH_MIN_GAP``
+    (30s). Without this reset, a test that triggers a real refresh would suppress
+    refreshes in every later test in the same session — breaking the
+    ``triggers_refresh`` assertions.
+    """
+    from clipper_agency.config import model_cache
+
+    monkeypatch.setattr(model_cache, "_last_refresh_attempt_at", 0.0)
 
 
 def test_get_model_metadata_returns_cached_data(tmp_path, monkeypatch):
@@ -113,8 +126,9 @@ def test_load_cache_triggers_refresh_when_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(model_cache, "_CACHE_PATH", cache_file)
 
     refresh_called = []
-    monkeypatch.setattr(model_cache, "refresh_model_cache",
-                        lambda force=False: refresh_called.append(True))
+    monkeypatch.setattr(
+        model_cache, "refresh_model_cache", lambda force=False: refresh_called.append(True)
+    )
 
     model_cache._load_cache()
     assert len(refresh_called) == 1
@@ -133,14 +147,72 @@ def test_load_cache_returns_none_when_refresh_fails(tmp_path, monkeypatch):
 
 
 def test_load_cache_returns_none_on_corrupted_json(tmp_path, monkeypatch):
-    """_load_cache returns None when cache file has invalid JSON."""
+    """_load_cache returns None when cache file has invalid JSON.
+
+    A corrupted cache is treated as stale and would force-refresh; mock the
+    refresh so this test exercises the read-failure path offline.
+    """
     from clipper_agency.config import model_cache
 
     cache_file = tmp_path / "model_cache.json"
     cache_file.write_text("{invalid json content")
     monkeypatch.setattr(model_cache, "_CACHE_PATH", cache_file)
+    monkeypatch.setattr(model_cache, "refresh_model_cache", lambda force=False: None)
 
     assert model_cache._load_cache() is None
+
+
+def test_load_cache_triggers_refresh_when_stale(tmp_path, monkeypatch):
+    """_load_cache force-refreshes when cache is older than TTL.
+
+    Regression: previously _load_cache only refreshed when the file was MISSING,
+    so the 7-day TTL was dead code and stale caches (with removed models) lingered.
+    """
+    from clipper_agency.config import model_cache
+
+    cache_file = tmp_path / "model_cache.json"
+    stale = {"fetched_at": time.time() - (8 * 24 * 3600), "models": {"old/model": {}}}
+    cache_file.write_text(json.dumps(stale))
+    monkeypatch.setattr(model_cache, "_CACHE_PATH", cache_file)
+
+    refreshed: list[bool] = []
+    monkeypatch.setattr(
+        model_cache, "refresh_model_cache", lambda force=False: refreshed.append(force)
+    )
+
+    model_cache._load_cache()
+    assert refreshed == [True]
+
+
+def test_list_catalog_models_returns_models(tmp_path, monkeypatch):
+    """list_catalog_models returns the cached {model_id: metadata} dict."""
+    from clipper_agency.config.model_cache import list_catalog_models
+
+    cache_file = tmp_path / "model_cache.json"
+    cache_file.write_text(
+        json.dumps(
+            {
+                "fetched_at": time.time(),
+                "models": {"z-ai/glm-4.7-flash": {"context_length": 128000}},
+            }
+        )
+    )
+    monkeypatch.setattr("clipper_agency.config.model_cache._CACHE_PATH", cache_file)
+
+    catalog = list_catalog_models()
+    assert "z-ai/glm-4.7-flash" in catalog
+    assert catalog["z-ai/glm-4.7-flash"]["context_length"] == 128000
+
+
+def test_list_catalog_models_empty_when_no_cache(tmp_path, monkeypatch):
+    """list_catalog_models returns {} when no cache is available."""
+    from clipper_agency.config import model_cache
+
+    cache_file = tmp_path / "model_cache.json"
+    monkeypatch.setattr(model_cache, "_CACHE_PATH", cache_file)
+    monkeypatch.setattr(model_cache, "refresh_model_cache", lambda force=False: None)
+
+    assert model_cache.list_catalog_models() == {}
 
 
 def test_cache_is_fresh_returns_false_when_missing(tmp_path, monkeypatch):

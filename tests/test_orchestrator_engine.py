@@ -851,6 +851,25 @@ class TestOrchestratorRunPipeline:
             assert result["status"] == "failed"
             assert result["failed_at"] == "safety"
 
+    def test_model_preflight_failure_aborts_pipeline(self, db_initialized, monkeypatch):
+        """run_pipeline validates agent models first (PR 7 Codex P2#1).
+
+        A bad slug fails fast at the orchestrator chokepoint before any agent
+        runs — so the dashboard/retry/resume paths are guarded too, not just CLI.
+        """
+
+        def _raise():
+            raise RuntimeError("not in the OpenRouter catalog: safety='bogus/x'")
+
+        monkeypatch.setattr("clipper_agency.orchestrator.engine.preflight_agent_models", _raise)
+        orch = Orchestrator(db_path=db_initialized)
+        with patch.object(Orchestrator, "_run_safety") as mock_safety:
+            result = orch.run_pipeline(topic="Test", niche="test")
+        assert result["status"] == "failed"
+        assert result["failed_at"] == "model_preflight"
+        assert "bogus/x" in result["reason"]
+        mock_safety.assert_not_called()
+
     def test_composer_failure_sets_job_failed(self, db_initialized, tmp_path):
         """If composer fails, job should be marked FAILED at the composer stage."""
         orch = Orchestrator(db_path=db_initialized)

@@ -2,10 +2,8 @@
 
 import json
 from unittest.mock import MagicMock
-import pytest
 
 from clipper_agency.agents.segment_producer import (
-    SEGMENT_PRODUCER_PROMPT,
     SegmentProducerAgent,
 )
 
@@ -171,7 +169,7 @@ class TestSegmentProducerSynthesize:
             "sources": [],
         }
         agent._synthesize_research(aggregated, "Topic", [])
-        assert mock_chat.call_args.kwargs["model"] == "mimo-v2-flash"
+        assert mock_chat.call_args.kwargs["model"] == "xiaomi/mimo-v2.5"
         assert mock_chat.call_args.kwargs["temperature"] == 0.3
 
 
@@ -292,9 +290,13 @@ class TestSegmentProducerExecute:
     def test_execute_uses_max_results_param(self, mocker, tmp_path):
         mock_search = mocker.patch(
             "clipper_agency.services.firecrawl_service.FirecrawlService.search",
-            return_value=[{
-                "title": "X", "url": "https://x.com", "content": "Y",
-            }],
+            return_value=[
+                {
+                    "title": "X",
+                    "url": "https://x.com",
+                    "content": "Y",
+                }
+            ],
         )
         mocker.patch(
             "clipper_agency.services.scrapecreators.ScrapeCreatorsService.search_tiktok_videos",
@@ -347,7 +349,9 @@ class TestSegmentProducerExecute:
         assert (base / "normalized" / "music_candidates.json").exists()
         assert (base / "normalized" / "entities.json").exists()
         assert (base / "normalized" / "risk_flags.json").exists()
-        assert json.loads((base / "output.json").read_text(encoding="utf-8"))["status"] == "completed"
+        assert (
+            json.loads((base / "output.json").read_text(encoding="utf-8"))["status"] == "completed"
+        )
 
 
 class TestSegmentProducerNewContract:
@@ -367,7 +371,11 @@ class TestSegmentProducerNewContract:
                 "overlay_text": "GOSIP TERBARU!",
                 "caption_keywords": ["gossip", "terbaru", "viral"],
                 "asset_candidates": [
-                    {"type": "tiktok_clip", "url": "https://tiktok.com/@user/video/1", "reason": "Viral clip"},
+                    {
+                        "type": "tiktok_clip",
+                        "url": "https://tiktok.com/@user/video/1",
+                        "reason": "Viral clip",
+                    },
                 ],
                 "fallback": {"type": "text_card", "headline": "GOSIP TERBARU!", "image_search": ""},
                 "evidence_source": "none",
@@ -384,48 +392,67 @@ class TestSegmentProducerNewContract:
                 "overlay_text": "APA FACTNYA?",
                 "caption_keywords": ["fakta", "artis", "update"],
                 "asset_candidates": [],
-                "fallback": {"type": "text_card", "headline": "APA FACTNYA?", "image_search": "artist portrait"},
+                "fallback": {
+                    "type": "text_card",
+                    "headline": "APA FACTNYA?",
+                    "image_search": "artist portrait",
+                },
                 "evidence_source": "https://example.com/source",
                 "risk_note": "Claim is unconfirmed, use safe wording",
             },
         ]
-        response = json.dumps({
-            "research_brief": "Two potential stories found with moderate clip availability.",
-            "content_direction": {
-                "recommended_format": "two_story_highlight",
-                "reason": "Good clips for two stories.",
-                "selected_story_count": 2,
-                "selected_stories": ["story_a", "story_b"],
-                "content_angle": "highlight comparison",
-                "risk_notes": [],
-            },
-            "story_beats": beats,
-            "format_decision": {
-                "format": "two_story_highlight",
-                "story_count": 2,
-                "rationale": "Good clips for two stories",
-                "video_asset_ratio": 0.75,
-            },
-            "asset_candidates": [
-                {"type": "tiktok_clip", "url": "https://tiktok.com/@user/video/1", "reason": "Viral clip"},
-            ],
-            "do_not_use": ["blurry footage", "unverified photos"],
-            "verified_facts": [
-                {"fact": "Artist posted on Instagram", "source_url": "https://instagram.com/p/1", "confidence": "verified", "safe_wording": "Artist posted on Instagram"},
-            ],
-            "unverified_claims": [
-                {"claim": "Artist is dating someone new", "label": "rumor", "safe_wording": "Ada kabar yang beredar"},
-            ],
-            "reference_style": {
-                "format": "two_story_highlight",
-                "target_duration_sec": 50,
-                "hook_duration_sec": 2.5,
-                "avg_scene_duration_sec": 6.0,
-                "caption_style": "keyword",
-                "transition_style": "hard_cut",
-                "visual_priority": ["tiktok_clip", "screenshot", "text_card"],
-            },
-        })
+        response = json.dumps(
+            {
+                "research_brief": "Two potential stories found with moderate clip availability.",
+                "content_direction": {
+                    "recommended_format": "two_story_highlight",
+                    "reason": "Good clips for two stories.",
+                    "selected_story_count": 2,
+                    "selected_stories": ["story_a", "story_b"],
+                    "content_angle": "highlight comparison",
+                    "risk_notes": [],
+                },
+                "story_beats": beats,
+                "format_decision": {
+                    "format": "two_story_highlight",
+                    "story_count": 2,
+                    "rationale": "Good clips for two stories",
+                    "video_asset_ratio": 0.75,
+                },
+                "asset_candidates": [
+                    {
+                        "type": "tiktok_clip",
+                        "url": "https://tiktok.com/@user/video/1",
+                        "reason": "Viral clip",
+                    },
+                ],
+                "do_not_use": ["blurry footage", "unverified photos"],
+                "verified_facts": [
+                    {
+                        "fact": "Artist posted on Instagram",
+                        "source_url": "https://instagram.com/p/1",
+                        "confidence": "verified",
+                        "safe_wording": "Artist posted on Instagram",
+                    },
+                ],
+                "unverified_claims": [
+                    {
+                        "claim": "Artist is dating someone new",
+                        "label": "rumor",
+                        "safe_wording": "Ada kabar yang beredar",
+                    },
+                ],
+                "reference_style": {
+                    "format": "two_story_highlight",
+                    "target_duration_sec": 50,
+                    "hook_duration_sec": 2.5,
+                    "avg_scene_duration_sec": 6.0,
+                    "caption_style": "keyword",
+                    "transition_style": "hard_cut",
+                    "visual_priority": ["tiktok_clip", "screenshot", "text_card"],
+                },
+            }
+        )
         return {"content": response, "model": "glm-4-9b", "usage": {}}
 
     def test_execute_produces_story_beats(self, mocker, tmp_path):
@@ -549,12 +576,15 @@ class TestSegmentProducerNewContract:
         _persist_contract_artifacts fix to be a no-op.
         """
         import json as _json
-        payload = _json.dumps({
-            "research_brief": "Brief with risks",
-            "story_beats": [],
-            "entities": [{"name": "Artis X", "type": "person"}],
-            "risk_flags": [{"category": "factual", "description": "Dating rumor unverified"}],
-        })
+
+        payload = _json.dumps(
+            {
+                "research_brief": "Brief with risks",
+                "story_beats": [],
+                "entities": [{"name": "Artis X", "type": "person"}],
+                "risk_flags": [{"category": "factual", "description": "Dating rumor unverified"}],
+            }
+        )
         mocker.patch(
             "clipper_agency.services.firecrawl_service.FirecrawlService.search",
             return_value=[],
@@ -568,13 +598,16 @@ class TestSegmentProducerNewContract:
             return_value={"content": payload, "model": "test", "usage": {}},
         )
         mocker.patch.object(
-            SegmentProducerAgent, "_discover_multi_source_assets",
+            SegmentProducerAgent,
+            "_discover_multi_source_assets",
             return_value=([], []),
         )
         agent = SegmentProducerAgent()
         result = agent.execute(job_id=1, topic="Test", output_dir=str(tmp_path))
         assert result["entities"] == [{"name": "Artis X", "type": "person"}]
-        assert result["risk_flags"] == [{"category": "factual", "description": "Dating rumor unverified"}]
+        assert result["risk_flags"] == [
+            {"category": "factual", "description": "Dating rumor unverified"}
+        ]
 
     def test_execute_returns_empty_lists_when_llm_plain_text(self, mocker, tmp_path):
         """When LLM returns plain text (not JSON), all new fields default to empty."""
@@ -591,7 +624,8 @@ class TestSegmentProducerNewContract:
             return_value={"content": "Plain text response", "model": "glm-4-9b", "usage": {}},
         )
         mocker.patch.object(
-            SegmentProducerAgent, "_discover_multi_source_assets",
+            SegmentProducerAgent,
+            "_discover_multi_source_assets",
             return_value=([], []),
         )
         agent = SegmentProducerAgent()
@@ -672,7 +706,9 @@ class TestSegmentProducerStoryModeAndBudget:
         )
         mocker.patch(
             "clipper_agency.agents.segment_producer.allocate_duration_budget",
-            return_value=mocker.MagicMock(model_dump=lambda: {"target_duration_sec": 55, "sections": []}),
+            return_value=mocker.MagicMock(
+                model_dump=lambda: {"target_duration_sec": 55, "sections": []}
+            ),
         )
 
         agent = SegmentProducerAgent()
@@ -689,7 +725,11 @@ class TestSegmentProducerStoryModeAndBudget:
 
     def test_segment_producer_output_includes_duration_budget(self, mocker, tmp_path):
         """Segment Producer should allocate duration budget and include it in output."""
-        from clipper_agency.config.schema import DurationBudget, DurationBudgetSection, StoryModeDecision
+        from clipper_agency.config.schema import (
+            DurationBudget,
+            DurationBudgetSection,
+            StoryModeDecision,
+        )
 
         self._setup_base_mocks(mocker, tmp_path)
 
@@ -749,7 +789,9 @@ class TestSegmentProducerStoryModeAndBudget:
         )
         mocker.patch(
             "clipper_agency.agents.segment_producer.allocate_duration_budget",
-            return_value=mocker.MagicMock(model_dump=lambda: {"target_duration_sec": 55, "sections": []}),
+            return_value=mocker.MagicMock(
+                model_dump=lambda: {"target_duration_sec": 55, "sections": []}
+            ),
         )
 
         agent = SegmentProducerAgent()
@@ -789,7 +831,9 @@ class TestSegmentProducerStoryModeAndBudget:
         )
         mock_budget = mocker.patch(
             "clipper_agency.agents.segment_producer.allocate_duration_budget",
-            return_value=mocker.MagicMock(model_dump=lambda: {"target_duration_sec": 55, "sections": []}),
+            return_value=mocker.MagicMock(
+                model_dump=lambda: {"target_duration_sec": 55, "sections": []}
+            ),
         )
 
         agent = SegmentProducerAgent()
@@ -975,10 +1019,14 @@ class TestSegmentProducerAssetPortfolio:
             is_important_beat=True,
         )
         video_candidates = [c for c in candidates if c.get("type") in ("tiktok_clip", "video")]
-        image_candidates = [c for c in candidates if c.get("type") in ("photo", "screenshot", "image")]
+        image_candidates = [
+            c for c in candidates if c.get("type") in ("photo", "screenshot", "image")
+        ]
         fallback_candidates = [c for c in candidates if c.get("type") in ("text_card",)]
 
-        assert len(video_candidates) >= 2, f"Expected >= 2 video candidates, got {len(video_candidates)}"
+        assert len(video_candidates) >= 2, (
+            f"Expected >= 2 video candidates, got {len(video_candidates)}"
+        )
         assert len(image_candidates) >= 1 or len(fallback_candidates) >= 1, (
             "Expected at least 1 image or fallback candidate"
         )
@@ -989,7 +1037,7 @@ class TestStoryBeatEvidenceContract:
 
     def test_story_beat_model_accepts_evidence_contract(self):
         """StoryBeat model should accept optional evidence_contract."""
-        from clipper_agency.config.schema import StoryBeat, EvidenceContract, BeatFallback
+        from clipper_agency.config.schema import BeatFallback, EvidenceContract, StoryBeat
 
         ec = EvidenceContract(
             preferred=["same-event interview"],
@@ -1016,7 +1064,7 @@ class TestStoryBeatEvidenceContract:
 
     def test_story_beat_without_evidence_contract_defaults_to_none(self):
         """StoryBeat without evidence_contract should default to None."""
-        from clipper_agency.config.schema import StoryBeat, BeatFallback
+        from clipper_agency.config.schema import BeatFallback, StoryBeat
 
         beat = StoryBeat(
             beat_id=1,
@@ -1406,7 +1454,9 @@ class TestMultiSourceDiscovery:
         agent = SegmentProducerAgent()
         config = self._mock_config()
         results, _ = agent._discover_multi_source_assets(
-            topic="K-pop", entities={}, config=config,
+            topic="K-pop",
+            entities={},
+            config=config,
         )
         assert len(results) == 1
         assert results[0]["source_type"] == "youtube_official"
@@ -1443,7 +1493,9 @@ class TestMultiSourceDiscovery:
         agent = SegmentProducerAgent()
         config = self._mock_config(tavily_api_key="tv-key", brave_api_key="br-key")
         results, _ = agent._discover_multi_source_assets(
-            topic="K-pop", entities={}, config=config,
+            topic="K-pop",
+            entities={},
+            config=config,
         )
         # 1 YouTube + 1 Tavily + 1 Brave = 3
         assert len(results) == 3
@@ -1472,7 +1524,9 @@ class TestMultiSourceDiscovery:
         agent = SegmentProducerAgent()
         config = self._mock_config(tavily_api_key="tv-key")
         results, _ = agent._discover_multi_source_assets(
-            topic="K-pop", entities={}, config=config,
+            topic="K-pop",
+            entities={},
+            config=config,
         )
         # YouTube failed, Tavily succeeded
         assert len(results) == 1
@@ -1504,7 +1558,9 @@ class TestMultiSourceDiscovery:
         agent = SegmentProducerAgent()
         config = self._mock_config(tavily_api_key="tv-key", brave_api_key="br-key")
         results, _ = agent._discover_multi_source_assets(
-            topic="K-pop", entities={}, config=config,
+            topic="K-pop",
+            entities={},
+            config=config,
         )
         assert results == []
 
@@ -1547,11 +1603,18 @@ class TestMultiSourceFlowThroughCandidates:
 
     def test_tiktok_still_scored_lower_than_youtube(self):
         """ScrapeCreators TikTok clips (0.50) scored lower than YouTube (0.95)."""
-        from clipper_agency.agents.segment_producer import SOURCE_QUALITY_TIERS
 
         sources = [
-            {"source_type": "youtube_official", "url": "https://youtube.com/1", "source": "youtube"},
-            {"source_type": "tiktok_clip", "url": "https://tiktok.com/1", "source": "scrapecreators"},
+            {
+                "source_type": "youtube_official",
+                "url": "https://youtube.com/1",
+                "source": "youtube",
+            },
+            {
+                "source_type": "tiktok_clip",
+                "url": "https://tiktok.com/1",
+                "source": "scrapecreators",
+            },
         ]
         candidates = SegmentProducerAgent._build_asset_candidates_from_sources(sources)
         yt = [c for c in candidates if c["source_type"] == "youtube_official"][0]
