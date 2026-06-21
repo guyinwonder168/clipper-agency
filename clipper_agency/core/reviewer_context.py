@@ -11,7 +11,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -63,9 +62,7 @@ def _derive_beat_time_ranges(
         return []
 
     # Check for explicit time ranges in beat data
-    explicit = all(
-        "start_sec" in b and "end_sec" in b for b in story_beats
-    )
+    explicit = all("start_sec" in b and "end_sec" in b for b in story_beats)
     if explicit:
         return [(b["start_sec"], b["end_sec"]) for b in story_beats]
 
@@ -76,11 +73,7 @@ def _derive_beat_time_ranges(
         ranges: list[tuple[float, float]] = []
         for i in range(n_beats):
             start_idx = i * words_per_beat
-            end_idx = (
-                start_idx + words_per_beat
-                if i < n_beats - 1
-                else len(word_timestamps)
-            )
+            end_idx = start_idx + words_per_beat if i < n_beats - 1 else len(word_timestamps)
             chunk = word_timestamps[start_idx:end_idx]
             if chunk:
                 ranges.append((chunk[0]["start"], chunk[-1]["end"]))
@@ -103,8 +96,10 @@ def _midpoint(start: float, end: float) -> float:
 
 
 def _ranges_overlap(
-    a_start: float, a_end: float,
-    b_start: float, b_end: float,
+    a_start: float,
+    a_end: float,
+    b_start: float,
+    b_end: float,
 ) -> bool:
     """Check if two time ranges overlap (inclusive boundaries)."""
     return a_start <= b_end and b_start <= a_end
@@ -189,7 +184,9 @@ def map_scenes_to_beats(
         beat_ranges = beat_time_ranges
     else:
         beat_ranges = _derive_beat_time_ranges(
-            story_beats, word_timestamps, audio_duration_sec,
+            story_beats,
+            word_timestamps,
+            audio_duration_sec,
         )
     beat_ids = [b.get("beat_id", i) for i, b in enumerate(story_beats)]
 
@@ -198,31 +195,47 @@ def map_scenes_to_beats(
         scene_start = entry.get("start_sec", 0.0)
         scene_end = entry.get("end_sec", 0.0)
         matched, overlap_type = _match_scene_to_beats(
-            scene_start, scene_end, beat_ranges, beat_ids,
+            scene_start,
+            scene_end,
+            beat_ranges,
+            beat_ids,
         )
-        mappings.append(SceneBeatMapping(
-            scene_index=entry.get("scene_index", idx),
-            scene_start_sec=scene_start,
-            scene_end_sec=scene_end,
-            matched_beat_ids=matched,
-            overlap_type=overlap_type,
-        ))
+        mappings.append(
+            SceneBeatMapping(
+                scene_index=entry.get("scene_index", idx),
+                scene_start_sec=scene_start,
+                scene_end_sec=scene_end,
+                matched_beat_ids=matched,
+                overlap_type=overlap_type,
+            )
+        )
 
     return mappings
 
 
 def _find_scene_entry(
-    scenes: list[dict], scene_index: int,
+    scenes: list[dict],
+    scene_index: int,
 ) -> dict | None:
-    """Find a scene entry by scene_index from the scenes list."""
+    """Find a scene entry by scene_index from the scenes list.
+
+    Falls back to list position when entries lack an explicit ``scene_index``
+    field: ``RenderedSceneEntry`` serializes without one (only scene, beat_id,
+    start_sec, end_sec, ...), and ``map_scenes_to_beats`` already maps by
+    position. Without this fallback the per-scene semantic context stays blind
+    for real Composer manifests (Codex P2 on RC-9).
+    """
     for s in scenes:
         if s.get("scene_index") == scene_index:
             return s
+    if 0 <= scene_index < len(scenes):
+        return scenes[scene_index]
     return None
 
 
 def _find_mapping(
-    mappings: list[SceneBeatMapping], scene_index: int,
+    mappings: list[SceneBeatMapping],
+    scene_index: int,
 ) -> SceneBeatMapping | None:
     """Find a SceneBeatMapping by scene_index."""
     for m in mappings:
@@ -237,10 +250,7 @@ def _filter_words_in_range(
     end_sec: float,
 ) -> list[dict]:
     """Return word timestamps overlapping the given time range."""
-    return [
-        wt for wt in word_timestamps
-        if wt["start"] < end_sec and wt["end"] > start_sec
-    ]
+    return [wt for wt in word_timestamps if wt["start"] < end_sec and wt["end"] > start_sec]
 
 
 def get_semantic_review_context(
@@ -254,7 +264,10 @@ def get_semantic_review_context(
     Handles missing/None optional data gracefully.
     """
     manifest = bundle.rendered_scene_manifest
-    scenes = manifest.get("scenes", []) if manifest else []
+    # RenderedSceneManifest serializes scene entries under "entries"
+    # (see core/rendered_scene_manifest.py). Reading "scenes" would always
+    # yield an empty list and blind the semantic review.
+    scenes = manifest.get("entries", []) if manifest else []
 
     scene_entry = _find_scene_entry(scenes, scene_index)
     scene_start = scene_entry.get("start_sec", 0.0) if scene_entry else None
@@ -263,22 +276,18 @@ def get_semantic_review_context(
     # Build canonical beat time ranges from timeline if available (ADR 0020)
     beat_time_ranges = None
     if bundle.beat_timeline:
-        beat_time_ranges = [
-            (e["start_sec"], e["end_sec"])
-            for e in bundle.beat_timeline
-        ]
+        beat_time_ranges = [(e["start_sec"], e["end_sec"]) for e in bundle.beat_timeline]
 
     mappings = map_scenes_to_beats(
-        scenes, bundle.story_beats, bundle.word_timestamps,
+        scenes,
+        bundle.story_beats,
+        bundle.word_timestamps,
         bundle.audio_duration_sec,
         beat_time_ranges=beat_time_ranges,
     )
     matched_mapping = _find_mapping(mappings, scene_index)
     matched_beat_ids = matched_mapping.matched_beat_ids if matched_mapping else []
-    matched_beats = [
-        b for b in bundle.story_beats
-        if b.get("beat_id") in matched_beat_ids
-    ]
+    matched_beats = [b for b in bundle.story_beats if b.get("beat_id") in matched_beat_ids]
 
     scene_words = (
         _filter_words_in_range(bundle.word_timestamps, scene_start, scene_end)
