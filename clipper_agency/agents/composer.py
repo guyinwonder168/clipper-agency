@@ -1659,7 +1659,13 @@ class ComposerAgent(BaseAgent):
         beat_timeline: list | None = None,
     ) -> dict[str, Any]:
         """Attempt audio-first assembly. Raises on FFmpeg or unexpected errors."""
-        if beat_timeline:
+        # ADR 0020 / RC-5: honor the canonical timeline even when empty.
+        # build_canonical_timeline returns [] on degenerate input; the falsy
+        # `if beat_timeline:` guard treated [] like a missing timeline and
+        # fell through to the PRIVATE divergent recompute. `is not None`
+        # preserves the single-source-of-truth contract (timeline_to_duration_list
+        # tolerates [] safely -> []).
+        if beat_timeline is not None:
             from clipper_agency.core.beat_timeline import timeline_to_duration_list
 
             beat_durations = timeline_to_duration_list(beat_timeline)

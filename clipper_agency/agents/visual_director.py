@@ -256,7 +256,13 @@ class VisualDirectorAgent(BaseAgent):
         parsed_beats = [StoryBeat(**b) for b in story_beats]
         parsed_ts = [WordTimestamp(**t) for t in timestamps]
 
-        if beat_timeline:
+        # ADR 0020 / RC-5: honor the canonical timeline even when empty.
+        # build_canonical_timeline returns [] on degenerate input; the falsy
+        # `if beat_timeline:` guard treated [] like a missing timeline and
+        # fell through to the PRIVATE divergent recompute. `is not None`
+        # preserves the single-source-of-truth contract (timeline_to_duration_map
+        # tolerates [] safely -> {}).
+        if beat_timeline is not None:
             from clipper_agency.core.beat_timeline import timeline_to_duration_map
 
             beat_durations = timeline_to_duration_map(beat_timeline)
