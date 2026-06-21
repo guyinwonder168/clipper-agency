@@ -12,7 +12,7 @@
 **Phase:** 26
 **ADR:** [0026 — v2.4.0 Contract Enforcement Over Rebuild](../adr/0026-v2.4.0-contract-enforcement-over-rebuild.md)
 **Related ADRs:** [0020 (canonical timeline)](../adr/0020-use-canonical-timeline-contract.md), [0023 (repair routing)](../adr/0023-job4-quality-gates-and-repair-routing.md)
-**Version strategy:** v2.3.0 throughout. Version bump to v2.4.0 happens **only after PR 10 (P3) passes** — no intermediate bumps.
+**Version strategy:** v2.3.0 throughout. Version bump to v2.4.0 happens **only after PR 12 (P3) passes** — no intermediate bumps.
 
 ---
 
@@ -60,9 +60,11 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 - Source transcript + clip-window selector (PR 6)
 - Model-resolution correctness (PR 7) — canonical OpenRouter slugs + model-cache refresh fix + startup slug preflight + dead `router.py` removal
 - Asset-qualification cost optimization (PR 8) — pre-VLM keyword-overlap skip gate + frame-multiplier reduction + RECOVER cap (resolves job_11 rejection storm)
-- Visual Director multi-shot planning (PR 9)
-- Release gate + golden-set validation (PR 10)
-- Version bump to v2.4.0 (final step, after PR 10)
+- Face Detection — MediaPipe Tasks API migration (PR 9)
+- ffmpeg_runner DEBUG-log quieting (PR 10)
+- Visual Director multi-shot planning (PR 11)
+- Release gate + golden-set validation (PR 12)
+- Version bump to v2.4.0 (final step, after PR 12)
 
 ### Out of Scope
 
@@ -76,7 +78,7 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 
 ## 2. Priority Ordering & Version Strategy
 
-> **Numbering note:** "PR 1"–"PR 10" below are **logical phase-internal step numbers**, not GitHub PR numbers. The actual GitHub PRs are sequential repo-wide (Batch 0 = #50, Step 1 ≈ #51, Step 2 ≈ #52, …). Branch names use the step number; the GitHub PR title/body will reference the real `#NN`.
+> **Numbering note:** "PR 1"–"PR 12" below are **logical phase-internal step numbers**, not GitHub PR numbers. The actual GitHub PRs are sequential repo-wide (Batch 0 = #50, Step 1 ≈ #51, Step 2 ≈ #52, …). Branch names use the step number; the GitHub PR title/body will reference the real `#NN`.
 
 | Priority | Step | Title | Branch | Risk | Status | Version after merge |
 |----------|------|-------|--------|------|-------|---------------------|
@@ -89,10 +91,12 @@ Defect 5 (Segment Producer precision) is plausible but not exhaustively verified
 | **P2** | 6 | Source transcript + clip-window selector | `phase/26-pr6-clip-window` | Medium | ✅ COMPLETE (minimal contract-first — `clipper_agency/core/clip_window.py` frozen `ClipWindow` + `WindowSelector` Protocol + `KeywordOverlapWindowSelector` v1 default returns full-clip `ClipWindow(0.0, None)`; `AssetCandidate.source_start_sec`/`source_end_sec` additive, excluded from content hash so PR 5 cache parity holds; propagated qualification→VD→Composer; Composer `_smart_trim` bounds clamp + `-ss` wiring. Transcript/whisper backend, auto-caption extraction, keyframe snapping DEFERRED post-v2.4.0 per ADR 0026 — GPU forbidden, no transcript infra, release gate does not require clip-windowing) | v2.3.0 |
 | **P2** | 7 | Model-resolution correctness (canonical OpenRouter slugs + model-cache refresh fix + startup slug preflight + dead `router.py` removal) | `phase/26-pr7-model-resolution` | Medium | ⬜ Pending | v2.3.0 |
 | **P2** | 8 | Asset-qualification cost optimization (pre-VLM keyword-overlap skip gate + frame-multiplier reduction + RECOVER cap; resolves job_11 rejection storm) | `phase/26-pr8-qualification-cost` | Medium | ⬜ Pending | v2.3.0 |
-| **P2** | 9 | Visual Director multi-shot planning | `phase/26-pr9-multishot-vd` | Medium | ⬜ Pending | v2.3.0 |
-| **P3** | 10 | Release gate + golden-set validation | `phase/26-pr10-release-gate` | Low | ⬜ Pending | **v2.4.0** (bump here) |
+| **P2** | 9 | Face Detection — MediaPipe Tasks API migration | `phase/26-pr9-face-detection` | Medium | ✅ COMPLETE (GitHub PR #64) | v2.3.0 |
+| **P2** | 10 | ffmpeg_runner DEBUG-log quieting | `phase/26-pr10-ffmpeg-log-quiet` | Low | 🚧 In progress (this branch) | v2.3.0 |
+| **P2** | 11 | Visual Director multi-shot planning | `phase/26-pr11-multishot-vd` | Medium | ⬜ Pending | v2.3.0 |
+| **P3** | 12 | Release gate + golden-set validation | `phase/26-pr12-release-gate` | Low | ⬜ Pending | **v2.4.0** (bump here) |
 
-**Version bump rule:** v2.3.0 is frozen across steps 1–7. Step 10 is the release PR that bumps to v2.4.0 in the same commit that passes the golden-set validation. No intermediate version bumps.
+**Version bump rule:** v2.3.0 is frozen across steps 1–11. Step 12 is the release PR that bumps to v2.4.0 in the same commit that passes the golden-set validation. No intermediate version bumps.
 
 ---
 
@@ -147,9 +151,9 @@ These tests assert the **current broken behavior** — they PASS on master today
 | Level | What | Speed | API keys? | When |
 |-------|------|-------|-----------|------|
 | **L1: Artifact-based** | Load frozen JSON, run specific function, assert output | Fast (<1s) | No | Batch 0 + PRs 1–3 |
-| **L2: Full-pipeline** | Re-run entire pipeline with Job #8's topic | Slow (minutes) | Yes (`@integration`) | PR 10 only |
+| **L2: Full-pipeline** | Re-run entire pipeline with Job #8's topic | Slow (minutes) | Yes (`@integration`) | PR 12 only |
 
-**Batch 0 does L1 only.** L2 comes in PR 10 because it requires API keys and is marked `@pytest.mark.integration`.
+**Batch 0 does L1 only.** L2 comes in PR 12 because it requires API keys and is marked `@pytest.mark.integration`.
 
 **FFmpeg command capture (Bug 3):** `TreatmentFilterBuilder.build()` is a pure function — calling it with the frozen asset reproduces the broken command deterministically (`st=0.0`). No code changes needed to capture it.
 
@@ -304,7 +308,7 @@ These tests assert the **current broken behavior** — they PASS on master today
 **Branch:** `phase/26-pr5-pre-vd-qualification`
 **Scope:** Move qualification upstream. Reuse existing modules — do NOT rebuild.
 
-> **Status:** ✅ COMPLETE. Delivered as SLICE 1–12 against the LOCKED design (`docs/plans/pr5-asset-qualification-design.md`). New module `clipper_agency/core/asset_qualification.py` scores candidates per-beat BEFORE Visual Director and runs source recovery BEFORE the text-card fallback. Engine seam is `_apply_asset_qualification` in `Orchestrator._run_visual_director_phase`; it immutably rewrites each beat's `asset_candidates` to the qualified set, defense-in-depth filters the flat pool, and writes `qualification_report.json`. Per ADR 0026 (enforce contracts, do NOT rebuild): pure orchestration — NO new agent, NO new gate, NO schema change, NO state-machine change. Per ADR 0027, the cache-miss inspection DELEGATES to VD's own bound `_run_multimodal_inspection` so the cached output is byte-identical to VD's (no cache-namespace drift; frame ownership stays in VD). **SLICE 8** (a `do_not_use` URL filter at the qualification boundary) was DEFERRED to post-PR-5 — VD already enforces `do_not_use` at four downstream points, so re-filtering at the boundary would be redundant contract re-enforcement. The qualification layer's native badness signal is `reject_reasons`. Version stays `v2.3.0` (PR 10 owns the `v2.4.0` bump).
+> **Status:** ✅ COMPLETE. Delivered as SLICE 1–12 against the LOCKED design (`docs/plans/pr5-asset-qualification-design.md`). New module `clipper_agency/core/asset_qualification.py` scores candidates per-beat BEFORE Visual Director and runs source recovery BEFORE the text-card fallback. Engine seam is `_apply_asset_qualification` in `Orchestrator._run_visual_director_phase`; it immutably rewrites each beat's `asset_candidates` to the qualified set, defense-in-depth filters the flat pool, and writes `qualification_report.json`. Per ADR 0026 (enforce contracts, do NOT rebuild): pure orchestration — NO new agent, NO new gate, NO schema change, NO state-machine change. Per ADR 0027, the cache-miss inspection DELEGATES to VD's own bound `_run_multimodal_inspection` so the cached output is byte-identical to VD's (no cache-namespace drift; frame ownership stays in VD). **SLICE 8** (a `do_not_use` URL filter at the qualification boundary) was DEFERRED to post-PR-5 — VD already enforces `do_not_use` at four downstream points, so re-filtering at the boundary would be redundant contract re-enforcement. The qualification layer's native badness signal is `reject_reasons`. Version stays `v2.3.0` (PR 12 owns the `v2.4.0` bump).
 
 > ⚠️ **Highest-risk PR.** This refactors a working pipeline. Requires **Step 4 fully complete** and stable. Strong integration tests mandatory.
 
@@ -351,7 +355,7 @@ These tests assert the **current broken behavior** — they PASS on master today
 
 ### PR 6 — Source Transcript & Clip-Window Selector (P2)
 
-> **Status:** ✅ COMPLETE. Delivered **minimal, contract-first** against `docs/plans/pr6-clip-window-design.md`. New module `clipper_agency/core/clip_window.py` freezes the data-flow contract: a frozen `ClipWindow(start_sec, end_sec)` dataclass, a pluggable `WindowSelector` Protocol, and a conservative v1 default `KeywordOverlapWindowSelector` that returns `ClipWindow(0.0, None)` (the full-clip window) for every candidate because keyword overlap cannot localize a spoken point to a timestamp. `AssetCandidate` gained optional `source_start_sec: float = 0.0` / `source_end_sec: float | None = None` — additive (defaults preserve today's from-zero trim) and **excluded** from `compute_asset_content_hash`, so PR 5's cache-key parity holds (no VLM double-spend). The window propagates end-to-end: qualification seam (`Orchestrator._apply_asset_qualification` attaches the window to kept candidates) → Visual Director (`_attach_candidate_windows` re-attaches by `source_url`; `_exec_tiktok_clip` threads it into the asset dict) → Composer (`_smart_trim` clamps to source bounds — degenerate ⇒ full clip — and `_trim_long_clip` / `_stretch_short_clip` emit `-ss <source_start_sec>`). Per ADR 0026 (enforce contracts, do NOT rebuild): pure orchestration — NO new agent, NO new gate, NO state-machine change. **Transcript backend DEFERRED to post-v2.4.0** — faster-whisper behind a config flag, yt-dlp auto-caption extraction, and keyframe-precise snapping are blocked by ADR 0026 (do-not-rebuild), the GPU-forbidden constraint, no existing transcript infra, and the fact that the v2.4.0 release gate does NOT require clip-windowing. The "trimmed segment matches beat's spoken point" verification criterion waits for this backend (documented honestly — the v1 default cannot satisfy it because it never narrows the window). 2054 offline tests pass, 18 deselected. Version stays `v2.3.0` (PR 10 owns the `v2.4.0` bump).
+> **Status:** ✅ COMPLETE. Delivered **minimal, contract-first** against `docs/plans/pr6-clip-window-design.md`. New module `clipper_agency/core/clip_window.py` freezes the data-flow contract: a frozen `ClipWindow(start_sec, end_sec)` dataclass, a pluggable `WindowSelector` Protocol, and a conservative v1 default `KeywordOverlapWindowSelector` that returns `ClipWindow(0.0, None)` (the full-clip window) for every candidate because keyword overlap cannot localize a spoken point to a timestamp. `AssetCandidate` gained optional `source_start_sec: float = 0.0` / `source_end_sec: float | None = None` — additive (defaults preserve today's from-zero trim) and **excluded** from `compute_asset_content_hash`, so PR 5's cache-key parity holds (no VLM double-spend). The window propagates end-to-end: qualification seam (`Orchestrator._apply_asset_qualification` attaches the window to kept candidates) → Visual Director (`_attach_candidate_windows` re-attaches by `source_url`; `_exec_tiktok_clip` threads it into the asset dict) → Composer (`_smart_trim` clamps to source bounds — degenerate ⇒ full clip — and `_trim_long_clip` / `_stretch_short_clip` emit `-ss <source_start_sec>`). Per ADR 0026 (enforce contracts, do NOT rebuild): pure orchestration — NO new agent, NO new gate, NO state-machine change. **Transcript backend DEFERRED to post-v2.4.0** — faster-whisper behind a config flag, yt-dlp auto-caption extraction, and keyframe-precise snapping are blocked by ADR 0026 (do-not-rebuild), the GPU-forbidden constraint, no existing transcript infra, and the fact that the v2.4.0 release gate does NOT require clip-windowing. The "trimmed segment matches beat's spoken point" verification criterion waits for this backend (documented honestly — the v1 default cannot satisfy it because it never narrows the window). 2054 offline tests pass, 18 deselected. Version stays `v2.3.0` (PR 12 owns the `v2.4.0` bump).
 
 **Branch:** `phase/26-pr6-clip-window`
 **Scope:** Adapt the Clip-Anything concept for precise source trimming.
@@ -388,9 +392,23 @@ These tests assert the **current broken behavior** — they PASS on master today
 
 ---
 
-### PR 9 — Visual Director Multi-Shot Planning (P2)
+### PR 9 — Face Detection — MediaPipe Tasks API Migration (P2) ✅ COMPLETE (GitHub PR #64)
 
-**Branch:** `phase/26-pr9-multishot-vd`
+**Branch:** `phase/26-pr9-face-detection` (merged via GitHub PR #64)
+**Scope:** Migrate the face-detection path to the MediaPipe Tasks API. Delivered as PR #64; see the PR for the full design and test plan.
+
+---
+
+### PR 10 — ffmpeg_runner DEBUG-log quieting (P2) 🚧 In progress
+
+**Branch:** `phase/26-pr10-ffmpeg-log-quiet` (this branch)
+**Scope:** Stop logging raw FFmpeg `stderr` line-by-line at DEBUG — the job_12 debug log was a 536k-line flood of one `log.debug` per stderr line, swamping logs and obscuring real signal. The runner now emits a one-line summary per invocation and surfaces the captured stderr tail only on failure (tail-on-failure). Extraction/encode behavior is unchanged; only DEBUG logging volume is reduced.
+
+---
+
+### PR 11 — Visual Director Multi-Shot Planning (P2)
+
+**Branch:** `phase/26-pr11-multishot-vd`
 **Scope:** Upgrade VD from one asset per beat to multiple shots when needed.
 
 **Rules:**
@@ -410,9 +428,9 @@ dirty source cannot be fullscreen
 
 ---
 
-### PR 10 — Release Gate & Golden-Set Validation (P3)
+### PR 12 — Release Gate & Golden-Set Validation (P3)
 
-**Branch:** `phase/26-pr10-release-gate`
+**Branch:** `phase/26-pr12-release-gate`
 **Scope:** Validate the full release against Job #8 + golden set. Cut v2.4.0.
 
 **Changes:**
@@ -461,13 +479,15 @@ PR 5 (pre-VD qual) ────────────────────�
 PR 6 (clip window) ──────────────────────────► merge (needs PR 5 for qualified sources)
 PR 7 (model resolution) ─► merge (independent — unblocks real e2e runs)
 PR 8 (qualification cost) ─► merge (needs PR 7; resolves job_11 storm)
-PR 9 (multishot VD) ──────────────────────────► merge (needs PR 2 for canonical timeline)
+PR 9 (face detection — MediaPipe Tasks) ──────► merge (independent)
+PR 10 (ffmpeg_runner log quieting) ───────────► merge (independent)
+PR 11 (multishot VD) ──────────────────────────► merge (needs PR 2 for canonical timeline)
            │
            ▼
-PR 10 (release gate + v2.4.0 bump) ──────────► merge (needs ALL prior)
+PR 12 (release gate + v2.4.0 bump) ──────────► merge (needs ALL prior)
 ```
 
-**Rule:** Batch 0 is the prerequisite — it must merge before PR 1. PR 4 must fully complete (all sub-items 4a-4f) before PR 5 starts. PR 5 is un-deferred — Job #8 evidence showed source recovery is needed. PR 10 is the final merge that bumps the version.
+**Rule:** Batch 0 is the prerequisite — it must merge before PR 1. PR 4 must fully complete (all sub-items 4a-4f) before PR 5 starts. PR 5 is un-deferred — Job #8 evidence showed source recovery is needed. PR 12 is the final merge that bumps the version.
 
 ---
 
@@ -477,4 +497,4 @@ PR 10 (release gate + v2.4.0 bump) ──────────► merge (need
 - **Pre-PR checklist:** `.venv/bin/python3 -m pytest -m "not external and not integration" -q` (all pass); `--cov` ≥93%.
 - **KISS/YAGNI/DRY:** reuse existing modules. Do not build new inspection/repair/ranking subsystems.
 - **TDD:** tests first for every change.
-- **No intermediate version bumps:** v2.3.0 frozen until PR 10.
+- **No intermediate version bumps:** v2.3.0 frozen until PR 12.

@@ -1171,7 +1171,7 @@ PR 5 is the real Job #8 fix. Job #8 root cause was **candidate rejection, not sc
 | **Module** | `clipper_agency/core/asset_qualification.py` (pure orchestration) |
 | **Engine seam** | `Engine._run_visual_director_phase` via helper `_apply_asset_qualification` — runs after voicing, before the `_run_visual_director` call |
 | **DB state machine** | Unchanged (no new state, no new gate) |
-| **Version** | Stays `v2.3.0` (PR 10 owns the `v2.4.0` bump) |
+| **Version** | Stays `v2.3.0` (PR 12 owns the `v2.4.0` bump) |
 
 The module imports and calls only existing modules (`inspection_cache`, `MultimodalInspectionClient`, `semantic_visual_review`, `candidate_semantic_ranker`); it imports **neither** `segment_producer` nor `visual_director` — the Segment Producer discovery callable is injected as an opaque `Callable` via `RecoveryPolicy.discover_fn` to break the import cycle.
 
@@ -1214,7 +1214,7 @@ PR 6 freezes the clip-window **data-flow contract** so the propagation path (qua
 | **v1 default selector** | `KeywordOverlapWindowSelector` — **conservative**: returns `ClipWindow(0.0, None)` for every candidate because keyword overlap cannot localize a spoken point to a timestamp (returns the full-clip window, equivalent to today's from-zero trim) |
 | **Schema** | `AssetCandidate` gains optional `source_start_sec: float = 0.0` and `source_end_sec: float | None = None` (additive — defaults preserve today's from-zero trim) |
 | **Cache parity** | The two new fields are **excluded** from `compute_asset_content_hash` (`type`/`url`/`source_type` only), so PR 5's cache-key parity holds — identical content still hits the inspection cache regardless of window |
-| **Version** | Stays `v2.3.0` (PR 10 owns the `v2.4.0` bump) |
+| **Version** | Stays `v2.3.0` (PR 12 owns the `v2.4.0` bump) |
 
 ### Propagation (qualification → VD → Composer)
 

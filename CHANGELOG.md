@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Phase 26: Production Correctness + Canonical Timeline
 
-Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing ADR 0020 canonical timeline, and introducing pre-VD asset qualification. Version stays 2.3.0 until PR 10 (release gate). See `docs/plans/2026-06-15-phase26-production-correctness-asset-qualification.md`.
+Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing ADR 0020 canonical timeline, and introducing pre-VD asset qualification. Version stays 2.3.0 until PR 12 (release gate). See `docs/plans/2026-06-15-phase26-production-correctness-asset-qualification.md`.
 
 #### Face Detection — MediaPipe Tasks API Migration (PR 9)
 - **Changed:** `core/face_adapter.py` migrated from the legacy `mediapipe.solutions.face_detection` API (removed in `mediapipe>=0.11`, which pinned `protobuf<5`) to the modern **Tasks API** (`mediapipe.tasks.python.vision.face_detector`). Works with current mediapipe (protobuf 7.x / numpy 2.x) — drops the `<0.11` version cap.
@@ -100,7 +100,7 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - ADR 0026 — Contract Enforcement Over Rebuild (pure orchestration: NO new agent, NO new gate, NO schema change, NO state-machine change).
 - ADR 0027 — Asset-Qualification Inspection Delegation (cache-miss inspection delegates to VD's own bound `_run_multimodal_inspection` → byte-identical cached output, no cache-namespace drift, frame ownership stays in VD).
 - 2031 offline tests pass, 18 deselected; ruff clean; 93%+ coverage. Existing 69 VD tests pass UNMODIFIED (VD source untouched — blast-radius contained).
-- Version stays 2.3.0 (PR 10 owns the 2.4.0 bump).
+- Version stays 2.3.0 (PR 12 owns the 2.4.0 bump).
 
 #### PR 6 — Source Transcript & Clip-Window Selector (Minimal, Contract-First)
 - **Added:** new `core/clip_window.py` module — frozen `ClipWindow` dataclass + pluggable `WindowSelector` Protocol + `KeywordOverlapWindowSelector` (PR 6 v1 default, conservative: returns the full-clip window `ClipWindow(0.0, None)` for every candidate because keyword overlap cannot localize a spoken point to a timestamp). Contract-first: the data-flow shape is frozen now, the localizing backend is deferred.
@@ -108,7 +108,7 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - **Added:** end-to-end propagation — qualification seam (`Orchestrator._apply_asset_qualification` invokes the selector + attaches the window to kept candidates) → Visual Director (`_attach_candidate_windows` re-attaches by `source_url`; `_exec_tiktok_clip` carries it into the asset dict) → Composer (`_smart_trim` clamps the window to source bounds — degenerate ⇒ full clip — and `_trim_long_clip`/`_stretch_short_clip` emit `-ss <start>`).
 - **Deferred (post-v2.4.0):** the transcript/whisper backend (faster-whisper behind a config flag), yt-dlp auto-caption extraction, and keyframe-precise snapping. Blocked by ADR 0026 (do-not-rebuild), the GPU-forbidden constraint, no existing transcript infra, and the fact that the v2.4.0 release gate does NOT require clip-windowing. The "trimmed segment matches beat's spoken point" verification criterion waits for this backend (documented honestly).
 - ADR 0026 — Contract Enforcement Over Rebuild (pure orchestration: NO new agent, NO new gate, NO state-machine change).
-- 2054 offline tests pass, 18 deselected; ruff clean; 93%+ coverage. Version stays 2.3.0 (PR 10 owns the 2.4.0 bump).
+- 2054 offline tests pass, 18 deselected; ruff clean; 93%+ coverage. Version stays 2.3.0 (PR 12 owns the 2.4.0 bump).
 
 #### PR 7 — Model Resolution Correctness (Slug + Cache + Startup Preflight)
 - **Fixed:** the `budget_east` preset (`config/hierarchy.py`) used bare slugs — `mimo-v2-flash`, `glm-4.7-flash`, `qwen3-32b`, `gemini-2.5-flash`. OpenRouter requires canonical `vendor/model` slugs; bare slugs 404 with "No endpoints found" (job_9 root cause, surfacing mid-pipeline after paid research). Corrected to `xiaomi/mimo-v2.5` (segment_producer + visual_director — also the migration target for the removed `xiaomi/mimo-v2-flash`, job_11 root cause), `z-ai/glm-4.7-flash`, `qwen/qwen3-32b`, `google/gemini-2.5-flash`. Live-verified against the OpenRouter catalog (340 models) via the new preflight.
@@ -120,7 +120,7 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - **Removed:** dead `llm/router.py` (`ModelPreset`/`PRESET_MODELS`/`resolve_model`, 0 production consumers — only its own test imported it) and `tests/test_llm_router.py`. It carried the same bare-slug mistake. `llm/__init__.py` pruned to export only `OpenRouterClient`.
 - **Changed:** `.env.example` per-agent model section now shows canonical slugs + adds the previously-missing `VISUAL_DIRECTOR_MODEL`. `.env` (personal/gitignored) left untouched.
 - ADR 0026 — Contract Enforcement Over Rebuild (pure fixes: NO new agent, NO new gate, NO schema change, no new heavy dependency).
-- Offline suite green, ruff clean, ≥93% coverage. Version stays 2.3.0 (PR 10 owns the 2.4.0 bump).
+- Offline suite green, ruff clean, ≥93% coverage. Version stays 2.3.0 (PR 12 owns the 2.4.0 bump).
 
 #### PR 8 — Asset-Qualification Cost Optimization (job_11 storm fix)
 - **Context:** the PR 5 qualification boundary had NO cheap filter before the VLM — `candidate_semantic_ranker` is post-VLM arithmetic and `asset_qualification._score_candidate` IS the VLM (cache-key parity proves it). job_11 spent ~9,078 FFmpeg frame extractions + thousands of Gemini VLM calls, ~all `claim_support=0.00`. Three additive knobs cut the cost without changing the qualification contract.
@@ -128,7 +128,10 @@ Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing AD
 - **Added (option 2 — frame multiplier):** `AppSettings.frame_inspection_max_frames` (default **48**, was 120) + `frame_inspection_interval_sec` (default **1.0**, was 0.5) — threaded into Visual Director's `run_frame_inspection_pipeline` call (~7.5× fewer VLM-bound frames). Tunable via env; validated `ge=1` / `gt=0` so a bad deployment value fails fast instead of hanging `frame_sampler` (Codex P2#2).
 - **Added (option 9 — RECOVER cap):** `_qualify_beat` ranks recovered candidates by keyword-overlap relevance to the failing beat, then slices to `MAX_RECOVERED_PER_BEAT` (default **8**) before scoring — so one all-reject beat can't flood N fresh VLM inspections AND the most relevant recovered candidate isn't lost to provider ordering (Codex P2#1).
 - ADR 0026 / 0027 compliant (pure-python keyword-overlap reuse; no torch/embeddings; no new gate; qualification contract unchanged).
-- Offline suite green, ruff clean, ≥93% coverage. Version stays 2.3.0 (PR 10 owns the 2.4.0 bump).
+- Offline suite green, ruff clean, ≥93% coverage. Version stays 2.3.0 (PR 12 owns the 2.4.0 bump).
+
+#### PR 10 — ffmpeg_runner DEBUG-log quieting
+- **Fixed:** `ffmpeg_runner` no longer logs raw FFmpeg `stderr` line-by-line at DEBUG. The job_12 debug log was a 536k-line flood of one `log.debug` per stderr line, swamping logs and obscuring real signal. The runner now emits a one-line summary per invocation and writes the full captured stderr to the tail buffer, surfaced only on failure (tail-on-failure). Extraction/encode behavior is unchanged — only the DEBUG logging volume is reduced.
 
 ### Phase 25: Dead Code Removal (PR #49)
 
