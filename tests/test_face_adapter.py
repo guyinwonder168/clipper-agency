@@ -132,9 +132,12 @@ def _mock_face_adapter_env(cv2_image=None):
     saved_cv2 = sys.modules.get("cv2")
     sys.modules["cv2"] = mock_cv2
 
+    def _fake_ensure_cached(_model_selection: int = 1) -> Path:
+        return Path("/fake/model.tflite")
+
     with (
         _fake_mediapipe_tasks() as mock_fd,
-        patch.object(face_adapter, "_ensure_model_cached", return_value=Path("/fake/model.tflite")),
+        patch.object(face_adapter, "_ensure_model_cached", side_effect=_fake_ensure_cached),
     ):
         mock_model = MagicMock()
         mock_fd.FaceDetector.create_from_options.return_value = mock_model
@@ -385,6 +388,16 @@ class TestProviderMetadata:
         assert "face_detection" in result.model
         assert result.model != ""
 
+    def test_default_model_selection_is_full_range(self):
+        """Default (model_selection=1) must report the FULL-range model name."""
+        with _mock_face_adapter_env() as (mock_fd, mock_model):
+            mock_model.detect.return_value = _mock_result([_face(100, 100, 300, 300, 0.90)])
+            detector = MediaPipeFaceDetector()
+            result = detector.detect("face.jpg", 0.0)
+
+        assert detector.model_selection == 1
+        assert result.model == "face_detection_full_range"
+
 
 # ---------------------------------------------------------------------------
 # Test: Timestamp propagation
@@ -426,6 +439,101 @@ class TestModelReuse:
             mock_model.detect.return_value = _mock_result([_face(100, 100, 300, 300, 0.90)])
             d1 = MediaPipeFaceDetector()
             d2 = MediaPipeFaceDetector()
+            d1.detect("a.jpg", 0.0)
+            d2.detect("b.jpg", 1.0)
+
+        assert mock_fd.FaceDetector.create_from_options.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Test: model_selection -> BlazeFace range mapping
+# ---------------------------------------------------------------------------
+
+
+class TestModelSelectionMapping:
+    """model_selection must map to the correct BlazeFace model + metadata.
+
+    Legacy solutions-API semantics: 0=short-range, 1=full-range (DEFAULT).
+    """
+
+    def test_model_selection_zero_reports_short_range(self):
+        """model_selection=0 -> 'face_detection_short_range' metadata."""
+        with _mock_face_adapter_env() as (mock_fd, mock_model):
+            mock_model.detect.return_value = _mock_result([_face(100, 100, 300, 300, 0.90)])
+            detector = MediaPipeFaceDetector(model_selection=0)
+            result = detector.detect("face.jpg", 0.0)
+
+        assert result.model == "face_detection_short_range"
+
+    def test_model_selection_one_reports_full_range(self):
+        """model_selection=1 -> 'face_detection_full_range' metadata."""
+        with _mock_face_adapter_env() as (mock_fd, mock_model):
+            mock_model.detect.return_value = _mock_result([_face(100, 100, 300, 300, 0.90)])
+            detector = MediaPipeFaceDetector(model_selection=1)
+            result = detector.detect("face.jpg", 0.0)
+
+        assert result.model == "face_detection_full_range"
+
+    def test_model_selection_zero_downloads_short_range_model(self):
+        """model_selection=0 routes the SHORT-range URL/cache path through."""
+        with _mock_face_adapter_env() as (mock_fd, mock_model):
+            mock_model.detect.return_value = _mock_result([_face(100, 100, 300, 300, 0.90)])
+            detector = MediaPipeFaceDetector(model_selection=0)
+            detector.detect("face.jpg", 0.0)
+
+            # The patched _ensure_model_cached was invoked with model_selection=0.
+            face_adapter._ensure_model_cached.assert_called_with(0)
+
+        # The short-range spec carries the short-range URL + cache filename.
+        spec = face_adapter._resolve_model_spec(0)
+        assert "blaze_face_short_range" in spec["url"]
+        assert spec["cache_path"].name == "blaze_face_short_range.tflite"
+        assert spec["name"] == "face_detection_short_range"
+
+    def test_model_selection_one_downloads_full_range_model(self):
+        """model_selection=1 routes the FULL-range URL/cache path through."""
+        with _mock_face_adapter_env() as (mock_fd, mock_model):
+            mock_model.detect.return_value = _mock_result([_face(100, 100, 300, 300, 0.90)])
+            detector = MediaPipeFaceDetector(model_selection=1)
+            detector.detect("face.jpg", 0.0)
+
+            # The patched _ensure_model_cached was invoked with model_selection=1.
+            face_adapter._ensure_model_cached.assert_called_with(1)
+
+        # The full-range spec carries the full-range URL + cache filename.
+        spec = face_adapter._resolve_model_spec(1)
+        assert "blaze_face_full_range" in spec["url"]
+        assert spec["cache_path"].name == "blaze_face_full_range.tflite"
+        assert spec["name"] == "face_detection_full_range"
+
+    def test_model_selection_two_falls_back_to_full_range(self):
+        """Unknown model_selection values fall back to the full-range spec."""
+        spec = face_adapter._resolve_model_spec(2)
+        assert spec is face_adapter._MODEL_SPECS[1]
+        assert spec["name"] == "face_detection_full_range"
+
+
+class TestSingletonKeyPerModelSelection:
+    """The singleton must key on (model_selection, min_confidence) so a second
+    range in the same process loads its own BlazeFace model."""
+
+    def test_two_ranges_load_two_models(self):
+        """Short-range and full-range detectors each build their own model."""
+        with _mock_face_adapter_env() as (mock_fd, mock_model):
+            mock_model.detect.return_value = _mock_result([_face(100, 100, 300, 300, 0.90)])
+            short = MediaPipeFaceDetector(model_selection=0)
+            full = MediaPipeFaceDetector(model_selection=1)
+            short.detect("a.jpg", 0.0)
+            full.detect("b.jpg", 1.0)
+
+        assert mock_fd.FaceDetector.create_from_options.call_count == 2
+
+    def test_same_range_reuses_one_model(self):
+        """Two detectors with the same range+threshold share one model."""
+        with _mock_face_adapter_env() as (mock_fd, mock_model):
+            mock_model.detect.return_value = _mock_result([_face(100, 100, 300, 300, 0.90)])
+            d1 = MediaPipeFaceDetector(model_selection=0)
+            d2 = MediaPipeFaceDetector(model_selection=0)
             d1.detect("a.jpg", 0.0)
             d2.detect("b.jpg", 1.0)
 

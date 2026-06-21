@@ -7,9 +7,13 @@ in ``mediapipe>=0.11`` and pinned ``protobuf<5`` — incompatible with the proje
 ``protobuf==7.x`` / ``numpy==2.x`` stack. The Tasks API works with current
 MediaPipe releases.
 
-The BlazeFace short-range model is downloaded once and cached under ``data/``
-(gitignored). Detection returns absolute pixel bounding boxes with primary-face
-selection by area (largest) and centrality (closest to image center).
+MediaPipe Tasks publishes BOTH BlazeFace models (short-range and full-range).
+``model_selection`` preserves the legacy solutions-API semantics:
+``model_selection=0`` -> short-range (selfie-range faces), ``model_selection=1``
+-> full-range (back-camera / full-body distance faces, the DEFAULT). The
+selected model is downloaded once and cached under ``data/`` (gitignored) with a
+range-specific filename. Detection returns absolute pixel bounding boxes with
+primary-face selection by area (largest) and centrality (closest to image center).
 
 Degrades gracefully: if MediaPipe is absent or the model cannot be fetched, the
 adapter logs the failure ONCE and returns empty results on every subsequent call
@@ -34,15 +38,40 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG = FaceDetectionConfig()
 
-# BlazeFace short-range — the only face_detector task model MediaPipe ships.
-# Cached under data/ (gitignored) on first use; fixed app-owned path (not
-# user-controlled) per the S6549 path-traversal lesson.
-_MODEL_URL = (
-    "https://storage.googleapis.com/mediapipe-models/face_detector/"
-    "blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
-)
-_MODEL_CACHE_PATH = Path("data/models/face_detection/blaze_face_short_range.tflite")
-_MODEL_NAME = "face_detection_short_range"
+# MediaPipe Tasks publishes two BlazeFace face_detector models. ``model_selection``
+# preserves the legacy solutions-API semantics (0=short-range, 1=full-range).
+# Cached under data/ (gitignored) on first use with a range-specific filename;
+# fixed app-owned paths (not user-controlled) per the S6549 path-traversal lesson.
+_MODEL_SPECS = {
+    0: {
+        "url": (
+            "https://storage.googleapis.com/mediapipe-models/face_detector/"
+            "blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
+        ),
+        "cache_path": Path("data/models/face_detection/blaze_face_short_range.tflite"),
+        "name": "face_detection_short_range",
+    },
+    1: {
+        "url": (
+            "https://storage.googleapis.com/mediapipe-models/face_detector/"
+            "blaze_face_full_range/float16/1/blaze_face_full_range.tflite"
+        ),
+        "cache_path": Path("data/models/face_detection/blaze_face_full_range.tflite"),
+        "name": "face_detection_full_range",
+    },
+}
+
+
+def _resolve_model_spec(model_selection: int) -> dict:
+    """Return the model spec dict for ``model_selection`` (falls back to full-range).
+
+    Args:
+        model_selection: Legacy solutions-API selector (0=short, 1=full).
+
+    Returns:
+        Dict with keys ``url`` (str), ``cache_path`` (Path), ``name`` (str).
+    """
+    return _MODEL_SPECS.get(model_selection, _MODEL_SPECS[1])
 
 
 @runtime_checkable
@@ -65,21 +94,30 @@ class FaceDetector(Protocol):
         ...
 
 
-def _ensure_model_cached() -> Path:
-    """Download the BlazeFace model to the cache dir if not already present.
+def _ensure_model_cached(model_selection: int = 1) -> Path:
+    """Download the BlazeFace model for ``model_selection`` if not cached.
+
+    Args:
+        model_selection: Legacy selector (0=short-range, 1=full-range).
 
     Returns the local path to the cached ``.tflite``. Raises on network/HTTP
     failure so the caller can mark the adapter unavailable and degrade.
     """
-    if _MODEL_CACHE_PATH.exists():
-        return _MODEL_CACHE_PATH
-    _MODEL_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    logger.info("Downloading MediaPipe face-detection model to %s", _MODEL_CACHE_PATH)
+    spec = _resolve_model_spec(model_selection)
+    cache_path = spec["cache_path"]
+    if cache_path.exists():
+        return cache_path
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Downloading MediaPipe face-detection model (%s) to %s",
+        spec["name"],
+        cache_path,
+    )
     with httpx.Client(timeout=60) as client:
-        resp = client.get(_MODEL_URL)
+        resp = client.get(spec["url"])
         resp.raise_for_status()
-    _MODEL_CACHE_PATH.write_bytes(resp.content)
-    return _MODEL_CACHE_PATH
+    cache_path.write_bytes(resp.content)
+    return cache_path
 
 
 class MediaPipeFaceDetector:
@@ -87,17 +125,22 @@ class MediaPipeFaceDetector:
 
     The detector is loaded on first call to :meth:`detect` — not at module
     import time. It is stored at class level and reused across all instances
-    (singleton behavior).
+    (singleton behavior). The singleton is keyed by
+    ``(model_selection, min_confidence)`` so that two detectors configured with
+    different ranges (or thresholds) each load their own model rather than
+    silently sharing the wrong one.
 
     Attributes:
         min_confidence: Detection confidence threshold (default from config).
-        model_selection: Legacy compatibility param (MediaPipe Tasks ships only
-            the short-range BlazeFace model; this is retained for API parity and
-            is otherwise informational).
+        model_selection: Range selector preserving legacy solutions-API
+            semantics — 0=short-range (selfie faces), 1=full-range (back-camera
+            / full-body distance faces, the DEFAULT).
     """
 
-    # Class-level singleton model, lock, and unavailable flag.
-    _model = None
+    # Class-level singleton model cache keyed by (model_selection, min_confidence),
+    # plus lock and unavailable flag. A tuple key ensures two distinct ranges in
+    # one process each load their own BlazeFace model instead of sharing.
+    _models: dict[tuple[int, float], object] = {}
     _model_lock = threading.Lock()
     _unavailable = False
 
@@ -111,7 +154,7 @@ class MediaPipeFaceDetector:
         Args:
             min_confidence: Faces below this score are filtered out.
                 Defaults to FaceDetectionConfig.min_confidence (0.60).
-            model_selection: Retained for API parity (legacy solutions param).
+            model_selection: Range selector (0=short-range, 1=full-range).
         """
         self.min_confidence = (
             min_confidence if min_confidence is not None else _DEFAULT_CONFIG.min_confidence
@@ -122,12 +165,15 @@ class MediaPipeFaceDetector:
     def _reset_model(cls) -> None:
         """Reset the class-level model singleton (for testing only)."""
         with cls._model_lock:
-            cls._model = None
+            cls._models = {}
             cls._unavailable = False
 
     @classmethod
-    def _get_model(cls, min_confidence: float):
+    def _get_model(cls, model_selection: int, min_confidence: float):
         """Lazily initialize and return the shared Tasks-API FaceDetector.
+
+        The singleton is keyed by ``(model_selection, min_confidence)`` so a
+        second range/threshold in the same process loads its own model.
 
         Returns ``None`` (and marks the adapter unavailable) if MediaPipe is
         missing or the model cannot be initialized — so callers degrade to empty
@@ -135,11 +181,12 @@ class MediaPipeFaceDetector:
         """
         if cls._unavailable:
             return None
-        if cls._model is None:
+        key = (model_selection, min_confidence)
+        if key not in cls._models:
             with cls._model_lock:
-                if cls._model is None and not cls._unavailable:
+                if key not in cls._models and not cls._unavailable:
                     try:
-                        cls._model = cls._build_model(min_confidence)
+                        cls._models[key] = cls._build_model(model_selection, min_confidence)
                     except Exception as exc:  # noqa: BLE001 — degrade on any init failure
                         cls._unavailable = True
                         logger.warning(
@@ -148,15 +195,15 @@ class MediaPipeFaceDetector:
                             exc,
                         )
                         return None
-        return cls._model
+        return cls._models[key]
 
     @staticmethod
-    def _build_model(min_confidence: float):
+    def _build_model(model_selection: int, min_confidence: float):
         """Import MediaPipe Tasks API + create the FaceDetector singleton."""
         from mediapipe.tasks.python.core import base_options as base_options_module
         from mediapipe.tasks.python.vision import face_detector as fd_module
 
-        model_path = _ensure_model_cached()
+        model_path = _ensure_model_cached(model_selection)
         options = fd_module.FaceDetectorOptions(
             base_options=base_options_module.BaseOptions(
                 model_asset_path=str(model_path),
@@ -173,12 +220,14 @@ class MediaPipeFaceDetector:
             timestamp_sec: Video timestamp the frame was extracted at.
 
         Returns:
-            FaceInspectionResult with provider="mediapipe", model metadata,
+            FaceInspectionResult with provider="mediapipe", model metadata
+            (``face_detection_full_range`` / ``face_detection_short_range``),
             and a list of FaceRegion objects sorted by primary-face priority.
         """
         import cv2
 
-        model = self._get_model(self.min_confidence)
+        model_name = _resolve_model_spec(self.model_selection)["name"]
+        model = self._get_model(self.model_selection, self.min_confidence)
         if model is None:
             return FaceInspectionResult(
                 provider="mediapipe",
@@ -196,7 +245,7 @@ class MediaPipeFaceDetector:
         if image is None:
             return FaceInspectionResult(
                 provider="mediapipe",
-                model=_MODEL_NAME,
+                model=model_name,
                 timestamp_sec=timestamp_sec,
                 faces=[],
             )
@@ -235,7 +284,7 @@ class MediaPipeFaceDetector:
 
         return FaceInspectionResult(
             provider="mediapipe",
-            model=_MODEL_NAME,
+            model=model_name,
             timestamp_sec=timestamp_sec,
             faces=faces,
         )
