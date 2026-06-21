@@ -628,7 +628,6 @@ class ComposerAgent(BaseAgent):
 
         if agent_dir:
             self._persist_diagnostics(agent_dir, ffmpeg_cmd, "")
-            write_json(agent_output_file(assets_cache, job_id, "composer"), output)
         output = self._attach_visual_coverage_diagnostics(
             output,
             voiceover_duration_sec,
@@ -641,6 +640,12 @@ class ComposerAgent(BaseAgent):
             output_dur,
             video_path,
         )
+
+        # Persist output AFTER manifest/coverage diagnostics are attached so
+        # the on-disk output.json carries rendered_scene_manifest (the
+        # Reviewer repair loop reconstructs from this file — RC-9a).
+        if agent_dir:
+            write_json(agent_output_file(assets_cache, job_id, "composer"), output)
 
         return output
 
@@ -1870,10 +1875,6 @@ class ComposerAgent(BaseAgent):
         }
         if agent_dir:
             self._persist_diagnostics(agent_dir, cmd, "")
-            write_json(
-                agent_output_file(assets_cache, job_id, "composer"),
-                output,
-            )
         output = self._attach_visual_coverage_diagnostics(output, None)
 
         # Build generated text region manifest from captions
@@ -1890,5 +1891,14 @@ class ComposerAgent(BaseAgent):
             video_path,
             assets,
         )
+
+        # Persist output AFTER manifest/diagnostics are attached so the
+        # on-disk output.json carries rendered_scene_manifest (the Reviewer
+        # repair loop reconstructs from this file — RC-9a).
+        if agent_dir:
+            write_json(
+                agent_output_file(assets_cache, job_id, "composer"),
+                output,
+            )
 
         return output
