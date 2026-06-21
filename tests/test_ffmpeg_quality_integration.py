@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
 from clipper_agency.core.frame_extractor import extract_frames
 from clipper_agency.core.frame_quality import (
     detect_empty_segments,
@@ -23,7 +24,6 @@ from clipper_agency.core.media_detectors import (
     detect_black_segments,
     detect_freeze_segments,
 )
-from clipper_agency.core.ffmpeg_runner import run_ffmpeg_streaming
 
 pytestmark = pytest.mark.integration
 
@@ -31,6 +31,7 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 # Helpers — synthetic video generation
 # ---------------------------------------------------------------------------
+
 
 def _ffmpeg_available() -> bool:
     try:
@@ -186,7 +187,8 @@ class TestBlackSegmentDetection:
     """Integration tests for ``detect_black_segments()`` with real FFmpeg."""
 
     def test_pure_black_video_detected_as_single_interval(
-        self, synthetic_black_video: Path,
+        self,
+        synthetic_black_video: Path,
     ):
         segments = detect_black_segments(
             synthetic_black_video,
@@ -200,7 +202,8 @@ class TestBlackSegmentDetection:
         assert first_end >= 4.5, f"Expected end near 5.0, got {first_end}"
 
     def test_clean_video_has_no_black_segments(
-        self, synthetic_clean_video: Path,
+        self,
+        synthetic_clean_video: Path,
     ):
         segments = detect_black_segments(
             synthetic_clean_video,
@@ -210,7 +213,8 @@ class TestBlackSegmentDetection:
         assert segments == []
 
     def test_text_overlay_video_not_detected_as_black(
-        self, synthetic_text_video: Path,
+        self,
+        synthetic_text_video: Path,
     ):
         """Burned-in text on black may register as black if the text covers
         very little area, so we use a lenient check: the detected black
@@ -226,7 +230,8 @@ class TestBlackSegmentDetection:
             )
 
     def test_black_ending_detected_in_second_half(
-        self, synthetic_black_ending_video: Path,
+        self,
+        synthetic_black_ending_video: Path,
     ):
         segments = detect_black_segments(
             synthetic_black_ending_video,
@@ -236,9 +241,7 @@ class TestBlackSegmentDetection:
         assert len(segments) >= 1
         # The black part starts at ~3 s.
         detected_start = segments[0][0]
-        assert detected_start >= 2.5, (
-            f"Black segment should start near 3.0 s, got {detected_start}"
-        )
+        assert detected_start >= 2.5, f"Black segment should start near 3.0 s, got {detected_start}"
 
 
 # ===========================================================================
@@ -246,17 +249,19 @@ class TestBlackSegmentDetection:
 # ===========================================================================
 
 
+@pytest.mark.integration
 @requires_ffmpeg
 class TestFreezeFrameDetection:
     """Integration tests for ``detect_freeze_segments()`` with real FFmpeg."""
 
     def test_frozen_video_detected_as_single_interval(
-        self, synthetic_frozen_video: Path,
+        self,
+        synthetic_frozen_video: Path,
     ):
         segments = detect_freeze_segments(
             synthetic_frozen_video,
             min_duration_sec=0.5,
-            noise_threshold=-60,
+            noise_threshold=0.01,
         )
         assert len(segments) >= 1
         first_start, first_end = segments[0]
@@ -264,23 +269,25 @@ class TestFreezeFrameDetection:
         assert first_end >= 4.0, f"Expected freeze end near 5.0, got {first_end}"
 
     def test_clean_video_has_no_freeze_segments(
-        self, synthetic_clean_video: Path,
+        self,
+        synthetic_clean_video: Path,
     ):
         segments = detect_freeze_segments(
             synthetic_clean_video,
             min_duration_sec=0.5,
-            noise_threshold=-60,
+            noise_threshold=0.01,
         )
         assert segments == []
 
     def test_black_video_also_detected_as_frozen(
-        self, synthetic_black_video: Path,
+        self,
+        synthetic_black_video: Path,
     ):
         """A pure-black video is also a frozen video (no pixel change)."""
         segments = detect_freeze_segments(
             synthetic_black_video,
             min_duration_sec=0.5,
-            noise_threshold=-60,
+            noise_threshold=0.01,
         )
         assert len(segments) >= 1
 
@@ -295,7 +302,9 @@ class TestFrameExtraction:
     """Integration tests for ``extract_frames()`` with real FFmpeg."""
 
     def test_extracts_frames_at_specified_timestamps(
-        self, synthetic_clean_video: Path, tmp_path: Path,
+        self,
+        synthetic_clean_video: Path,
+        tmp_path: Path,
     ):
         timestamps = [0.0, 1.0, 2.0]
         frames = extract_frames(
@@ -311,7 +320,9 @@ class TestFrameExtraction:
             assert Path(frame.path).exists()
 
     def test_extracts_no_frames_from_timestamp_beyond_duration(
-        self, synthetic_clean_video: Path, tmp_path: Path,
+        self,
+        synthetic_clean_video: Path,
+        tmp_path: Path,
     ):
         frames = extract_frames(
             video_path=str(synthetic_clean_video),
@@ -322,7 +333,9 @@ class TestFrameExtraction:
         assert frames == []
 
     def test_extracted_black_frames_are_detected_as_uniform(
-        self, synthetic_black_video: Path, tmp_path: Path,
+        self,
+        synthetic_black_video: Path,
+        tmp_path: Path,
     ):
         """Frames extracted from a black video should be flagged as uniform."""
         import cv2
@@ -350,7 +363,9 @@ class TestEmptySegmentDetectionIntegration:
     """Integration: extract frames then run ``detect_empty_segments()``."""
 
     def test_black_video_frames_merge_into_single_empty_segment(
-        self, synthetic_black_video: Path, tmp_path: Path,
+        self,
+        synthetic_black_video: Path,
+        tmp_path: Path,
     ):
         import cv2
 
@@ -361,10 +376,7 @@ class TestEmptySegmentDetectionIntegration:
             output_dir=str(tmp_path / "seg_frames"),
             ffmpeg_runner=run_ffmpeg_streaming,
         )
-        sampled = [
-            (f.timestamp_sec, cv2.imread(f.path, cv2.IMREAD_COLOR))
-            for f in frames
-        ]
+        sampled = [(f.timestamp_sec, cv2.imread(f.path, cv2.IMREAD_COLOR)) for f in frames]
         intervals = detect_empty_segments(sampled, max_gap_sec=2.0)
         assert len(intervals) >= 1
         first_start, first_end = intervals[0]
@@ -372,7 +384,9 @@ class TestEmptySegmentDetectionIntegration:
         assert first_end >= 3.4
 
     def test_black_ending_video_has_empty_segment_in_second_half(
-        self, synthetic_black_ending_video: Path, tmp_path: Path,
+        self,
+        synthetic_black_ending_video: Path,
+        tmp_path: Path,
     ):
         import cv2
 
@@ -383,17 +397,12 @@ class TestEmptySegmentDetectionIntegration:
             output_dir=str(tmp_path / "ending_frames"),
             ffmpeg_runner=run_ffmpeg_streaming,
         )
-        sampled = [
-            (f.timestamp_sec, cv2.imread(f.path, cv2.IMREAD_COLOR))
-            for f in frames
-        ]
+        sampled = [(f.timestamp_sec, cv2.imread(f.path, cv2.IMREAD_COLOR)) for f in frames]
         intervals = detect_empty_segments(sampled, max_gap_sec=2.0)
         assert len(intervals) >= 1
         # The empty segment should only be from the black portion (≥ 3.0 s).
         for start, end in intervals:
-            assert start >= 3.0, (
-                f"Empty segment at {start}–{end} should start ≥ 3.0 s"
-            )
+            assert start >= 3.0, f"Empty segment at {start}–{end} should start ≥ 3.0 s"
 
 
 # ===========================================================================
