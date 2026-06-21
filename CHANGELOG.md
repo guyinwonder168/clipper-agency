@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Clarified the Codex review gate in `AGENTS.md`: a 👍 (thumbs-up) reaction from `chatgpt-codex-connector[bot]` with no written comments is the Codex **pass** signal. It is a reaction (not a formal `APPROVED` review), so GitHub's `reviewDecision`/`reviews[]` stay empty by design and this does NOT block the merge. Documented in both the step-by-step workflow (Step 6) and the condensed Rules.
+
 ### Phase 26: Production Correctness + Canonical Timeline
 
 Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing ADR 0020 canonical timeline, and introducing pre-VD asset qualification. Version stays 2.3.0 until PR 12 (release gate). See `docs/plans/2026-06-15-phase26-production-correctness-asset-qualification.md`.
