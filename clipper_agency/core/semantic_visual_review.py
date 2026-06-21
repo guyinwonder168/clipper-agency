@@ -12,11 +12,20 @@ from __future__ import annotations
 
 from clipper_agency.config.schema import VisualRelevanceScore
 
+# Weight for the temporal_match signal the VLM returns.
+# Defaults to 0.0 so wiring the signal in is byte-identical to the prior
+# behavior (the term cannot move the score). Raising this weight is a separate
+# follow-up gated on PR 13 confirming temporal_match correlates with review
+# outcomes (RC-4). This constant IS the knob: it is injected into
+# DEFAULT_WEIGHTS below so raising it actually enables temporal weighting.
+_TEMPORAL_MATCH_WEIGHT = 0.0
+
 DEFAULT_WEIGHTS: dict[str, float] = {
     "person_match": 0.20,
     "event_match": 0.25,
     "claim_support": 0.25,
     "visual_quality": 0.30,
+    "temporal_match": _TEMPORAL_MATCH_WEIGHT,
 }
 
 # Decision thresholds
@@ -25,8 +34,21 @@ _REVISE_FLOOR = 0.4
 _MISLEADING_HARD = 0.7
 _MISLEADING_SOFT = 0.5
 
+# Dimensions summed into the weighted score. temporal_match is appended so the
+# VLM's temporal signal is now READ (previously discarded) but cannot move the
+# score until its weight is raised above 0.0.
+_SCORED_DIMENSIONS = (
+    "person_match",
+    "event_match",
+    "claim_support",
+    "visual_quality",
+    "temporal_match",
+)
 
-def _compute_misleading_risk(person_match: float, event_match: float, claim_support: float) -> float:
+
+def _compute_misleading_risk(
+    person_match: float, event_match: float, claim_support: float
+) -> float:
     """High person match + low event/claim support → misleading risk."""
     if person_match > 0.8 and (event_match + claim_support) / 2 < 0.4:
         return 0.5 + (person_match - 0.8) * 2.5
@@ -37,11 +59,14 @@ def _weighted_score(
     inspection: dict[str, float],
     weights: dict[str, float],
 ) -> float:
-    """Sum of weighted dimension scores."""
-    return sum(
-        weights.get(dim, 0.0) * inspection.get(dim, 0.0)
-        for dim in ("person_match", "event_match", "claim_support", "visual_quality")
-    )
+    """Sum of weighted dimension scores.
+
+    ``temporal_match`` is summed with a default weight of 0.0
+    (``DEFAULT_WEIGHTS["temporal_match"] = _TEMPORAL_MATCH_WEIGHT = 0.0``), so
+    the term is READ but cannot move the score until that weight is raised.
+    This preserves the prior behavior exactly (RC-4).
+    """
+    return sum(weights.get(dim, 0.0) * inspection.get(dim, 0.0) for dim in _SCORED_DIMENSIONS)
 
 
 def score_visual_relevance(
@@ -58,10 +83,12 @@ def score_visual_relevance(
         traceability — not used in the scoring formula itself.
     asset_inspection:
         Per-dimension floats: ``person_match``, ``event_match``,
-        ``claim_support``, ``visual_quality``.
+        ``claim_support``, ``visual_quality``.  ``temporal_match`` is also read
+        but contributes 0.0 by default (see ``_TEMPORAL_MATCH_WEIGHT``).
     weights:
         Optional weight override per dimension.  Falls back to
-        ``DEFAULT_WEIGHTS``.
+        ``DEFAULT_WEIGHTS``.  ``temporal_match`` defaults to weight 0.0 unless
+        explicitly overridden here.
 
     Returns
     -------
