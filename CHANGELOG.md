@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Multi-PR roadmap fixing 4 confirmed production defects from Job #8, enforcing ADR 0020 canonical timeline, and introducing pre-VD asset qualification. Version stays 2.3.0 until PR 10 (release gate). See `docs/plans/2026-06-15-phase26-production-correctness-asset-qualification.md`.
 
+#### Face Detection — MediaPipe Tasks API Migration (PR 9)
+- **Changed:** `core/face_adapter.py` migrated from the legacy `mediapipe.solutions.face_detection` API (removed in `mediapipe>=0.11`, which pinned `protobuf<5`) to the modern **Tasks API** (`mediapipe.tasks.python.vision.face_detector`). Works with current mediapipe (protobuf 7.x / numpy 2.x) — drops the `<0.11` version cap.
+- **Added:** the BlazeFace short-range model is downloaded once + cached under `data/models/face_detection/` (on first face-detection call only).
+- **Fixed:** the adapter now **degrades gracefully** (logs once, returns empty `model="face_detection_unavailable"`) when mediapipe is absent or the model can't be fetched — instead of raising `ModuleNotFoundError` per frame, which was half of the job_12 log storm.
+- **Changed (deps):** `mediapipe` added to `requirements.txt`; opencv standardized on `opencv-contrib-python` (mediapipe hard-requires it) — removed the conflicting `opencv-python-headless`; also pinned `Flask-WTF`/`WTForms` and removed the self-referential `clipper-agency @ file://` line.
+- Tests rewritten to a Tasks-API mock layer (no real mediapipe needed); 45 face/layout tests pass.
+
 #### Batch 0 (PR #50) — Job #8 Golden Regression Fixture
 - 6 frozen JSON artifacts from Job #8 in `tests/fixtures/job8/` (vd_output, composer_output, visual_coverage, manifest, narrative_structure, voice_producer_output).
 - 16 characterization tests in `tests/test_job8_regression.py` documenting 4 confirmed bugs (rejected candidates rendered, absurd durations, fade_to_black at start, missing reviewer artifact).

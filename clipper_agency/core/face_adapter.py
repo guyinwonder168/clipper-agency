@@ -1,13 +1,28 @@
-"""MediaPipe face detection runtime adapter with lazy initialization.
+"""MediaPipe face detection runtime adapter (Tasks API) with lazy initialization.
 
-Provides a FaceDetector protocol implementation that wraps MediaPipe's
-face detection model. The model is lazily loaded — no import at module level.
-Detection returns normalized pixel bounding boxes with primary-face selection
-by area (largest) and centrality (closest to image center).
+Provides a FaceDetector protocol implementation that wraps MediaPipe's **Tasks
+API** face detector (``mediapipe.tasks.python.vision.face_detector``). This
+replaces the legacy ``mediapipe.solutions.face_detection`` API, which was removed
+in ``mediapipe>=0.11`` and pinned ``protobuf<5`` — incompatible with the project's
+``protobuf==7.x`` / ``numpy==2.x`` stack. The Tasks API works with current
+MediaPipe releases.
+
+The BlazeFace short-range model is downloaded once and cached under ``data/``
+(gitignored). Detection returns absolute pixel bounding boxes with primary-face
+selection by area (largest) and centrality (closest to image center).
+
+Degrades gracefully: if MediaPipe is absent or the model cannot be fetched, the
+adapter logs the failure ONCE and returns empty results on every subsequent call
+— it never raises per-frame (which was the source of the ``ModuleNotFoundError``
+log storm when the package was missing).
 """
 
+import logging
 import threading
+from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+import httpx
 
 from clipper_agency.config.schema import (
     FaceDetectionConfig,
@@ -15,8 +30,19 @@ from clipper_agency.config.schema import (
     FaceRegion,
 )
 
-# Default configuration
+logger = logging.getLogger(__name__)
+
 _DEFAULT_CONFIG = FaceDetectionConfig()
+
+# BlazeFace short-range — the only face_detector task model MediaPipe ships.
+# Cached under data/ (gitignored) on first use; fixed app-owned path (not
+# user-controlled) per the S6549 path-traversal lesson.
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_detector/"
+    "blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
+)
+_MODEL_CACHE_PATH = Path("data/models/face_detection/blaze_face_short_range.tflite")
+_MODEL_NAME = "face_detection_short_range"
 
 
 @runtime_checkable
@@ -39,21 +65,41 @@ class FaceDetector(Protocol):
         ...
 
 
-class MediaPipeFaceDetector:
-    """MediaPipe face detection adapter with lazy model initialization.
+def _ensure_model_cached() -> Path:
+    """Download the BlazeFace model to the cache dir if not already present.
 
-    The MediaPipe model is loaded on first call to :meth:`detect` — not
-    at module import time. The model is stored at class level and reused
-    across all instances (singleton behavior).
+    Returns the local path to the cached ``.tflite``. Raises on network/HTTP
+    failure so the caller can mark the adapter unavailable and degrade.
+    """
+    if _MODEL_CACHE_PATH.exists():
+        return _MODEL_CACHE_PATH
+    _MODEL_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("Downloading MediaPipe face-detection model to %s", _MODEL_CACHE_PATH)
+    with httpx.Client(timeout=60) as client:
+        resp = client.get(_MODEL_URL)
+        resp.raise_for_status()
+    _MODEL_CACHE_PATH.write_bytes(resp.content)
+    return _MODEL_CACHE_PATH
+
+
+class MediaPipeFaceDetector:
+    """MediaPipe face detection adapter (Tasks API) with lazy model init.
+
+    The detector is loaded on first call to :meth:`detect` — not at module
+    import time. It is stored at class level and reused across all instances
+    (singleton behavior).
 
     Attributes:
         min_confidence: Detection confidence threshold (default from config).
-        model_selection: MediaPipe model variant (1 = full-range, 0 = short-range).
+        model_selection: Legacy compatibility param (MediaPipe Tasks ships only
+            the short-range BlazeFace model; this is retained for API parity and
+            is otherwise informational).
     """
 
-    # Class-level singleton model and lock
+    # Class-level singleton model, lock, and unavailable flag.
     _model = None
     _model_lock = threading.Lock()
+    _unavailable = False
 
     def __init__(
         self,
@@ -65,12 +111,10 @@ class MediaPipeFaceDetector:
         Args:
             min_confidence: Faces below this score are filtered out.
                 Defaults to FaceDetectionConfig.min_confidence (0.60).
-            model_selection: MediaPipe model selection (1=full-range, 0=short-range).
+            model_selection: Retained for API parity (legacy solutions param).
         """
         self.min_confidence = (
-            min_confidence
-            if min_confidence is not None
-            else _DEFAULT_CONFIG.min_confidence
+            min_confidence if min_confidence is not None else _DEFAULT_CONFIG.min_confidence
         )
         self.model_selection = model_selection
 
@@ -79,24 +123,47 @@ class MediaPipeFaceDetector:
         """Reset the class-level model singleton (for testing only)."""
         with cls._model_lock:
             cls._model = None
+            cls._unavailable = False
 
     @classmethod
-    def _get_model(cls, model_selection: int, min_confidence: float):
-        """Lazily initialize and return the shared MediaPipe FaceDetection model.
+    def _get_model(cls, min_confidence: float):
+        """Lazily initialize and return the shared Tasks-API FaceDetector.
 
-        Uses double-checked locking for thread-safe lazy initialization.
+        Returns ``None`` (and marks the adapter unavailable) if MediaPipe is
+        missing or the model cannot be initialized — so callers degrade to empty
+        results instead of raising per call.
         """
+        if cls._unavailable:
+            return None
         if cls._model is None:
             with cls._model_lock:
-                if cls._model is None:
-                    import mediapipe as mp
-                    import mediapipe.solutions.face_detection as fd_module  # type: ignore[import-untyped]
-
-                    cls._model = fd_module.FaceDetection(
-                        model_selection=model_selection,
-                        min_detection_confidence=min_confidence,
-                    )
+                if cls._model is None and not cls._unavailable:
+                    try:
+                        cls._model = cls._build_model(min_confidence)
+                    except Exception as exc:  # noqa: BLE001 — degrade on any init failure
+                        cls._unavailable = True
+                        logger.warning(
+                            "MediaPipe face detection unavailable (%s); "
+                            "returning empty face results.",
+                            exc,
+                        )
+                        return None
         return cls._model
+
+    @staticmethod
+    def _build_model(min_confidence: float):
+        """Import MediaPipe Tasks API + create the FaceDetector singleton."""
+        from mediapipe.tasks.python.core import base_options as base_options_module
+        from mediapipe.tasks.python.vision import face_detector as fd_module
+
+        model_path = _ensure_model_cached()
+        options = fd_module.FaceDetectorOptions(
+            base_options=base_options_module.BaseOptions(
+                model_asset_path=str(model_path),
+            ),
+            min_detection_confidence=min_confidence,
+        )
+        return fd_module.FaceDetector.create_from_options(options)
 
     def detect(self, image_path: str, timestamp_sec: float) -> FaceInspectionResult:
         """Detect faces in an image file using MediaPipe.
@@ -110,49 +177,57 @@ class MediaPipeFaceDetector:
             and a list of FaceRegion objects sorted by primary-face priority.
         """
         import cv2
-        import numpy as np
 
-        model = self._get_model(self.model_selection, self.min_confidence)
+        model = self._get_model(self.min_confidence)
+        if model is None:
+            return FaceInspectionResult(
+                provider="mediapipe",
+                model="face_detection_unavailable",
+                timestamp_sec=timestamp_sec,
+                faces=[],
+            )
 
-        # Load image via OpenCV → numpy array (Solutions API expects numpy)
+        # mediapipe is imported lazily here (after the availability check) so a
+        # missing/unavailable model degrades to empty instead of raising.
+        import mediapipe as mp
+
+        # Load image via OpenCV → numpy array (needed for dimensions + RGB convert)
         image = cv2.imread(image_path)
         if image is None:
             return FaceInspectionResult(
                 provider="mediapipe",
-                model=f"face_detection_v{self.model_selection}",
+                model=_MODEL_NAME,
                 timestamp_sec=timestamp_sec,
                 faces=[],
             )
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image_height, image_width = image.shape[:2]
 
-        # Run face detection
-        results = model.process(image_rgb)
+        # Tasks API expects an mp.Image built from the RGB numpy array.
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+        result = model.detect(mp_image)
 
         faces: list[FaceRegion] = []
+        for detection in getattr(result, "detections", None) or []:
+            score = self._extract_score(detection)
+            if score < self.min_confidence:
+                continue
 
-        if results.detections:
-            for detection in results.detections:
-                score = self._extract_score(detection)
+            # Tasks API bounding_box is ABSOLUTE pixels (origin_x/y + width/height)
+            # — no normalization math needed (unlike the legacy solutions API).
+            bb = detection.bounding_box
+            xmin = int(bb.origin_x)
+            ymin = int(bb.origin_y)
+            xmax = int(bb.origin_x + bb.width)
+            ymax = int(bb.origin_y + bb.height)
 
-                if score < self.min_confidence:
-                    continue
-
-                bbox = detection.location_data.relative_bounding_box
-
-                # Convert normalized [0,1] coords → absolute pixel coords
-                xmin = int(bbox.xmin * image_width)
-                ymin = int(bbox.ymin * image_height)
-                xmax = int((bbox.xmin + bbox.width) * image_width)
-                ymax = int((bbox.ymin + bbox.height) * image_height)
-
-                faces.append(
-                    FaceRegion(
-                        bbox=[xmin, ymin, xmax, ymax],
-                        confidence=float(score),
-                        is_primary=False,
-                    )
+            faces.append(
+                FaceRegion(
+                    bbox=[xmin, ymin, xmax, ymax],
+                    confidence=float(score),
+                    is_primary=False,
                 )
+            )
 
         # Select primary face if any were detected
         if faces:
@@ -160,7 +235,7 @@ class MediaPipeFaceDetector:
 
         return FaceInspectionResult(
             provider="mediapipe",
-            model=f"face_detection_v{self.model_selection}",
+            model=_MODEL_NAME,
             timestamp_sec=timestamp_sec,
             faces=faces,
         )
@@ -171,26 +246,18 @@ class MediaPipeFaceDetector:
 
     @staticmethod
     def _extract_score(detection) -> float:
-        """Extract confidence score from a MediaPipe Detection.
+        """Extract the confidence score from a Tasks-API Detection.
 
-        Handles both list-based scores (older MediaPipe API) and scalar
-        scores (newer API).
-
-        Args:
-            detection: A MediaPipe Detection protocol message.
-
-        Returns:
-            Float score between 0.0 and 1.0, or 0.0 if unavailable.
+        The Tasks face_detector exposes scores on ``detection.categories``;
+        the face detector emits a single category whose ``score`` is the
+        confidence. Returns the max category score, or 0.0 if unavailable.
         """
-        score = detection.score
-        if isinstance(score, (list, tuple)):
-            return float(score[0]) if score else 0.0
-        return float(score)
+        categories = getattr(detection, "categories", None) or []
+        scores = [getattr(c, "score", 0.0) for c in categories]
+        return float(max(scores)) if scores else 0.0
 
     @staticmethod
-    def _mark_primary(
-        faces: list[FaceRegion], image_width: int, image_height: int
-    ) -> None:
+    def _mark_primary(faces: list[FaceRegion], image_width: int, image_height: int) -> None:
         """Select and mark the primary face in the list.
 
         Primary selection priority:
