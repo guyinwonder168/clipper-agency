@@ -217,10 +217,19 @@ def _find_scene_entry(
     scenes: list[dict],
     scene_index: int,
 ) -> dict | None:
-    """Find a scene entry by scene_index from the scenes list."""
+    """Find a scene entry by scene_index from the scenes list.
+
+    Falls back to list position when entries lack an explicit ``scene_index``
+    field: ``RenderedSceneEntry`` serializes without one (only scene, beat_id,
+    start_sec, end_sec, ...), and ``map_scenes_to_beats`` already maps by
+    position. Without this fallback the per-scene semantic context stays blind
+    for real Composer manifests (Codex P2 on RC-9).
+    """
     for s in scenes:
         if s.get("scene_index") == scene_index:
             return s
+    if 0 <= scene_index < len(scenes):
+        return scenes[scene_index]
     return None
 
 

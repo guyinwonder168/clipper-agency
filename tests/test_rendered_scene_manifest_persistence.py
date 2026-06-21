@@ -108,8 +108,10 @@ def test_get_semantic_review_context_reads_entries_key():
     manifest = {
         "entries": [
             {
+                # Realistic RenderedSceneEntry shape: build_rendered_scene_manifest
+                # serializes NO scene_index field (only scene/beat_id/start_sec/...),
+                # so _find_scene_entry must fall back to list position (Codex P2).
                 "scene": "1",
-                "scene_index": 0,
                 "beat_id": "1",
                 "start_sec": 0.0,
                 "end_sec": 5.0,
