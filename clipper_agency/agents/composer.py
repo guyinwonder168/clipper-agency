@@ -68,7 +68,11 @@ _DURATION_CLOSE_ENOUGH = 0.05  # 50ms tolerance for duration match
 _BLACK_MIN_DURATION_SEC = 0.1  # minimum black segment length to report
 _BLACK_PIXEL_THRESHOLD = 0.10  # pixel intensity threshold for blackdetect
 _FREEZE_MIN_DURATION_SEC = 0.1  # minimum freeze segment length to report
-_FREEZE_NOISE_THRESHOLD = -30.0  # dB threshold for freezedetect
+# freezedetect noise tolerance: a pixel-change RATIO in [0, 1], NOT dB.
+# The documented ffmpeg default (0.001) flags frames with <0.1% pixel noise as
+# frozen. A prior value of -30.0 was rejected every run ("parameter 'n' out of
+# range [0 - 1]", rc=1), so freeze detection silently never worked (RC-8).
+_FREEZE_NOISE_THRESHOLD = 0.001
 
 # Keyword caption drawtext style
 _KEYWORD_FONTSIZE = 48  # Large font for mobile readability

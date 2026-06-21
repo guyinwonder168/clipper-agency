@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Bug Fixes
+- **RC-8 (freezedetect never worked):** `Composer._FREEZE_NOISE_THRESHOLD` was `-30.0` with a misleading "dB threshold" comment, but FFmpeg's `freezedetect` `n` parameter is a **noise-tolerance ratio in `[0, 1]`**, not dB. The installed ffmpeg rejected `n=-30.0` with `Value -30.000000 for parameter 'n' out of range [0 - 1]` (rc=1) on every run, so `_safe_detect_freeze` logged "Composer: freeze detection failed" and returned `[]` — freeze detection had never flagged anything. Corrected to the documented ffmpeg default `0.001` (the value that catches truly frozen frames: <0.1% pixel change). This also supersedes the PR #51 changelog claim that `freezedetect=n=-30.0:d=0.1` was "valid FFmpeg syntax" — the syntax parsed but the value was illegal, so the filter never initialized. Regression test added in `tests/test_media_detectors.py` that builds the production filter string and runs it against real ffmpeg (rc==0, no "out of range" error). Corrects `clipper_agency/agents/composer.py`; `media_detectors.py` filter formatting unchanged. ADR 0026 (enforce contracts, do not rebuild).
+
 ### Documentation
 - Clarified the Codex review gate in `AGENTS.md`: a 👍 (thumbs-up) reaction from `chatgpt-codex-connector[bot]` with no written comments is the Codex **pass** signal. It is a reaction (not a formal `APPROVED` review), so GitHub's `reviewDecision`/`reviews[]` stay empty by design and this does NOT block the merge. Documented in both the step-by-step workflow (Step 6) and the condensed Rules.
 
