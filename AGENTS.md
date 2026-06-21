@@ -111,9 +111,10 @@ Before `git push`: `.venv/bin/python3 -m pytest -m "not external and not integra
    - If the Quality Gate passes but **new issues** exist, fix them on the branch, push again, and wait for re-check. Repeat until zero new issues.
    - **Do NOT merge until SonarCloud passes with zero new issues.**
 6. **Wait for Codex review** — check PR for Codex (ChatGPT) review comments.
-   - If Codex review has NOT started yet (no comments posted), **wait** — do not merge until Codex has reviewed.
-   - If Codex posted comments, evaluate each one (P0/P1 must fix, P2 should fix, P3 optional). Address or push back with reasoning.
-   - **Do NOT merge until all Codex comments are resolved** (fixed or acknowledged with a reply).
+   - **Codex 👍 = pass.** A thumbs-up (👍) reaction from `chatgpt-codex-connector[bot]` on the PR — with NO written review comments — IS the Codex pass signal. It is a reaction (not a formal `APPROVED` review), so GitHub's `reviewDecision` stays empty and `reviews[]` is empty; that is expected by design and does NOT block the merge. You are cleared to continue/merge.
+   - If Codex review has NOT started yet (no 👍 AND no comments posted), **wait** — do not merge until Codex has reviewed.
+   - If Codex posted written comments, evaluate each one (P0/P1 must fix, P2 should fix, P3 optional). Address or push back with reasoning.
+   - **Do NOT merge until all Codex comments are resolved** (fixed or acknowledged with a reply) — or until Codex posts a 👍 with no comments.
 7. **Merge** — **without squashing** (retain commit history):
    ```bash
    gh pr merge phase/N-short-description --merge
@@ -151,7 +152,7 @@ phase/3-services        phase/7-dashboard         phase/11-logging-model-config
 
 - ❌ NEVER push directly to `master`.
 - ❌ NEVER merge a PR before SonarCloud passes with zero new issues.
-- ❌ NEVER merge a PR before Codex review is resolved (wait if not started yet).
+- ❌ NEVER merge a PR before Codex review is resolved (wait if not started yet). A Codex 👍 (thumbs-up reaction) with no written comments IS the resolved/pass state — `reviewDecision`/`reviews[]` stay empty by design; cleared to merge.
 - ❌ NEVER merge a PR without updating `CHANGELOG.md`.
 - ❌ NEVER squash or rebase-merge — always use `--merge` (true merge commit).
 - ✅ Always delete the feature branch after successful merge.
