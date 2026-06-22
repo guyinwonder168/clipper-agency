@@ -10,6 +10,8 @@ Rules (priority order):
 4. Default fallback — use classifier's story_mode_decision
 """
 
+import logging
+
 from clipper_agency.config.schema import FormatDecision, StoryModeDecision
 from clipper_agency.core.story_decision_reconciliation import (
     EXPLICIT_CONFIDENCE_THRESHOLD,
@@ -399,3 +401,43 @@ class TestMalformedLegacyReformatOrDegrade:
         result = reconcile_story_decisions(classifier, "three_story_roundup")  # type: ignore[arg-type]
         assert isinstance(result, StoryModeDecision)
         assert result.story_mode == "roundup"
+
+
+# ---------------------------------------------------------------------------
+# 10. Secure logging — user-controlled payload must never reach logs (S5145)
+# ---------------------------------------------------------------------------
+
+
+class TestNoUserControlledDataInLogs:
+    """pythonsecurity:S5145 guard.
+
+    When ``_normalise_legacy`` degrades (non-object input, or a dict that fails
+    ``FormatDecision`` validation), the WARNING it emits must NOT interpolate
+    the raw user-controlled value — only safe, schema-derived metadata (the
+    type name; pydantic's error ``type``/``loc``). The LLM payload may carry
+    sensitive content and must never be written to logs.
+    """
+
+    _LOGGER = "clipper_agency.core.story_decision_reconciliation"
+
+    def test_non_dict_branch_does_not_log_raw_value(self, caplog):
+        canary = "SUPER_SECRET_CANARY_9f2a"
+        classifier = _classifier("single_story", confidence=0.6)
+        with caplog.at_level(logging.WARNING, logger=self._LOGGER):
+            reconcile_story_decisions(classifier, canary)  # type: ignore[arg-type]  # str -> non-dict branch
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        assert canary not in logged, f"raw payload leaked into log: {logged!r}"
+
+    def test_validation_error_branch_does_not_log_raw_value(self, caplog):
+        canary = "CANARY_IN_RATIONALE_7c1e"
+        classifier = _classifier("single_story", confidence=0.6)
+        legacy = {
+            "format": "not_a_real_format",  # invalid Literal -> ValidationError
+            "story_count": 3,
+            "rationale": canary,
+            "video_asset_ratio": 0.8,
+        }
+        with caplog.at_level(logging.WARNING, logger=self._LOGGER):
+            reconcile_story_decisions(classifier, legacy)
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        assert canary not in logged, f"raw payload leaked into log: {logged!r}"

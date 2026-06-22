@@ -88,18 +88,21 @@ def _normalise_legacy(
     if isinstance(raw, FormatDecision):
         return raw
     if not isinstance(raw, dict):
+        # S5145: never log the user-controlled payload — only its type name.
         logger.warning(
-            "Malformed legacy format_decision (not a dict); using classifier-only path. raw=%r",
-            raw,
+            "Malformed legacy format_decision (not a dict); using classifier-only path. type=%s",
+            type(raw).__name__,
         )
         return None
     try:
         return FormatDecision(**_sanitise_legacy_keys(raw))
     except ValidationError as exc:
+        # S5145: log only schema-derived metadata (error type + field loc),
+        # never the user-controlled raw payload nor pydantic's `input` value.
+        safe_errors = [{"type": err.get("type"), "loc": err.get("loc")} for err in exc.errors()]
         logger.warning(
-            "Malformed legacy format_decision; using classifier-only path. raw=%s errors=%s",
-            raw,
-            exc.errors(),
+            "Malformed legacy format_decision; using classifier-only path. errors=%s",
+            safe_errors,
         )
         return None
 
