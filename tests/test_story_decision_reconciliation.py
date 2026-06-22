@@ -13,16 +13,18 @@ Rules (priority order):
 from clipper_agency.config.schema import FormatDecision, StoryModeDecision
 from clipper_agency.core.story_decision_reconciliation import (
     EXPLICIT_CONFIDENCE_THRESHOLD,
+    _sanitise_legacy_keys,
     reconcile_story_decisions,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _classifier(mode: str = "single_story", confidence: float = 0.6,
-                item_count: int = 1, **kwargs) -> dict:
+
+def _classifier(
+    mode: str = "single_story", confidence: float = 0.6, item_count: int = 1, **kwargs
+) -> dict:
     """Build a minimal classifier story_mode_decision dict."""
     return {
         "story_mode": mode,
@@ -36,8 +38,7 @@ def _classifier(mode: str = "single_story", confidence: float = 0.6,
     }
 
 
-def _legacy(fmt: str = "three_story_roundup", story_count: int = 3,
-            **kwargs) -> dict:
+def _legacy(fmt: str = "three_story_roundup", story_count: int = 3, **kwargs) -> dict:
     """Build a minimal legacy FormatDecision dict."""
     return {
         "format": fmt,
@@ -50,6 +51,7 @@ def _legacy(fmt: str = "three_story_roundup", story_count: int = 3,
 # ---------------------------------------------------------------------------
 # 1. Explicit user mode (high confidence) wins over everything
 # ---------------------------------------------------------------------------
+
 
 class TestExplicitUserModeWins:
     """Rule 1: confidence >= 0.9 is an explicit/override and always wins."""
@@ -85,6 +87,7 @@ class TestExplicitUserModeWins:
 # ---------------------------------------------------------------------------
 # 2. Multiple entities → roundup mode
 # ---------------------------------------------------------------------------
+
 
 class TestMultipleEntitiesForceRoundup:
     """Rule 2: item_count > 1 → roundup."""
@@ -125,6 +128,7 @@ class TestMultipleEntitiesForceRoundup:
 # 3. Legacy three_story_roundup overrides single_story classifier
 # ---------------------------------------------------------------------------
 
+
 class TestLegacyRoundupContradiction:
     """Rule 3: three_story_roundup format cannot coexist with single_story."""
 
@@ -159,6 +163,7 @@ class TestLegacyRoundupContradiction:
 # 4. Default fallback — use classifier's decision
 # ---------------------------------------------------------------------------
 
+
 class TestDefaultFallback:
     """Rule 4: no clear signal → trust the classifier."""
 
@@ -176,7 +181,8 @@ class TestDefaultFallback:
 
     def test_default_preserves_classifier_fields(self):
         classifier = _classifier(
-            "single_story", confidence=0.6,
+            "single_story",
+            confidence=0.6,
             target_duration_sec=45,
             requires_intro_card=True,
             thumbnail_strategy="custom",
@@ -192,6 +198,7 @@ class TestDefaultFallback:
 # ---------------------------------------------------------------------------
 # 5. Contradiction detection and diagnostic reason
 # ---------------------------------------------------------------------------
+
 
 class TestContradictionDetection:
     """The reason field must contain diagnostic info about contradictions."""
@@ -226,6 +233,7 @@ class TestContradictionDetection:
 # 6. None / missing legacy_format_decision handled gracefully
 # ---------------------------------------------------------------------------
 
+
 class TestNoneLegacyHandling:
     """legacy_format_decision can be None or missing."""
 
@@ -250,6 +258,7 @@ class TestNoneLegacyHandling:
 # 7. Return type is always StoryModeDecision
 # ---------------------------------------------------------------------------
 
+
 class TestReturnType:
     """reconcile_story_decisions always returns a StoryModeDecision."""
 
@@ -269,12 +278,17 @@ class TestReturnType:
 
     def test_accepts_pydantic_model_inputs(self):
         classifier_model = StoryModeDecision(
-            story_mode="single_story", confidence=0.6, reason="test",
-            item_count=1, target_duration_sec=30,
+            story_mode="single_story",
+            confidence=0.6,
+            reason="test",
+            item_count=1,
+            target_duration_sec=30,
         )
         legacy_model = FormatDecision(
-            format="three_story_roundup", story_count=3,
-            rationale="test", video_asset_ratio=0.8,
+            format="three_story_roundup",
+            story_count=3,
+            rationale="test",
+            video_asset_ratio=0.8,
         )
         result = reconcile_story_decisions(classifier_model, legacy_model)
         assert isinstance(result, StoryModeDecision)
@@ -291,6 +305,7 @@ class TestReturnType:
 # ---------------------------------------------------------------------------
 # 8. item_count from story_mode_decision respected
 # ---------------------------------------------------------------------------
+
 
 class TestItemCountRespected:
     """item_count from the classifier decision carries through."""
@@ -313,3 +328,74 @@ class TestItemCountRespected:
         result = reconcile_story_decisions(classifier, legacy)
         assert result.story_mode == "single_story"
         assert result.item_count == 1
+
+
+# ---------------------------------------------------------------------------
+# 9. Malformed legacy format_decision — reformat known defects, else degrade
+# ---------------------------------------------------------------------------
+
+
+class TestMalformedLegacyReformatOrDegrade:
+    """LLM format_decision is untrusted: reformat known defects, else degrade.
+
+    The job_14 crash came from mimo-v2.5 emitting the key as ``"rationale:"``
+    (a colon glued into the key name). That is a *formatting* defect, so the
+    LLM's intent (three_story_roundup) is recovered after reformatting and
+    Rule 3 still fires. Only genuinely unrecoverable garbage degrades to the
+    classifier-only path.
+    """
+
+    def test_sanitise_strips_trailing_colon_from_key(self):
+        assert _sanitise_legacy_keys({"rationale:": "x"}) == {"rationale": "x"}
+
+    def test_sanitise_leaves_clean_keys_untouched(self):
+        original = {"format": "a", "story_count": 1}
+        assert _sanitise_legacy_keys(original) == original
+
+    def test_sanitise_strips_surrounding_whitespace_and_colon(self):
+        assert _sanitise_legacy_keys({" rationale : ": "x"}) == {"rationale": "x"}
+
+    def test_sanitise_collision_between_clean_and_malformed_twin_last_wins(self):
+        """If the LLM emits both 'rationale' and 'rationale:', last wins (documented)."""
+        result = _sanitise_legacy_keys({"rationale": "clean", "rationale:": "dirty"})
+        assert result == {"rationale": "dirty"}
+
+    def test_colon_typo_is_repaired_and_preserves_roundup_intent(self):
+        """job_14 regression: colon typo repaired -> Rule 3 still fires."""
+        classifier = _classifier("single_story", confidence=0.6)
+        legacy = {
+            "format": "three_story_roundup",
+            "story_count": 3,
+            "rationale:": "typo key with trailing colon",
+            "video_asset_ratio": 0.8,
+        }
+        result = reconcile_story_decisions(classifier, legacy)
+        assert isinstance(result, StoryModeDecision)
+        assert result.story_mode == "roundup"
+        assert "Rule 3" in result.reason
+
+    def test_missing_required_field_degrades_to_classifier(self):
+        classifier = _classifier("single_story", confidence=0.6)
+        legacy = {"format": "three_story_roundup"}
+        result = reconcile_story_decisions(classifier, legacy)
+        assert isinstance(result, StoryModeDecision)
+        assert result.story_mode == "single_story"
+
+    def test_invalid_format_enum_value_degrades_to_classifier(self):
+        classifier = _classifier("single_story", confidence=0.6)
+        legacy = {
+            "format": "not_a_real_format",
+            "story_count": 3,
+            "rationale": "x",
+            "video_asset_ratio": 0.8,
+        }
+        result = reconcile_story_decisions(classifier, legacy)
+        assert isinstance(result, StoryModeDecision)
+        assert result.story_mode == "single_story"
+
+    def test_non_dict_legacy_degrades_to_classifier(self):
+        """LLM returning a non-object (string) for format_decision."""
+        classifier = _classifier("roundup", confidence=0.7, item_count=3)
+        result = reconcile_story_decisions(classifier, "three_story_roundup")  # type: ignore[arg-type]
+        assert isinstance(result, StoryModeDecision)
+        assert result.story_mode == "roundup"
