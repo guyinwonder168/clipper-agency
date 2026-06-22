@@ -135,8 +135,13 @@ class Orchestrator:
         initialize_schema(conn)
 
     def _gate_relaxed(self, gate_name: str) -> bool:
-        """True iff ``gate_name`` is in the current DEV relax-set."""
-        return gate_name in getattr(self, "_relax_gates", frozenset())
+        """True iff ``gate_name`` is in the current DEV relax-set.
+
+        Case-insensitive: ``resolve_relax_gates`` uppercases tokens, so the
+        lookup key is uppercased to match — call-sites use canonical names
+        like ``"Safety"`` while operators may type ``safety`` / ``SAFETY``.
+        """
+        return gate_name.upper() in getattr(self, "_relax_gates", frozenset())
 
     @staticmethod
     def _build_trace_writer() -> LLMTraceWriter | None:

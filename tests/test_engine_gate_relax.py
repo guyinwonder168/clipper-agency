@@ -57,6 +57,19 @@ class TestGateRelaxed:
             del orch._relax_gates
         assert orch._gate_relaxed("G4") is False
 
+    def test_resolver_output_matches_case_insensitive_lookup(self, tmp_path):
+        """resolve_relax_gates UPPERCASES tokens; _gate_relaxed must normalize
+        its lookup key the same way, else 'Safety' (resolved to 'SAFETY') never
+        matches the call-site _gate_relaxed('Safety'). Regression for Codex P2."""
+        from clipper_agency.config.loader import resolve_relax_gates
+
+        orch = _make_orchestrator(tmp_path)
+        orch._relax_gates = resolve_relax_gates("Safety, g4")  # -> {"SAFETY", "G4"}
+        assert orch._gate_relaxed("Safety") is True
+        assert orch._gate_relaxed("safety") is True
+        assert orch._gate_relaxed("G4") is True
+        assert orch._gate_relaxed("G5") is False
+
 
 # ---------------------------------------------------------------------------
 # _enforce_gate (G5 / G8 path) — covers the regression contract too
@@ -285,7 +298,7 @@ class TestRetrySafetyStageRelax:
         from clipper_agency.orchestrator import engine as engine_mod
 
         orch = _make_orchestrator(tmp_path)
-        orch._relax_gates = frozenset({"Safety"})
+        orch._relax_gates = frozenset({"SAFETY"})
         mocker.patch.object(engine_mod, "mark_agent_running", return_value=None)
         mocker.patch.object(
             orch, "_run_safety", return_value={"status": "hard_fail", "reason": "risky"}
@@ -375,7 +388,7 @@ class TestStageSafetyInlineRelax:
 
     def test_safety_relaxed_continues(self, tmp_path, mocker):
         orch = _make_orchestrator(tmp_path)
-        orch._relax_gates = frozenset({"Safety"})
+        orch._relax_gates = frozenset({"SAFETY"})
         passing = GateResult(passed=True, severity="pass", message="ok")
         self._stubs(orch, mocker, passing, {"status": "hard_fail", "reason": "risky"})
 
