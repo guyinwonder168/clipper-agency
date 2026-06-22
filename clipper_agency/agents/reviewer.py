@@ -247,7 +247,12 @@ class ReviewerAgent(BaseAgent):
         visual_plan_actions: list[dict] | None,
     ) -> dict[str, Any] | None:
         """Return a fail dict if any hard gate triggers, else None."""
-        # Hard gate 1: AV drift where video is shorter than audio
+        # Hard gate 1: AV drift (symmetric — both drift directions are real).
+        # _check_av_sync fails when |drift| > tolerance; here we hard-gate that
+        # fail regardless of which track is longer. A trailing clip / over-long
+        # scene (video LONGER than audio) is just as much an AV desync as the
+        # shorter-than case, so it must not fall through to the non-deterministic
+        # LLM (RC-2).
         if checks["av_sync"]["status"] == _CHECK_FAIL:
             if visual_duration_sec < audio_duration_sec:
                 return {
@@ -256,6 +261,16 @@ class ReviewerAgent(BaseAgent):
                     "feedback": (
                         f"Hard gate: video ({visual_duration_sec}s) "
                         f"shorter than audio ({audio_duration_sec}s)"
+                    ),
+                    "issues": ["av_duration_mismatch"],
+                }
+            if (visual_duration_sec - audio_duration_sec) > _AV_DRIFT_TOLERANCE_SEC:
+                return {
+                    "status": "fail",
+                    "score": 0,
+                    "feedback": (
+                        f"Hard gate: video ({visual_duration_sec}s) "
+                        f"longer than audio ({audio_duration_sec}s)"
                     ),
                     "issues": ["av_duration_mismatch"],
                 }

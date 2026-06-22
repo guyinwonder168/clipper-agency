@@ -250,20 +250,26 @@ class TestReviewerHardGateRegression:
         assert "av_duration_mismatch" in result["issues"]
 
     def test_hard_gate_passes_when_video_covers_audio(self):
-        """Video 25s >= audio 23s → hard gate should pass (return None)."""
+        """Video slightly longer than audio but within tolerance -> hard gate passes.
+
+        Note (RC-2): the AV-drift gate is now SYMMETRIC, so video LONGER than
+        audio by more than the tolerance is also a hard fail. This test now uses
+        within-tolerance drift (0.3s < 0.5s) to preserve its original intent
+        ("video covering the audio is fine") under the corrected contract.
+        """
         reviewer = ReviewerAgent()
 
-        av_sync = _check_av_sync(audio_duration=23.0, visual_duration=25.0)
+        av_sync = _check_av_sync(audio_duration=23.0, visual_duration=23.3)
         checks = {"av_sync": av_sync}
 
         result = reviewer._check_hard_gates(
             checks=checks,
             audio_duration_sec=23.0,
-            visual_duration_sec=25.0,
+            visual_duration_sec=23.3,
             visual_plan_actions=[{"type": "text_card", "headline": "Story 1"}],
         )
 
-        assert result is None, f"Hard gate should pass when video >= audio, got {result}"
+        assert result is None, f"Hard gate should pass within tolerance, got {result}"
 
     def test_hard_gate_fails_broken_tiktok_clip(self):
         """tiktok_clip action without source_url → hard gate must fail."""

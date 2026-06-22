@@ -232,14 +232,16 @@ class TestReviewerTimestampSemanticGate:
         """Scene with no matched beat should fail the hard gate."""
         mock_chat = mocker.patch("clipper_agency.llm.client.OpenRouterClient.chat")
         agent = ReviewerAgent()
-        # Scene at 50-55s is outside audio duration (20s), so no beats match
+        # Scene at 50-55s is outside audio duration (20s), so no beats match.
+        # visual_duration kept within AV-drift tolerance (RC-2 symmetric gate)
+        # so the AV gate does not pre-empt the timestamp-semantic gate under test.
         result = agent.execute(
             job_id=1,
             topic="test topic",
             caption="Nice #tag",
             context={
                 "audio_duration_sec": 20.0,
-                "visual_duration_sec": 25.0,
+                "visual_duration_sec": 20.3,
                 "story_beats": _make_story_beats(3),
                 "word_timestamps": _make_word_timestamps(60),
                 "rendered_scene_manifest": {
