@@ -23,6 +23,7 @@ from clipper_agency.config.loader import (
     get_tone_name,
     load_niche,
     load_settings,
+    resolve_relax_gates,
 )
 from clipper_agency.config.preflight import preflight_agent_models
 from clipper_agency.config.schema import RepairPatch, RepairPlan
@@ -126,8 +127,16 @@ class Orchestrator:
     def __init__(self, db_path: str = "data/clipper.db") -> None:
         self.db_path = db_path
         self._trace_writer = self._build_trace_writer()
+        # DEV gate-relax: frozenset of gate IDs whose hard_fail is downgraded
+        # to warn+continue. Default empty == today's byte-for-byte behavior.
+        # Re-resolved at the start of run_pipeline / run_pipeline_from.
+        self._relax_gates: frozenset[str] = frozenset()
         conn = get_connection(db_path)
         initialize_schema(conn)
+
+    def _gate_relaxed(self, gate_name: str) -> bool:
+        """True iff ``gate_name`` is in the current DEV relax-set."""
+        return gate_name in getattr(self, "_relax_gates", frozenset())
 
     @staticmethod
     def _build_trace_writer() -> LLMTraceWriter | None:
@@ -774,6 +783,13 @@ class Orchestrator:
     ) -> dict[str, Any] | None:
         """Return a failure response dict if gate hard-failed, or None."""
         if not result.passed and result.severity == "hard_fail":
+            if self._gate_relaxed(gate_name):
+                logger.warning(
+                    "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s",
+                    gate_name,
+                    result.message,
+                )
+                return None
             logger.error("%s FAILED (hard): %s", gate_name, result.message)
             update_job_status(conn, job_id, "FAILED", result.message)
             return {
@@ -820,14 +836,21 @@ class Orchestrator:
         g1_result = g1.evaluate(topic=topic, niche_config={"name": niche})
         self._record_gate(assets_cache, 0, "G1_input_preflight", g1_result)
         if not g1_result.passed:
-            logger.error("G1 Preflight FAILED: %s", g1_result.message)
-            update_job_status(conn, 0, "FAILED", g1_result.message)
-            return {
-                "status": "failed",
-                "failed_at": "preflight",
-                "reason": g1_result.message,
-                "job_id": 0,
-            }
+            if self._gate_relaxed("G1"):
+                logger.warning(
+                    "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s",
+                    "G1",
+                    g1_result.message,
+                )
+            else:
+                logger.error("G1 Preflight FAILED: %s", g1_result.message)
+                update_job_status(conn, 0, "FAILED", g1_result.message)
+                return {
+                    "status": "failed",
+                    "failed_at": "preflight",
+                    "reason": g1_result.message,
+                    "job_id": 0,
+                }
 
         # Create job in DB with config snapshot
         job_id = create_job(conn, topic=topic, niche=niche, config_snapshot=snapshot)
@@ -867,15 +890,22 @@ class Orchestrator:
             assets_cache=assets_cache,
         )
         if safety_result.get("status") == "hard_fail":
-            logger.error("Safety FAILED: %s", safety_result.get("reason"))
-            mark_agent_failed(conn, job_id, "safety", safety_result["reason"])
-            update_job_status(conn, job_id, "FAILED", safety_result["reason"])
-            return {
-                "status": "failed",
-                "failed_at": "safety",
-                "reason": safety_result["reason"],
-                "job_id": job_id,
-            }
+            if self._gate_relaxed("Safety"):
+                logger.warning(
+                    "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s",
+                    "Safety",
+                    safety_result.get("reason"),
+                )
+            else:
+                logger.error("Safety FAILED: %s", safety_result.get("reason"))
+                mark_agent_failed(conn, job_id, "safety", safety_result["reason"])
+                update_job_status(conn, job_id, "FAILED", safety_result["reason"])
+                return {
+                    "status": "failed",
+                    "failed_at": "safety",
+                    "reason": safety_result["reason"],
+                    "job_id": job_id,
+                }
         self._complete_agent(conn, assets_cache, job_id, "safety")
         return job_id, cost_result
 
@@ -935,13 +965,20 @@ class Orchestrator:
         )
         self._record_gate(assets_cache, job_id, "G4_post_research_risk", g4_result)
         if not g4_result.passed and g4_result.severity == "hard_fail":
-            update_job_status(conn, job_id, "FAILED", g4_result.message)
-            return {
-                "status": "failed",
-                "failed_at": "post_research_risk",
-                "reason": g4_result.message,
-                "job_id": job_id,
-            }
+            if self._gate_relaxed("G4"):
+                logger.warning(
+                    "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s",
+                    "G4",
+                    g4_result.message,
+                )
+            else:
+                update_job_status(conn, job_id, "FAILED", g4_result.message)
+                return {
+                    "status": "failed",
+                    "failed_at": "post_research_risk",
+                    "reason": g4_result.message,
+                    "job_id": job_id,
+                }
 
         g5 = GateSourceQuality()
         g5_result = g5.evaluate(
@@ -1187,6 +1224,7 @@ class Orchestrator:
         topic: str,
         niche: str = "indonesian_artists",
         output_dir: str = "outputs",
+        relax_gates: str = "",
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Execute the full topic-to-output pipeline.
@@ -1196,6 +1234,10 @@ class Orchestrator:
                        Composer→G10→Reviewer→Package
         """
         conn = get_connection(self.db_path)
+        # Resolve DEV gate-relax set (CLI ∪ env). Empty == today's behavior.
+        self._relax_gates = resolve_relax_gates(
+            getattr(load_settings(), "relax_gates", ""), relax_gates or ""
+        )
         # Preflight: validate resolved agent models against the OpenRouter catalog
         # before billing research credits (PR 7). Placed at this orchestrator
         # chokepoint so the CLI, dashboard create, retry, and resume paths ALL
@@ -1854,15 +1896,22 @@ class Orchestrator:
             assets_cache=assets_cache,
         )
         if safety_result.get("status") == "hard_fail":
-            reason = safety_result.get("reason", "Safety failed")
-            mark_agent_failed(conn, job_id, "safety", reason)
-            update_job_status(conn, job_id, "FAILED", reason)
-            return {
-                "status": "failed",
-                "failed_at": "safety",
-                "reason": reason,
-                "job_id": job_id,
-            }
+            if self._gate_relaxed("Safety"):
+                logger.warning(
+                    "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s",
+                    "Safety",
+                    safety_result.get("reason"),
+                )
+            else:
+                reason = safety_result.get("reason", "Safety failed")
+                mark_agent_failed(conn, job_id, "safety", reason)
+                update_job_status(conn, job_id, "FAILED", reason)
+                return {
+                    "status": "failed",
+                    "failed_at": "safety",
+                    "reason": reason,
+                    "job_id": job_id,
+                }
         self._complete_agent(conn, assets_cache, job_id, "safety")
         return None
 
@@ -2029,6 +2078,7 @@ class Orchestrator:
         job_id: int,
         from_agent: str,
         use_cache: bool = False,
+        relax_gates: str = "",
     ) -> dict[str, Any]:
         """Re-run pipeline from a specific agent, reusing completed outputs.
 
@@ -2036,6 +2086,11 @@ class Orchestrator:
         and skips agents that completed before ``from_agent``.
         """
         conn = get_connection(self.db_path)
+        # Resolve DEV gate-relax set (CLI ∪ env). Empty == today's behavior.
+        # Retry/resume re-reads env so a CLIPPER_RELAX_GATES override applies.
+        self._relax_gates = resolve_relax_gates(
+            getattr(load_settings(), "relax_gates", ""), relax_gates or ""
+        )
         # Preflight (PR 7 Codex P2#1): validate agent models on retry/resume too,
         # so a changed *_MODEL override can't reach OpenRouter mid-pipeline.
         try:
