@@ -112,6 +112,19 @@ def cli(log_level: str | None) -> None:
         _log_startup_info()
 
 
+def _emit_dev_relax_banner(relax_gates_cli: str | None) -> None:
+    """Resolve the effective DEV gate-relax set (CLI U env) and emit a loud
+    warning banner when any gate is relaxed. Extracted from ``run`` to keep
+    its cognitive complexity under the SonarCloud limit (python:S3776)."""
+    settings = load_settings()
+    effective = resolve_relax_gates(relax_gates_cli or "", settings.relax_gates)
+    if effective:
+        logger.warning(
+            "DEV MODE: gates RELAXED (hard_fail->warn): %s — NOT for production",
+            sorted(effective),
+        )
+
+
 @cli.command()
 @click.option("--topic", "-t", required=True, help="Topic for video generation")
 @click.option("--niche", "-n", default="indonesian_artists", help="Niche profile")
@@ -149,15 +162,8 @@ def run(
         )
         raise SystemExit(1)
 
-    # DEV gate-relax banner: resolve the effective set (CLI ∪ env) once, here,
-    # where --relax-gates is known. Loud warning so relaxed runs can't be missed.
-    settings = load_settings()
-    effective_relax = resolve_relax_gates(relax_gates or "", settings.relax_gates)
-    if effective_relax:
-        logger.warning(
-            "DEV MODE: gates RELAXED (hard_fail->warn): %s — NOT for production",
-            sorted(effective_relax),
-        )
+    # DEV gate-relax banner (CLI U env) — loud so relaxed runs can't be missed.
+    _emit_dev_relax_banner(relax_gates)
 
     if dry_run:
         # Dry-run is the explicit input-validation tool, so it force-refreshes +

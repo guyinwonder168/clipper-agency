@@ -103,6 +103,7 @@ _SCRIPT_BUDGET_FAILED = "Scriptwriter duration budget exceeded"
 _RESEARCH_FAILED = "Research generation failed"
 _REPAIR_EXHAUSTED = "Repair cycles exhausted"
 _MANUAL_REVIEW_REQUIRED = "Manual review required"
+_GATE_RELAX_WARN_MSG = "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s"
 _SAME_PATCH_REPEATED = "Identical repair patch repeated"
 
 
@@ -790,7 +791,7 @@ class Orchestrator:
         if not result.passed and result.severity == "hard_fail":
             if self._gate_relaxed(gate_name):
                 logger.warning(
-                    "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s",
+                    _GATE_RELAX_WARN_MSG,
                     gate_name,
                     result.message,
                 )
@@ -843,7 +844,7 @@ class Orchestrator:
         if not g1_result.passed:
             if self._gate_relaxed("G1"):
                 logger.warning(
-                    "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s",
+                    _GATE_RELAX_WARN_MSG,
                     "G1",
                     g1_result.message,
                 )
@@ -897,7 +898,7 @@ class Orchestrator:
         if safety_result.get("status") == "hard_fail":
             if self._gate_relaxed("Safety"):
                 logger.warning(
-                    "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s",
+                    _GATE_RELAX_WARN_MSG,
                     "Safety",
                     safety_result.get("reason"),
                 )
@@ -972,7 +973,7 @@ class Orchestrator:
         if not g4_result.passed and g4_result.severity == "hard_fail":
             if self._gate_relaxed("G4"):
                 logger.warning(
-                    "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s",
+                    _GATE_RELAX_WARN_MSG,
                     "G4",
                     g4_result.message,
                 )
@@ -1903,7 +1904,7 @@ class Orchestrator:
         if safety_result.get("status") == "hard_fail":
             if self._gate_relaxed("Safety"):
                 logger.warning(
-                    "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s",
+                    _GATE_RELAX_WARN_MSG,
                     "Safety",
                     safety_result.get("reason"),
                 )
