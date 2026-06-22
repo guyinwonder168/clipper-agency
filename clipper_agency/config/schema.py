@@ -238,6 +238,9 @@ class AppSettings(BaseSettings):
     # Debug / dev
     debug: bool = False
     dry_run: bool = False
+    # DEV gate-relax: comma-separated gate IDs to downgrade hard_fail → warn.
+    # Empty in production. Resolved via resolve_relax_gates() into a frozenset.
+    relax_gates: str = Field(default="", validation_alias="CLIPPER_RELAX_GATES")
 
     # Content planning
     content_planning: ContentPlanningConfig = Field(default_factory=ContentPlanningConfig)

@@ -91,7 +91,9 @@ class TestRunCommand:
         """run command should show the niche."""
         mock_run.return_value = {"status": "completed", "job_id": 1, "output": {}}
         runner = CliRunner()
-        result = runner.invoke(cli, ["run", "--topic", "Test", "--niche", "custom_niche", "--db", ":memory:"])
+        result = runner.invoke(
+            cli, ["run", "--topic", "Test", "--niche", "custom_niche", "--db", ":memory:"]
+        )
         assert result.exit_code == 0
         assert "custom_niche" in result.output
 
@@ -114,11 +116,24 @@ class TestRunCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["run", "--topic", "Test topic", "--niche", "test", "--db", ":memory:", "--output-dir", "outputs"],
+            [
+                "run",
+                "--topic",
+                "Test topic",
+                "--niche",
+                "test",
+                "--db",
+                ":memory:",
+                "--output-dir",
+                "outputs",
+            ],
         )
         assert result.exit_code == 0
         mock_run.assert_called_once_with(
-            topic="Test topic", niche="test", output_dir="outputs",
+            topic="Test topic",
+            niche="test",
+            output_dir="outputs",
+            relax_gates="",
         )
 
     @patch("clipper_agency.orchestrator.engine.Orchestrator.run_pipeline")
@@ -133,6 +148,118 @@ class TestRunCommand:
         result = runner.invoke(cli, ["run", "--topic", "Bad topic", "--db", ":memory:"])
         assert result.exit_code == 0
         assert "failed" in result.output.lower() or "Pipeline" in result.output
+
+
+class TestRunRelaxGates:
+    """DEV gate-relax CLI option (--relax-gates) + banner."""
+
+    @patch("clipper_agency.__main__.load_niche")
+    @patch("clipper_agency.orchestrator.engine.Orchestrator.run_pipeline")
+    def test_relax_gates_passed_to_orchestrator(self, mock_run, _mock_niche):
+        """--relax-gates G4,G5 forwards the raw string to run_pipeline."""
+        mock_run.return_value = {"status": "completed", "job_id": 1, "output": {}}
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "--topic",
+                "Test",
+                "--db",
+                ":memory:",
+                "--relax-gates",
+                "G4,G5",
+            ],
+        )
+        assert result.exit_code == 0
+        _topic, kwargs = mock_run.call_args
+        assert kwargs["relax_gates"] == "G4,G5"
+
+    @patch("clipper_agency.__main__.load_niche")
+    @patch("clipper_agency.orchestrator.engine.Orchestrator.run_pipeline")
+    def test_relax_gates_merged_with_env(self, mock_run, _mock_niche, monkeypatch, caplog):
+        """CLI flags merge with CLIPPER_RELAX_GATES env into one set (banner sorted)."""
+        monkeypatch.setenv("CLIPPER_RELAX_GATES", "g10")
+        mock_run.return_value = {"status": "completed", "job_id": 1, "output": {}}
+        runner = CliRunner()
+        with caplog.at_level("WARNING", logger="clipper_agency.__main__"):
+            result = runner.invoke(
+                cli,
+                [
+                    "run",
+                    "--topic",
+                    "Test",
+                    "--db",
+                    ":memory:",
+                    "--relax-gates",
+                    "G4,G5",
+                ],
+            )
+        assert result.exit_code == 0
+        # Banner surfaces the merged+sorted+normalized set (G10 from env ∪ G4,G5 CLI).
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        joined = " ".join(warnings)
+        assert "G4" in joined
+        assert "G5" in joined
+        assert "G10" in joined
+
+    @patch("clipper_agency.__main__.load_niche")
+    @patch("clipper_agency.orchestrator.engine.Orchestrator.run_pipeline")
+    def test_relax_gates_banner_warns_when_active(self, mock_run, _mock_niche, caplog):
+        """A loud DEV-MODE warning is emitted when relax set is non-empty."""
+        mock_run.return_value = {"status": "completed", "job_id": 1, "output": {}}
+        runner = CliRunner()
+        with caplog.at_level("WARNING", logger="clipper_agency.__main__"):
+            result = runner.invoke(
+                cli,
+                ["run", "--topic", "Test", "--db", ":memory:", "--relax-gates", "G4"],
+            )
+        assert result.exit_code == 0
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        joined = " ".join(warnings)
+        assert "RELAXED" in joined
+        assert "DEV" in joined
+
+    @patch("clipper_agency.__main__.load_niche")
+    @patch("clipper_agency.orchestrator.engine.Orchestrator.run_pipeline")
+    def test_relax_gates_no_banner_when_empty(self, mock_run, _mock_niche, monkeypatch, caplog):
+        """No DEV-MODE warning when relax set is empty."""
+        monkeypatch.delenv("CLIPPER_RELAX_GATES", raising=False)
+        mock_run.return_value = {"status": "completed", "job_id": 1, "output": {}}
+        runner = CliRunner()
+        with caplog.at_level("WARNING", logger="clipper_agency.__main__"):
+            result = runner.invoke(
+                cli,
+                ["run", "--topic", "Test", "--db", ":memory:"],
+            )
+        assert result.exit_code == 0
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        joined = " ".join(warnings)
+        assert "RELAXED" not in joined
+
+    def test_relax_gates_env_only_banner_in_startup_info(self, monkeypatch):
+        """_log_startup_info warns when CLIPPER_RELAX_GATES env is set (non-CLI entry)."""
+        monkeypatch.setenv("CLIPPER_RELAX_GATES", "G9")
+        with patch("clipper_agency.__main__.logger") as mock_logger:
+            from clipper_agency.__main__ import _log_startup_info
+
+            _log_startup_info()
+        warning_messages = [
+            str(call.args) + str(call.kwargs) for call in mock_logger.warning.call_args_list
+        ]
+        assert any("RELAXED" in msg and "G9" in msg for msg in warning_messages)
+
+    def test_relax_gates_no_startup_warning_when_env_empty(self, monkeypatch):
+        """_log_startup_info emits no relax warning when env is unset."""
+        monkeypatch.delenv("CLIPPER_RELAX_GATES", raising=False)
+        with patch("clipper_agency.__main__.logger") as mock_logger:
+            from clipper_agency.__main__ import _log_startup_info
+
+            _log_startup_info()
+        warning_messages = [
+            str(call.args) + str(call.kwargs) for call in mock_logger.warning.call_args_list
+        ]
+        assert not any("RELAXED" in msg for msg in warning_messages)
 
 
 class TestJobsCommand:

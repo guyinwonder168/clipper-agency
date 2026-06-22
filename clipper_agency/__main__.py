@@ -7,7 +7,12 @@ import click
 from dotenv import load_dotenv
 
 from clipper_agency import __version__
-from clipper_agency.config.loader import get_agent_config, load_niche, load_settings
+from clipper_agency.config.loader import (
+    get_agent_config,
+    load_niche,
+    load_settings,
+    resolve_relax_gates,
+)
 from clipper_agency.config.preflight import preflight_agent_models
 from clipper_agency.core.logging import get_logger, setup_logging
 from clipper_agency.db.queries import PIPELINE_ORDER
@@ -58,7 +63,8 @@ def _log_startup_info() -> None:
         cfg = get_agent_config(name)
         agent_models.append(cfg["model"] or "none")
     logger.info(
-        "Agent models: safety=%s segment_producer=%s scriptwriter=%s visual_director=%s reviewer=%s",
+        "Agent models: safety=%s segment_producer=%s scriptwriter=%s"
+        " visual_director=%s reviewer=%s",
         *agent_models,
     )
     # API key status (presence only — no values leaked)
@@ -75,6 +81,14 @@ def _log_startup_info() -> None:
     ]:
         status = "CONFIGURED" if os.getenv(key) else "MISSING"
         logger.info("API key %s: %s", key, status)
+    # DEV gate-relax banner (env-only path — covers non-CLI entry points like the
+    # dashboard). CLI run handler emits its own merged banner with the CLI flag.
+    env_relax = resolve_relax_gates(getattr(settings, "relax_gates", ""))
+    if env_relax:
+        logger.warning(
+            "DEV MODE: gates RELAXED (hard_fail->warn): %s — NOT for production",
+            sorted(env_relax),
+        )
 
 
 @click.group()
@@ -106,7 +120,22 @@ def cli(log_level: str | None) -> None:
     "--output-dir", "-o", default=None, help="Output directory (default: from .env or outputs)"
 )
 @click.option("--dry-run", is_flag=True, help="Validate input without running pipeline")
-def run(topic: str, niche: str, db: str | None, output_dir: str | None, dry_run: bool) -> None:
+@click.option(
+    "--relax-gates",
+    default=None,
+    help=(
+        "DEV ONLY: comma-separated gates to relax (hard_fail->warn), e.g. G4,G5. "
+        "Merged with CLIPPER_RELAX_GATES env."
+    ),
+)
+def run(
+    topic: str,
+    niche: str,
+    db: str | None,
+    output_dir: str | None,
+    dry_run: bool,
+    relax_gates: str | None,
+) -> None:
     """Run the full pipeline for a topic."""
     click.echo(f"Clipper Agency — Topic: {topic}")
     click.echo(f"Niche: {niche}")
@@ -119,6 +148,16 @@ def run(topic: str, niche: str, db: str | None, output_dir: str | None, dry_run:
             f"Error: Niche '{niche}' not found. Check available niches in niches/ directory."
         )
         raise SystemExit(1)
+
+    # DEV gate-relax banner: resolve the effective set (CLI ∪ env) once, here,
+    # where --relax-gates is known. Loud warning so relaxed runs can't be missed.
+    settings = load_settings()
+    effective_relax = resolve_relax_gates(relax_gates or "", settings.relax_gates)
+    if effective_relax:
+        logger.warning(
+            "DEV MODE: gates RELAXED (hard_fail->warn): %s — NOT for production",
+            sorted(effective_relax),
+        )
 
     if dry_run:
         # Dry-run is the explicit input-validation tool, so it force-refreshes +
@@ -138,7 +177,12 @@ def run(topic: str, niche: str, db: str | None, output_dir: str | None, dry_run:
 
     click.echo("Starting pipeline...")
     orch = Orchestrator(db_path=resolved_db)
-    result = orch.run_pipeline(topic=topic, niche=niche, output_dir=resolved_output)
+    result = orch.run_pipeline(
+        topic=topic,
+        niche=niche,
+        output_dir=resolved_output,
+        relax_gates=relax_gates or "",
+    )
 
     if result["status"] == "completed":
         click.echo(f"\N{CHECK MARK} Pipeline completed! Job ID: {result['job_id']}")
@@ -612,9 +656,8 @@ def test_agent(
             max_results=max_results,
             output_dir=resolved_output,
         )
-        click.echo(
-            f"[auto-research] Research brief: {len(auto_research_output.get('research_brief', ''))} chars"
-        )
+        brief = auto_research_output.get("research_brief", "")
+        click.echo(f"[auto-research] Research brief: {len(brief)} chars")
 
     result = _dispatch_test_agent(
         agent,

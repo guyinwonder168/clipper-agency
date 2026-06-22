@@ -11,6 +11,7 @@ from clipper_agency.config.loader import (
     load_niche,
     load_settings,
     load_template,
+    resolve_relax_gates,
 )
 from clipper_agency.config.schema import AppSettings, NicheConfig, TemplateConfig
 
@@ -37,6 +38,26 @@ class TestLoadSettings:
             assert settings.db_path == "data/clipper.db"
             assert str(settings.output_dir) == "outputs"
             assert str(settings.assets_cache) == "assets/cache"
+
+    def test_relax_gates_binds_from_clipper_relax_gates_env(self):
+        """CLIPPER_RELAX_GATES env binds verbatim to AppSettings.relax_gates."""
+        with patch.dict(os.environ, {"CLIPPER_RELAX_GATES": "g4, g5"}, clear=False):
+            settings = AppSettings(_env_file=None)
+            assert settings.relax_gates == "g4, g5"
+
+
+class TestResolveRelaxGates:
+    """resolve_relax_gates() — merge comma-separated gate sources into a frozenset."""
+
+    def test_merges_and_normalizes_multiple_sources(self):
+        """Split, strip, uppercase, drop empties, dedupe across sources."""
+        result = resolve_relax_gates("g4, g5", "G10", "")
+        assert result == frozenset({"G4", "G5", "G10"})
+
+    def test_no_sources_returns_empty_frozenset(self):
+        """Calling with no sources yields an empty immutable set."""
+        result = resolve_relax_gates()
+        assert result == frozenset()
 
 
 class TestLoadNiche:

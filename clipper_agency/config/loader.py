@@ -12,6 +12,24 @@ def load_settings() -> AppSettings:
     return AppSettings()  # type: ignore[call-arg]
 
 
+def resolve_relax_gates(*sources: str) -> frozenset[str]:
+    """Merge comma-separated gate-ID sources into a normalized frozenset.
+
+    Each source is split on ``,``; tokens are stripped, uppercased; empties
+    dropped; duplicates removed across all sources. Pure function — no side
+    effects. Empty/whitespace-only sources contribute nothing.
+
+    Example: ``resolve_relax_gates("g4, g5", "G10", "") -> frozenset({"G4", "G5", "G10"})``.
+    """
+    merged: set[str] = set()
+    for source in sources:
+        for token in (source or "").split(","):
+            gate_id = token.strip().upper()
+            if gate_id:
+                merged.add(gate_id)
+    return frozenset(merged)
+
+
 def load_niche(niche_name: str, niches_dir: Path | None = None) -> NicheConfig:
     """Load a niche profile from YAML."""
     base = niches_dir or Path("niches")
@@ -70,7 +88,11 @@ def get_language_name(niche: NicheConfig) -> str:
 
 def get_tone_name(niche: NicheConfig) -> str:
     """Return human-readable tone description for a niche."""
-    tone_map = {"casual_tiktok": "casual TikTok", "professional": "professional", "casual": "casual"}
+    tone_map = {
+        "casual_tiktok": "casual TikTok",
+        "professional": "professional",
+        "casual": "casual",
+    }
     return tone_map.get(niche.tone, niche.tone)
 
 
