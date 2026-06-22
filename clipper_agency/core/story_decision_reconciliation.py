@@ -13,7 +13,13 @@ Rules (priority order):
 
 from __future__ import annotations
 
+import logging
+
+from pydantic import ValidationError
+
 from clipper_agency.config.schema import FormatDecision, StoryModeDecision
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -21,10 +27,12 @@ from clipper_agency.config.schema import FormatDecision, StoryModeDecision
 
 EXPLICIT_CONFIDENCE_THRESHOLD: float = 0.9
 
-_ROUNDUP_FORMATS: frozenset[str] = frozenset({
-    "three_story_roundup",
-    "two_story_highlight",
-})
+_ROUNDUP_FORMATS: frozenset[str] = frozenset(
+    {
+        "three_story_roundup",
+        "two_story_highlight",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,15 +48,63 @@ def _normalise_classifier(
     return StoryModeDecision(**raw)
 
 
+def _sanitise_legacy_keys(raw: dict) -> dict:
+    """Repair key-level formatting defects in an LLM ``format_decision`` dict.
+
+    Targets the observed mimo-v2.5 malformation where punctuation is glued to
+    the key name (``"rationale:"`` instead of ``"rationale"``): strips a single
+    trailing ``:`` and surrounding whitespace from each string key. This is a
+    deterministic *formatting* repair only — it does NOT attempt semantic key
+    renaming, which would be guesswork and is the schema's responsibility.
+    """
+    cleaned: dict = {}
+    for key, value in raw.items():
+        if isinstance(key, str):
+            stripped = key.strip()
+            if stripped.endswith(":"):
+                stripped = stripped[:-1].rstrip()
+            key = stripped
+        # Last-write-wins on a twin-key collision (e.g. the LLM emits both
+        # "rationale" and "rationale:"): acceptable for untrusted input.
+        cleaned[key] = value
+    return cleaned
+
+
 def _normalise_legacy(
-    raw: dict | FormatDecision | None,
+    raw: object,
 ) -> FormatDecision | None:
-    """Accept dict, FormatDecision, or None and return a validated model or None."""
+    """Accept dict, FormatDecision, or None and return a validated model or None.
+
+    LLM ``format_decision`` dicts are untrusted, so they are reformatted to
+    conform to the parser before validation: known key-level formatting defects
+    (e.g. ``"rationale:"``) are repaired via ``_sanitise_legacy_keys``. Anything
+    that still fails ``FormatDecision`` validation — or is not a dict at all —
+    degrades to ``None``; ``legacy_format_decision`` is optional, so the caller
+    falls through to the classifier-only reconciliation path instead of failing
+    the whole pipeline at the research stage.
+    """
     if raw is None:
         return None
     if isinstance(raw, FormatDecision):
         return raw
-    return FormatDecision(**raw)
+    if not isinstance(raw, dict):
+        # S5145: never log the user-controlled payload — only its type name.
+        logger.warning(
+            "Malformed legacy format_decision (not a dict); using classifier-only path. type=%s",
+            type(raw).__name__,
+        )
+        return None
+    try:
+        return FormatDecision(**_sanitise_legacy_keys(raw))
+    except ValidationError as exc:
+        # S5145: log only schema-derived metadata (error type + field loc),
+        # never the user-controlled raw payload nor pydantic's `input` value.
+        safe_errors = [{"type": err.get("type"), "loc": err.get("loc")} for err in exc.errors()]
+        logger.warning(
+            "Malformed legacy format_decision; using classifier-only path. errors=%s",
+            safe_errors,
+        )
+        return None
 
 
 def _is_explicit_override(decision: StoryModeDecision) -> bool:
@@ -70,10 +126,7 @@ def _is_roundup_contradiction(
     """Rule 3: legacy says roundup but classifier says single_story."""
     if legacy is None:
         return False
-    return (
-        legacy.format in _ROUNDUP_FORMATS
-        and classifier.story_mode == "single_story"
-    )
+    return legacy.format in _ROUNDUP_FORMATS and classifier.story_mode == "single_story"
 
 
 def _build_reason(
@@ -105,9 +158,7 @@ def _apply_roundup(
 ) -> StoryModeDecision:
     """Build a roundup-mode result preserving classifier fields."""
     contradiction = (
-        legacy is not None
-        and legacy.format in _ROUNDUP_FORMATS
-        and original_mode == "single_story"
+        legacy is not None and legacy.format in _ROUNDUP_FORMATS and original_mode == "single_story"
     )
     return StoryModeDecision(
         story_mode="roundup",
