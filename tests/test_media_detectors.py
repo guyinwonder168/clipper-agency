@@ -131,7 +131,7 @@ class TestDetectFreezeSegments:
             segments = detect_freeze_segments(
                 "input.mp4",
                 min_duration_sec=0.5,
-                noise_threshold=-60,
+                noise_threshold=0.001,
             )
 
         assert segments == [(2.0, 3.25), (8.5, 10.5)]
@@ -144,7 +144,7 @@ class TestDetectFreezeSegments:
             segments = detect_freeze_segments(
                 "input.mp4",
                 min_duration_sec=0.5,
-                noise_threshold=-60,
+                noise_threshold=0.001,
             )
 
         assert segments == [(2.0, 3.25)]
@@ -157,12 +157,12 @@ class TestDetectFreezeSegments:
             detect_freeze_segments(
                 "input.mp4",
                 min_duration_sec=1.25,
-                noise_threshold=-55,
+                noise_threshold=0.001,
             )
 
         cmd = run_ffmpeg.call_args.args[0]
         assert cmd[:5] == ["ffmpeg", "-hide_banner", "-nostats", "-i", "input.mp4"]
-        assert "freezedetect=n=-55:d=1.25" in cmd
+        assert "freezedetect=n=0.001:d=1.25" in cmd
         assert cmd[-3:] == ["-f", "null", "-"]
 
     def test_raises_typed_error_when_freezedetect_subprocess_fails(self):
@@ -179,12 +179,13 @@ class TestDetectFreezeSegments:
                 detect_freeze_segments(
                     "input.mp4",
                     min_duration_sec=0.5,
-                    noise_threshold=-60,
+                    noise_threshold=0.001,
                 )
 
         assert "freezedetect" in str(exc_info.value)
         assert "invalid video" in str(exc_info.value)
 
+    @pytest.mark.integration
     @requires_ffmpeg
     def test_real_ffmpeg_accepts_default_freezedetect_noise_threshold(
         self,
