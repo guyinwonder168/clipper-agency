@@ -10,6 +10,7 @@ import pytest
 from clipper_agency.config.schema import NicheConfig
 from clipper_agency.db.connection import close_connection, get_connection
 from clipper_agency.db.schema import initialize_schema
+from clipper_agency.orchestrator import engine
 from clipper_agency.orchestrator.engine import Orchestrator
 
 
@@ -856,6 +857,8 @@ class TestOrchestratorRunPipeline:
 
         A bad slug fails fast at the orchestrator chokepoint before any agent
         runs — so the dashboard/retry/resume paths are guarded too, not just CLI.
+        Also guards S8572: the failure must be logged via logger.exception
+        (not logger.error) so the traceback is captured.
         """
 
         def _raise():
@@ -863,12 +866,49 @@ class TestOrchestratorRunPipeline:
 
         monkeypatch.setattr("clipper_agency.orchestrator.engine.preflight_agent_models", _raise)
         orch = Orchestrator(db_path=db_initialized)
-        with patch.object(Orchestrator, "_run_safety") as mock_safety:
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(engine.logger, "error") as mock_error,
+            patch.object(engine.logger, "exception") as mock_exception,
+        ):
             result = orch.run_pipeline(topic="Test", niche="test")
         assert result["status"] == "failed"
         assert result["failed_at"] == "model_preflight"
         assert "bogus/x" in result["reason"]
         mock_safety.assert_not_called()
+        # S8572 regression guard: must use logger.exception, not logger.error
+        mock_exception.assert_called_once_with("Model preflight failed")
+        mock_error.assert_not_called()
+
+    def test_model_preflight_failure_run_pipeline_from_uses_logger_exception(
+        self, db_initialized, monkeypatch
+    ):
+        """run_pipeline_from preflight failure must log via logger.exception (S8572).
+
+        Mirrors the run_pipeline test for the retry/resume chokepoint, which
+        was previously untested for its logging method. Preflight runs before
+        the job lookup, so a nonexistent job_id still triggers the failure path.
+        """
+
+        def _raise():
+            raise RuntimeError("not in the OpenRouter catalog: safety='bogus/x'")
+
+        monkeypatch.setattr("clipper_agency.orchestrator.engine.preflight_agent_models", _raise)
+        orch = Orchestrator(db_path=db_initialized)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(engine.logger, "error") as mock_error,
+            patch.object(engine.logger, "exception") as mock_exception,
+        ):
+            result = orch.run_pipeline_from(99999, from_agent="segment_producer")
+        assert result["status"] == "failed"
+        assert result["failed_at"] == "model_preflight"
+        assert result["job_id"] == 99999
+        assert "bogus/x" in result["reason"]
+        mock_safety.assert_not_called()
+        # S8572 regression guard: must use logger.exception, not logger.error
+        mock_exception.assert_called_once_with("Model preflight failed")
+        mock_error.assert_not_called()
 
     def test_composer_failure_sets_job_failed(self, db_initialized, tmp_path):
         """If composer fails, job should be marked FAILED at the composer stage."""

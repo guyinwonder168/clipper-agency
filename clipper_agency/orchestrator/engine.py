@@ -1251,7 +1251,7 @@ class Orchestrator:
         try:
             preflight_agent_models()
         except RuntimeError as exc:
-            logger.error("Model preflight failed: %s", exc)
+            logger.exception("Model preflight failed")
             return {
                 "status": "failed",
                 "failed_at": "model_preflight",
@@ -2102,7 +2102,7 @@ class Orchestrator:
         try:
             preflight_agent_models()
         except RuntimeError as exc:
-            logger.error("Model preflight failed: %s", exc)
+            logger.exception("Model preflight failed")
             return {
                 "status": "failed",
                 "failed_at": "model_preflight",
