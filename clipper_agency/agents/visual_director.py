@@ -12,7 +12,10 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from clipper_agency.llm.client import OpenRouterClient
 
 from clipper_agency.agents.base import BaseAgent
 from clipper_agency.config.schema import StoryBeat, WordTimestamp
@@ -481,31 +484,53 @@ class VisualDirectorAgent(BaseAgent):
                 },
                 {"role": "user", "content": user_content},
             ]
-            if self._trace_writer:
-                response = llm.chat_traced(
-                    model=agent_cfg["model"],
-                    messages=messages,
-                    job_id=job_id,
-                    agent=self.agent_name,
-                    task="plan_beats",
-                    temperature=agent_cfg["temperature"],
-                    max_completion_tokens=agent_cfg.get("max_completion_tokens"),
-                    prompt_template_id="visual_director.md",
-                )
-            else:
-                response = llm.chat(
-                    model=agent_cfg["model"],
-                    messages=messages,
-                    temperature=agent_cfg["temperature"],
-                    max_completion_tokens=agent_cfg.get("max_completion_tokens"),
-                )
-
-            parsed = json.loads(response["content"].strip().strip("```json").strip("```").strip())
-            return parsed.get("scenes", [])
+            return self._llm_plan_scenes_response(
+                llm=llm,
+                messages=messages,
+                agent_cfg=agent_cfg,
+                job_id=job_id,
+                task="plan_beats",
+            )
 
         except Exception:
             logger.warning("Beat-driven LLM planning failed", exc_info=True)
             return None
+
+    def _llm_plan_scenes_response(
+        self,
+        *,
+        llm: "OpenRouterClient",
+        messages: list[dict],
+        agent_cfg: dict,
+        job_id: int,
+        task: str,
+    ) -> list[dict]:
+        """Call the planning LLM (traced when a trace writer is set) and return
+        its parsed scenes list. Raises on call/parse failure so the caller's
+        try/except logs + degrades. Centralizes the traced/untraced call and
+        JSON-extract so the logic is not duplicated across planning methods
+        (SonarCloud duplicated-lines gate).
+        """
+        if self._trace_writer:
+            response = llm.chat_traced(
+                model=agent_cfg["model"],
+                messages=messages,
+                job_id=job_id,
+                agent=self.agent_name,
+                task=task,
+                temperature=agent_cfg["temperature"],
+                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                prompt_template_id="visual_director.md",
+            )
+        else:
+            response = llm.chat(
+                model=agent_cfg["model"],
+                messages=messages,
+                temperature=agent_cfg["temperature"],
+                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+            )
+        parsed = json.loads(response["content"].strip().strip("```json").strip("```").strip())
+        return parsed.get("scenes", [])
 
     def _plan_beats_fallback(
         self,
@@ -1494,27 +1519,13 @@ class VisualDirectorAgent(BaseAgent):
                 },
                 {"role": "user", "content": user_content},
             ]
-            if self._trace_writer:
-                response = llm.chat_traced(
-                    model=agent_cfg["model"],
-                    messages=messages,
-                    job_id=job_id,
-                    agent=self.agent_name,
-                    task="plan_scenes",
-                    temperature=agent_cfg["temperature"],
-                    max_completion_tokens=agent_cfg.get("max_completion_tokens"),
-                    prompt_template_id="visual_director.md",
-                )
-            else:
-                response = llm.chat(
-                    model=agent_cfg["model"],
-                    messages=messages,
-                    temperature=agent_cfg["temperature"],
-                    max_completion_tokens=agent_cfg.get("max_completion_tokens"),
-                )
-
-            parsed = json.loads(response["content"].strip().strip("```json").strip("```").strip())
-            return parsed.get("scenes", [])
+            return self._llm_plan_scenes_response(
+                llm=llm,
+                messages=messages,
+                agent_cfg=agent_cfg,
+                job_id=job_id,
+                task="plan_scenes",
+            )
 
         except Exception:
             logger.warning("LLM planning failed", exc_info=True)
