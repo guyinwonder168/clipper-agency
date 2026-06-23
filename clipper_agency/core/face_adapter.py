@@ -187,12 +187,12 @@ class MediaPipeFaceDetector:
                 if key not in cls._models and not cls._unavailable:
                     try:
                         cls._models[key] = cls._build_model(model_selection, min_confidence)
-                    except Exception as exc:  # noqa: BLE001 — degrade on any init failure
+                    except Exception:  # noqa: BLE001 — degrade on any init failure
                         cls._unavailable = True
                         logger.warning(
-                            "MediaPipe face detection unavailable (%s); "
+                            "MediaPipe face detection unavailable; "
                             "returning empty face results.",
-                            exc,
+                            exc_info=True,
                         )
                         return None
         return cls._models[key]

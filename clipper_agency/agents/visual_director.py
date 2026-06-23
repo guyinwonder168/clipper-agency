@@ -503,8 +503,8 @@ class VisualDirectorAgent(BaseAgent):
             parsed = json.loads(response["content"].strip().strip("```json").strip("```").strip())
             return parsed.get("scenes", [])
 
-        except Exception as e:
-            logger.warning("Beat-driven LLM planning failed: %s", e)
+        except Exception:
+            logger.warning("Beat-driven LLM planning failed", exc_info=True)
             return None
 
     def _plan_beats_fallback(
@@ -726,8 +726,8 @@ class VisualDirectorAgent(BaseAgent):
         """
         try:
             return self._do_inspect_and_select(plan, parsed_beats, job_id, agent_dir)
-        except Exception as exc:
-            logger.warning("Candidate inspection skipped (error): %s", exc)
+        except Exception:
+            logger.warning("Candidate inspection skipped (error)", exc_info=True)
             return plan, []
 
     def _do_inspect_and_select(
@@ -1516,8 +1516,8 @@ class VisualDirectorAgent(BaseAgent):
             parsed = json.loads(response["content"].strip().strip("```json").strip("```").strip())
             return parsed.get("scenes", [])
 
-        except Exception as e:
-            logger.warning("LLM planning failed: %s", e)
+        except Exception:
+            logger.warning("LLM planning failed", exc_info=True)
             return None
 
     def _plan_scenes(

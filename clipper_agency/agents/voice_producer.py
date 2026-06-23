@@ -183,8 +183,8 @@ class VoiceProducerAgent(BaseAgent):
                         result, provider,
                     )
 
-            except Exception as exc:
-                logger.warning("Voice: %s failed: %s", provider, exc)
+            except Exception:
+                logger.warning("Voice: %s failed", provider, exc_info=True)
                 continue
 
         logger.error("Voice: all providers failed")
