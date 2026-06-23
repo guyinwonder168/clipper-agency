@@ -40,13 +40,13 @@ class BraveSearchService:
             try:
                 with urllib.request.urlopen(req) as resp:
                     return json.loads(resp.read().decode("utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
+            except (json.JSONDecodeError, OSError):
                 delay = _BASE_DELAY * (2 ** attempt)
                 logger.warning(
-                    "Brave API request failed (attempt %d/%d): %s",
+                    "Brave API request failed (attempt %d/%d)",
                     attempt + 1,
                     _MAX_RETRIES,
-                    exc,
+                    exc_info=True,
                 )
                 if attempt < _MAX_RETRIES - 1:
                     time.sleep(delay)

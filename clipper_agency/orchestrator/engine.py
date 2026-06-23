@@ -1674,8 +1674,10 @@ class Orchestrator:
                     if src_file.exists():
                         shutil.copy2(str(src_file), str(cycle_dir / fname))
                 compose_output["cycle_video_path"] = str(cycle_dir / "video.mp4")
-            except OSError as e:
-                logger.warning("Failed to copy cycle %d output to %s: %s", cycle, cycle_dir, e)
+            except OSError:
+                logger.warning(
+                    "Failed to copy cycle %d output to %s", cycle, cycle_dir, exc_info=True
+                )
                 compose_output["cycle_video_path"] = compose_output.get("video_path", "")
 
         if compose_output.get("status") == "failed":

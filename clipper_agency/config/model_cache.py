@@ -75,8 +75,8 @@ def refresh_model_cache(force: bool = False) -> None:
             resp = client.get(_OPENROUTER_MODELS_URL)
             resp.raise_for_status()
             data = resp.json()
-    except Exception as exc:
-        logger.warning("Failed to refresh model cache: %s", exc)
+    except Exception:
+        logger.warning("Failed to refresh model cache", exc_info=True)
         return
 
     models: dict[str, Any] = {}
@@ -114,8 +114,8 @@ def _load_cache() -> dict[str, Any] | None:
 
     try:
         return json.loads(_CACHE_PATH.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Failed to read model cache: %s", exc)
+    except (json.JSONDecodeError, OSError):
+        logger.warning("Failed to read model cache", exc_info=True)
         return None
 
 

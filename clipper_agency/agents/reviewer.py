@@ -382,8 +382,8 @@ class ReviewerAgent(BaseAgent):
                 )
                 density = detect_source_text_density(source_regions, frame_size)
                 enriched["text_collision"] = _dump_issues(collisions + density)
-            except Exception as exc:
-                logger.warning("Reviewer text collision detection failed: %s", exc)
+            except Exception:
+                logger.warning("Reviewer text collision detection failed", exc_info=True)
 
         if generated_regions and _is_enabled(quality.safe_area):
             try:
@@ -395,8 +395,8 @@ class ReviewerAgent(BaseAgent):
                     face_overlap_max=quality.safe_area.face_overlap_max,
                 )
                 enriched["safe_area"] = _dump_issues(safe_issues)
-            except Exception as exc:
-                logger.warning("Reviewer safe-area detection failed: %s", exc)
+            except Exception:
+                logger.warning("Reviewer safe-area detection failed", exc_info=True)
 
         return enriched
 

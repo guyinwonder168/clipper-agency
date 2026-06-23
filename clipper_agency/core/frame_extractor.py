@@ -71,12 +71,12 @@ def _extract_one_frame(
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,
         ValueError,
-    ) as exc:
+    ):
         logger.warning(
-            "Failed to extract frame metadata at %.3fs to %s: %s",
+            "Failed to extract frame metadata at %.3fs to %s",
             timestamp_sec,
             output_path,
-            exc,
+            exc_info=True,
         )
         return None
 
