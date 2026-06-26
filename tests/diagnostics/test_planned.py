@@ -8,11 +8,8 @@ from __future__ import annotations
 import pytest
 
 from clipper_agency.diagnostics.planned import (
-    SAFETY_MARGIN,
-    TRANSITION_DURATION_DEFAULT,
     compute_transition_count,
     derive_planned_boundaries,
-    predicted_achieved_boundaries,
 )
 
 # ---------------------------------------------------------------------------
@@ -80,60 +77,6 @@ def test_derive_planned_boundaries_empty_returns_empty() -> None:
     planned = derive_planned_boundaries([], [])
     # Assert
     assert planned == []
-
-
-# ---------------------------------------------------------------------------
-# predicted_achieved_boundaries — mirrors composer.py xfade accumulator.
-# ---------------------------------------------------------------------------
-
-
-def test_predicted_achieved_boundaries_mirrors_xfade_accumulator() -> None:
-    """Predicted achieved start for beat i = cum - trans_duration - margin.
-
-    durs = [4, 4, 4]; cum starts 4.
-      beat2 = max(0, 4 - 0.5 - 0.1) = 3.4; cum = 4 + 4 - 0.5 = 7.5
-      beat3 = max(0, 7.5 - 0.5 - 0.1) = 6.9; cum = 7.5 + 4 - 0.5 = 11.0
-    """
-    # Arrange — three planned beats of 4s each.
-    planned = [(0.0, 4.0), (4.0, 8.0), (8.0, 12.0)]
-    # Act
-    achieved = predicted_achieved_boundaries(
-        planned, transition_duration_sec=0.5, safety_margin=0.1
-    )
-    # Assert
-    assert achieved == pytest.approx([0.0, 3.4, 6.9])
-
-
-def test_predicted_achieved_boundaries_never_negative() -> None:
-    """The max(0.0, ...) clamp keeps the first predicted start at 0.0 and
-    prevents negative offsets when a beat is shorter than the margin."""
-    # Arrange — beat1 is 0.2s long, so cum starts 0.2 and beat2 prediction
-    # would be negative without the clamp.
-    planned = [(0.0, 0.2), (0.2, 0.6)]
-    # Act
-    achieved = predicted_achieved_boundaries(planned, transition_duration_sec=0.5)
-    # Assert
-    assert achieved[0] == 0.0
-    assert achieved[1] == 0.0  # clamped, would be 0.2 - 0.5 - 0.1 = -0.4
-
-
-def test_predicted_achieved_boundaries_respects_trans_duration_override() -> None:
-    """Drift is linear in trans_duration — smaller trans ⇒ larger achieved."""
-    # Arrange — three planned beats of 4s each.
-    planned = [(0.0, 4.0), (4.0, 8.0), (8.0, 12.0)]
-    # Act
-    achieved_03 = predicted_achieved_boundaries(planned, transition_duration_sec=0.3)
-    achieved_07 = predicted_achieved_boundaries(planned, transition_duration_sec=0.7)
-    # Assert — larger trans_duration pulls achieved starts earlier.
-    assert achieved_07[1] < achieved_03[1]
-    assert achieved_07[2] < achieved_03[2]
-
-
-def test_predicted_achieved_boundaries_default_constants() -> None:
-    """Module constants are the composer defaults (0.5 / 0.1)."""
-    # Arrange / Act / Assert
-    assert TRANSITION_DURATION_DEFAULT == 0.5
-    assert SAFETY_MARGIN == 0.1
 
 
 # ---------------------------------------------------------------------------

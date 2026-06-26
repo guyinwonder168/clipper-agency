@@ -19,9 +19,9 @@ _PREDICTED_MARGIN_PER_TRANSITION_MS = 100.0
 
 def build_drift_table(
     signals: JobSignals,
-    achieved: list,
-    caption_windows: dict,
-    planned: list,
+    achieved: list[tuple[float, float | None] | None],
+    caption_windows: dict[int, tuple[float, float]],
+    planned: list[tuple[float, float]],
 ) -> list[DriftRow]:
     """Build one ``DriftRow`` per beat.
 

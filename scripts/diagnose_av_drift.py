@@ -57,17 +57,18 @@ def _probe_video_duration(video_path: str) -> float | None:
 def _build_report(job_dir: str, assets_cache: str | None, pixel_threshold: float) -> DriftReport:
     signals = load_job_signals(job_dir, assets_cache=assets_cache)
     planned = derive_planned_boundaries(signals.narrative_structure, signals.timestamps)
-    achieved = measure_achieved_boundaries(
+    achieved, achieved_note = measure_achieved_boundaries(
         signals.video_path,
         expected_count=len(signals.narrative_structure),
         pixel_threshold=pixel_threshold,
-        allowed_base_dir=job_dir,
     )
     caption_windows = derive_caption_windows(signals.narrative_structure, signals.timestamps)
     transition_count = compute_transition_count(signals.narrative_structure)
     rows = build_drift_table(signals, achieved, caption_windows, planned)
 
     notes: list[str] = []
+    if achieved_note is not None:
+        notes.append(achieved_note)
     if signals.provider != "elevenlabs":
         notes.append(
             f"provider is {signals.provider}; measured fallback-TTS path "

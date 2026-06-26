@@ -94,3 +94,40 @@ def test_load_job_signals_rejects_non_job_basename(tmp_path: Path) -> None:
     # Act / Assert
     with pytest.raises((ValueError, FileNotFoundError)):
         load_job_signals(job_dir, assets_cache=cache)
+
+
+def test_resolve_assets_cache_walks_up_to_sibling_data_cache(tmp_path: Path) -> None:
+    """Default resolution (assets_cache=None) finds sibling data/assets/cache
+    by walking the job_dir's ancestors — works for an absolute job_dir
+    regardless of CWD (Codex P2#2)."""
+    # Arrange — repo layout: <tmp>/data/{assets/cache, outputs}/job_7
+    cache = tmp_path / "data" / "assets" / "cache"
+    out_dir = tmp_path / "data" / "outputs"
+    job_dir = out_dir / "job_7"
+    job_dir.mkdir(parents=True)
+    _write_job_artifacts(cache, 7, video=False)
+    (job_dir / "video.mp4").write_bytes(b"fake")
+    # Act — absolute job_dir, no --assets-cache override.
+    signals = load_job_signals(job_dir, assets_cache=None)
+    # Assert — walked up from job_7 to <tmp> and found data/assets/cache.
+    assert signals.job_id == 7
+    assert signals.provider == "gemini_tts"
+
+
+def test_load_job_signals_rejects_non_list_narrative(tmp_path: Path) -> None:
+    """A narrative_structure.json that is not a JSON array raises ValueError
+    at the boundary (isinstance narrowing), not a silent TypeError later."""
+    # Arrange
+    cache = tmp_path / "cache"
+    job_dir = tmp_path / "outputs" / "job_8"
+    job_dir.mkdir(parents=True)
+    (job_dir / "video.mp4").write_bytes(b"fake")
+    sw = cache / "job_8" / "agents" / "scriptwriter"
+    vp = cache / "job_8" / "agents" / "voice_producer"
+    sw.mkdir(parents=True)
+    vp.mkdir(parents=True)
+    (sw / "narrative_structure.json").write_text(json.dumps({"not": "a list"}))
+    (vp / "output.json").write_text(json.dumps({"provider": "x", "timestamps": []}))
+    # Act / Assert
+    with pytest.raises(ValueError):
+        load_job_signals(job_dir, assets_cache=cache)

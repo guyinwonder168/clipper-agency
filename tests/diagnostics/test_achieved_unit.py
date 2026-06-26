@@ -1,24 +1,25 @@
 """Hermetic unit tests for achieved-boundary pure logic (PR 13).
 
-Exercises the bookend filter, the persisted-coverage parser, the
-missing-video early return, and the ffmpeg I/O parse paths (via mocked
-subprocess) WITHOUT real ffmpeg — the real-ffmpeg end-to-end lives in the
-integration-marked ``test_achieved_ffprobe.py``. AAA pattern.
+Exercises the bookend filter, the missing-video early return, and the
+ffmpeg I/O paths (via mocked ``_run_blackdetect`` / ``probe_video``) WITHOUT
+real ffmpeg — the real-ffmpeg end-to-end lives in the integration-marked
+``test_achieved_ffprobe.py``. AAA pattern.
 """
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from clipper_agency.diagnostics import achieved as achieved_mod
 from clipper_agency.diagnostics.achieved import (
     LEAD_IN_MAX_SEC,
-    _black_gaps_from_visual_coverage,
     _internal_boundaries,
+    _probe_duration,
+    _run_blackdetect,
     measure_achieved_boundaries,
 )
 
@@ -39,7 +40,7 @@ def test_internal_boundaries_drops_lead_in_and_trailing() -> None:
 
 
 def test_internal_boundaries_keeps_all_when_duration_unknown() -> None:
-    """Without a duration the trailing filter is skipped (no False drop)."""
+    """Without a duration the trailing filter is skipped (no false drop)."""
     # Arrange — no trailing bookend can be inferred.
     gaps = [(0.0, 1.0), (5.0, 6.0)]
     # Act
@@ -59,127 +60,41 @@ def test_lead_in_constant_is_small() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _black_gaps_from_visual_coverage — parses persisted BLACK_FRAME issues.
+# _probe_duration — delegates to the shared probe_video helper.
 # ---------------------------------------------------------------------------
 
 
-def test_black_gaps_from_visual_coverage_filters_black_frames(tmp_path: Path) -> None:
-    """Only BLACK_FRAME issues with numeric start/end become gaps."""
-    # Arrange
-    coverage = {
-        "issues": [
-            {"type": "BLACK_FRAME", "start_sec": 1.0, "end_sec": 2.0},
-            {"type": "FREEZE_FRAME", "start_sec": 3.0, "end_sec": 4.0},
-            {"type": "BLACK_FRAME", "start_sec": None, "end_sec": 5.0},
-            {"type": "BLACK_FRAME", "start_sec": 6.0, "end_sec": 7.0},
-        ]
-    }
-    (tmp_path / "visual_coverage.json").write_text(json.dumps(coverage))
-    # Act
-    gaps = _black_gaps_from_visual_coverage(tmp_path)
-    # Assert — FREEZE + the None-start BLACK_FRAME are skipped.
-    assert gaps == [(1.0, 2.0), (6.0, 7.0)]
-
-
-def test_black_gaps_from_visual_coverage_missing_file_returns_none(tmp_path: Path) -> None:
-    # Arrange — no visual_coverage.json in the dir.
-    # Act / Assert
-    assert _black_gaps_from_visual_coverage(tmp_path) is None
-
-
-def test_black_gaps_from_visual_coverage_corrupt_json_returns_none(tmp_path: Path) -> None:
-    # Arrange
-    (tmp_path / "visual_coverage.json").write_text("{not valid json")
-    # Act / Assert
-    assert _black_gaps_from_visual_coverage(tmp_path) is None
-
-
-# ---------------------------------------------------------------------------
-# measure_achieved_boundaries — missing-video early return (no ffmpeg needed).
-# ---------------------------------------------------------------------------
-
-
-def test_measure_achieved_boundaries_missing_video_pads_none(tmp_path: Path) -> None:
-    """A non-existent video returns a None-padded list without raising."""
-    # Arrange — no video, no persisted coverage in tmp_path.
-    missing = tmp_path / "absent.mp4"
-    # Act
-    result = measure_achieved_boundaries(
-        str(missing), expected_count=4, allowed_base_dir=str(tmp_path)
-    )
-    # Assert — padded to expected_count, all None, no subprocess invoked.
-    assert result == [None, None, None, None]
-
-
-# ---------------------------------------------------------------------------
-# ffmpeg I/O parse paths — mocked subprocess (no real ffmpeg dependency).
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def patched_ffmpeg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Stub ffmpeg/ffprobe so the parse + assembly logic runs hermetically."""
-    video = tmp_path / "video.mp4"
-    video.write_bytes(b"")
-
-    def fake_blackdetect(video_path: Path, pixel_threshold: float) -> list[tuple[float, float]]:
-        return [(0.0, 6.0), (6.6, 7.6), (10.3, 11.5), (18.3, 30.5)]
-
-    def fake_probe_duration(video_path: Path) -> float:
-        return 30.5
-
-    monkeypatch.setattr(achieved_mod, "_run_blackdetect", fake_blackdetect)
-    monkeypatch.setattr(achieved_mod, "_probe_duration", fake_probe_duration)
-    return video
-
-
-def test_measure_assembles_boundaries_from_mocked_gaps(patched_ffmpeg: Path) -> None:
-    """The orchestration assembles (start, end) pairs + None padding from gaps."""
-    # Arrange — patched_ffmpeg provides a video + stubbed detection.
-    # Act — allowed_base_dir has no visual_coverage.json so the stubbed
-    # blackdetect runs; duration is stubbed to 30.5 so the trailing gap drops.
-    result = measure_achieved_boundaries(
-        str(patched_ffmpeg), expected_count=4, allowed_base_dir=str(patched_ffmpeg.parent)
-    )
-    # Assert — beat1 (0.0, 7.6); beat2 (7.6, 11.5); beat3 (11.5, None); beat4 None.
-    assert result[0] == (0.0, 7.6)
-    assert result[1] == (7.6, 11.5)
-    assert result[2] == (11.5, None)
-    assert result[3] is None
-
-
-def test_probe_duration_parses_ffprobe_json(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_probe_duration_reads_probe_video_duration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """_probe_duration reads format.duration from ffprobe JSON output."""
-    # Arrange
+    """_probe_duration returns probe_video's reported duration."""
+    # Arrange — a stub VideoInfo carrying duration 12.5s.
     video = tmp_path / "v.mp4"
     video.write_bytes(b"")
     monkeypatch.setattr(
-        subprocess,
-        "check_output",
-        lambda *a, **k: json.dumps({"format": {"duration": "12.5"}}).encode(),
+        achieved_mod, "probe_video", lambda name, base: SimpleNamespace(duration=12.5)
     )
     # Act
-    dur = achieved_mod._probe_duration(video)
+    dur = _probe_duration(video)
     # Assert
     assert dur == 12.5
 
 
-def test_probe_duration_returns_none_on_subprocess_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_probe_duration_returns_none_when_probe_video_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Any ffprobe failure degrades to None (no crash)."""
+    """A probe_video None (missing file / ffprobe failure) degrades to None."""
     # Arrange
     video = tmp_path / "v.mp4"
     video.write_bytes(b"")
-
-    def boom(*a: object, **k: object) -> object:
-        raise subprocess.CalledProcessError(1, ["ffprobe"])
-
-    monkeypatch.setattr(subprocess, "check_output", boom)
+    monkeypatch.setattr(achieved_mod, "probe_video", lambda name, base: None)
     # Act / Assert
-    assert achieved_mod._probe_duration(video) is None
+    assert _probe_duration(video) is None
+
+
+# ---------------------------------------------------------------------------
+# _run_blackdetect — parses stderr gaps; raises on non-zero rc / timeout.
+# ---------------------------------------------------------------------------
 
 
 def test_run_blackdetect_parses_stderr_gaps(
@@ -187,25 +102,40 @@ def test_run_blackdetect_parses_stderr_gaps(
 ) -> None:
     """_run_blackdetect extracts (start, end) pairs from blackdetect stderr."""
     # Arrange — a fake CompletedProcess whose stderr carries two black gaps.
-    fake_stderr = (
-        "[blackdetect @ 0x1] black_start:6.63333 black_end:7.60000 black_duration:0.96667\n"
-        "[blackdetect @ 0x1] black_start:10.33333 black_end:11.46667 black_duration:1.13334\n"
-    )
 
     class _FakeProc:
-        stderr = fake_stderr
+        returncode = 0
+        stderr = (
+            "[blackdetect @ 0x1] black_start:6.63333 black_end:7.60000 black_duration:0.96667\n"
+            "[blackdetect @ 0x1] black_start:10.33333 black_end:11.46667 black_duration:1.13334\n"
+        )
 
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc())
     # Act
-    gaps = achieved_mod._run_blackdetect(tmp_path / "v.mp4", pixel_threshold=0.1)
+    gaps = _run_blackdetect(tmp_path / "v.mp4", pixel_threshold=0.1)
     # Assert
     assert gaps == [(6.63333, 7.6), (10.33333, 11.46667)]
 
 
-def test_run_blackdetect_returns_empty_on_timeout(
+def test_run_blackdetect_raises_on_nonzero_rc(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A ffmpeg timeout degrades to an empty gap list (no crash)."""
+    """A non-zero ffmpeg exit raises CalledProcessError (no silent empty list)."""
+    # Arrange
+
+    class _FakeProc:
+        returncode = 1
+        stdout = ""
+        stderr = "Error: corrupt video"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc())
+    # Act / Assert — the silent-failure fix: ffmpeg failure must surface.
+    with pytest.raises(subprocess.CalledProcessError):
+        _run_blackdetect(tmp_path / "v.mp4", pixel_threshold=0.1)
+
+
+def test_run_blackdetect_raises_on_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A ffmpeg timeout propagates (no silent empty list)."""
     # Arrange
     monkeypatch.setattr(
         subprocess,
@@ -213,4 +143,70 @@ def test_run_blackdetect_returns_empty_on_timeout(
         lambda *a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired(["ffmpeg"], 1)),
     )
     # Act / Assert
-    assert achieved_mod._run_blackdetect(tmp_path / "v.mp4", pixel_threshold=0.1) == []
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_blackdetect(tmp_path / "v.mp4", pixel_threshold=0.1)
+
+
+# ---------------------------------------------------------------------------
+# measure_achieved_boundaries — orchestration + failure sentinel.
+# ---------------------------------------------------------------------------
+
+
+def test_measure_achieved_boundaries_missing_video_pads_none(tmp_path: Path) -> None:
+    """A non-existent video returns (all-None, None) without raising."""
+    # Arrange — no video.
+    missing = tmp_path / "absent.mp4"
+    # Act
+    boundaries, note = measure_achieved_boundaries(str(missing), expected_count=4)
+    # Assert — padded to expected_count, all None, no failure note.
+    assert boundaries == [None, None, None, None]
+    assert note is None
+
+
+@pytest.fixture
+def patched_ffmpeg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Stub blackdetect + probe so the assembly logic runs hermetically."""
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"")
+
+    def fake_blackdetect(video_path: Path, pixel_threshold: float) -> list[tuple[float, float]]:
+        return [(0.0, 6.0), (6.6, 7.6), (10.3, 11.5), (18.3, 30.5)]
+
+    monkeypatch.setattr(achieved_mod, "_run_blackdetect", fake_blackdetect)
+    monkeypatch.setattr(
+        achieved_mod, "probe_video", lambda name, base: SimpleNamespace(duration=30.5)
+    )
+    return video
+
+
+def test_measure_assembles_boundaries_from_mocked_gaps(patched_ffmpeg: Path) -> None:
+    """The orchestration assembles (start, end) pairs + None padding from gaps."""
+    # Arrange — patched_ffmpeg provides a video + stubbed detection.
+    # Act — duration stubbed to 30.5 so the trailing gap (end 30.5) drops.
+    boundaries, note = measure_achieved_boundaries(str(patched_ffmpeg), expected_count=4)
+    # Assert — beat1 (0.0, 7.6); beat2 (7.6, 11.5); beat3 (11.5, None); beat4 None.
+    assert note is None
+    assert boundaries[0] == (0.0, 7.6)
+    assert boundaries[1] == (7.6, 11.5)
+    assert boundaries[2] == (11.5, None)
+    assert boundaries[3] is None
+
+
+def test_measure_returns_failure_note_when_blackdetect_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A blackdetect failure surfaces as (all-None, note) — not a silent empty result."""
+    # Arrange — a real video file but blackdetect raises.
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"")
+
+    def boom(video_path: Path, pixel_threshold: float) -> list[tuple[float, float]]:
+        raise subprocess.CalledProcessError(1, ["ffmpeg"])
+
+    monkeypatch.setattr(achieved_mod, "_run_blackdetect", boom)
+    # Act
+    boundaries, note = measure_achieved_boundaries(str(video), expected_count=3)
+    # Assert — all-None + a descriptive note (the silent-failure fix).
+    assert boundaries == [None, None, None]
+    assert note is not None
+    assert "blackdetect failed" in note

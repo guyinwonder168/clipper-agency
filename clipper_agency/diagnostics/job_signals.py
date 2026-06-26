@@ -3,9 +3,10 @@
 The loader only READS artifacts — it never touches any agent, gate, or
 pipeline state machine (ADR-0026 compliance).
 
-Default assets_cache resolution: walk up from ``job_dir`` until a directory
-named ``data/assets/cache`` is found; if none, fall back to
-``<CWD>/data/assets/cache``.
+Default assets_cache resolution (Codex P2#2): walk up from ``job_dir`` and
+return the first ancestor that contains a ``data/assets/cache`` subdirectory
+(so an absolute ``job_dir`` resolves correctly regardless of the caller's
+CWD). If none is found, fall back to ``<CWD>/data/assets/cache``.
 """
 
 from __future__ import annotations
@@ -22,21 +23,46 @@ _JOB_RE = re.compile(r"job_(\d+)$")
 
 
 def _resolve_assets_cache(job_dir: Path, override: str | Path | None) -> Path:
-    """Resolve the assets-cache root from an override or by walking up."""
+    """Resolve the assets-cache root from an override or by walking up.
+
+    Walks ``job_dir``'s ancestors and returns the first that contains
+    ``data/assets/cache`` — this resolves a sibling cache for an absolute
+    ``job_dir`` regardless of the caller's CWD (Codex P2#2).
+    """
     if override is not None:
         return Path(override).resolve()
     cursor = job_dir.resolve()
     for parent in [cursor, *cursor.parents]:
-        if parent.name == "cache" and parent.parent.name == "assets":
-            return parent
+        candidate = parent / _CACHE_DIR_NAME
+        if candidate.is_dir():
+            return candidate
     return (Path.cwd() / _CACHE_DIR_NAME).resolve()
 
 
-def _read_json(path: Path, missing_hint: str) -> object:
-    """Read + parse JSON, raising FileNotFoundError naming the file on miss."""
+def _read_json_dict(path: Path, missing_hint: str) -> dict:
+    """Read + parse JSON, requiring a dict; raise FileNotFoundError on miss."""
     if not path.is_file():
         raise FileNotFoundError(f"AV-drift input missing: {missing_hint} ({path})")
-    return json.loads(path.read_text())
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"AV-drift input malformed ({missing_hint}): expected JSON object, "
+            f"got {type(data).__name__}"
+        )
+    return data
+
+
+def _read_json_list(path: Path, missing_hint: str) -> list[dict]:
+    """Read + parse JSON, requiring a list of dicts; raise on miss/malformed."""
+    if not path.is_file():
+        raise FileNotFoundError(f"AV-drift input missing: {missing_hint} ({path})")
+    data = json.loads(path.read_text())
+    if not isinstance(data, list):
+        raise ValueError(
+            f"AV-drift input malformed ({missing_hint}): expected JSON array, "
+            f"got {type(data).__name__}"
+        )
+    return [item for item in data if isinstance(item, dict)]
 
 
 def _parse_job_id(job_dir: Path) -> int:
@@ -55,7 +81,8 @@ def load_job_signals(
 
     Raises:
         FileNotFoundError: naming the missing required input file.
-        ValueError: if the job_dir basename is not ``job_<N>``.
+        ValueError: if the job_dir basename is not ``job_<N>`` or an input
+            JSON is structurally malformed.
     """
     job_dir_path = Path(job_dir).resolve()
     job_id = _parse_job_id(job_dir_path)
@@ -67,18 +94,17 @@ def load_job_signals(
     voice_path = cache_root / f"job_{job_id}" / "agents" / "voice_producer" / "output.json"
     video_path = job_dir_path / "video.mp4"
 
-    narrative = _read_json(
+    narrative_structure = _read_json_list(
         narrative_path,
         f"job_{job_id} scriptwriter/narrative_structure.json",
     )
-    voice = _read_json(voice_path, f"job_{job_id} voice_producer/output.json")
+    voice = _read_json_dict(voice_path, f"job_{job_id} voice_producer/output.json")
     if not video_path.is_file():
         raise FileNotFoundError(f"AV-drift input missing: job_{job_id} muxed video ({video_path})")
 
-    narrative_structure = list(narrative)  # type: ignore[arg-type]
-    timestamps = list(voice.get("timestamps", []))  # type: ignore[union-attr]
-    provider = str(voice.get("provider", "unknown"))  # type: ignore[union-attr]
-    voiceover_duration = float(voice.get("voiceover_duration_sec", 0.0))  # type: ignore[union-attr]
+    timestamps = list(voice.get("timestamps", []))
+    provider = str(voice.get("provider", "unknown"))
+    voiceover_duration = float(voice.get("voiceover_duration_sec", 0.0))
 
     # hook_duration = first beat's inclusive audio span.
     hook_duration = 0.0

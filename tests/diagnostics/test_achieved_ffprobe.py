@@ -34,13 +34,12 @@ def test_measure_achieved_boundaries_returns_internal_black_edges() -> None:
     """job_8 has 8 beats => 7 internal black gaps; each black_end is an
     achieved scene start. We expect ~7 achieved boundaries, and the first
     internal black_end should be ~7.6s (matches verifier 1 measurement)."""
-    # Arrange — job_8 muxed video, 8 expected beats, persisted coverage present.
+    # Arrange — job_8 muxed video, 8 expected beats.
     # Act
-    achieved = measure_achieved_boundaries(
-        str(_JOB8_VIDEO), expected_count=8, allowed_base_dir=str(_JOB8_DIR)
-    )
-    # Assert — beat 1 starts at 0.0; beat 2's achieved start is the first
-    # internal black_end (~7.6s, matches verifier 1). The list is padded to 8.
+    achieved, note = measure_achieved_boundaries(str(_JOB8_VIDEO), expected_count=8)
+    # Assert — no failure note; beat 1 starts at 0.0; beat 2's achieved start is
+    # the first internal black_end (~7.6s, matches verifier 1). Padded to 8.
+    assert note is None
     assert len(achieved) == 8
     assert achieved[0] is not None and achieved[0][0] == 0.0
     assert achieved[1] is not None
@@ -55,11 +54,10 @@ def test_measure_achieved_boundaries_missing_video_returns_none_padding(
     # Arrange
     missing = tmp_path / "nope.mp4"
     # Act
-    achieved = measure_achieved_boundaries(
-        str(missing), expected_count=3, allowed_base_dir=str(tmp_path)
-    )
+    achieved, note = measure_achieved_boundaries(str(missing), expected_count=3)
     # Assert
     assert achieved == [None, None, None]
+    assert note is None
 
 
 def test_ffprobe_duration_command_returns_zero_rc() -> None:
