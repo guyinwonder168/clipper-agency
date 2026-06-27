@@ -138,7 +138,7 @@
 | Service | Purpose | Auth | Rate/Credits |
 |---------|---------|------|--------------|
 | OpenRouter | LLM access for all agents | API key | Per-model limits |
-| ElevenLabs | Voice generation (primary) | API key | Free tier blocked — Starter plan ($5/mo) required for API access |
+| ElevenLabs | Voice generation (primary) | API key (`ELEVENLABS_API_KEY`) | Free tier: premade voices + Voice Design usable via API; shared Voice-Library voices + Instant/Professional Voice Cloning = paid (Creator+/Pro). Default model `eleven_multilingual_v2` (env-configurable via `ELEVENLABS_MODEL`). |
 | Google AI Studio Gemini TTS | Voice generation fallback after ElevenLabs | API key (`GEMINI_API_KEY`) | Google AI Studio quota/limits; default voice `GEMINI_TTS_VOICE_NAME=Kore` |
 | Fish Audio | Voice generation fallback after Gemini TTS | API key (`FISHAUDIO_API_KEY`) | No free tier — Plus plan ($11/mo) required for API access |
 | Pexels API | Stock video/images fallback + photo search for text card images (`search_photos()`) | API key (free) | 200 requests/hr |
@@ -181,7 +181,7 @@ ScrapeCreators credits reserved for TikTok video URLs, creator profiles, engagem
 
 - **No secrets stored in database** — only environment variable name references.
 - Secrets via `.env` (local) or environment variables (production).
-- `.env` loaded at CLI entry point via `python-dotenv` `load_dotenv()` in `__main__.py`; `pydantic-settings` `AppSettings` provides typed access for dashboard and CLI.
+- `.env` loaded centrally via `clipper_agency/bootstrap.py` `load_env()` (idempotent, `override=False`) at three chokepoints: CLI `__main__.py` import-time, Flask `dashboard/app.py` import-time, and `Orchestrator.__init__` (covers dashboard-create + retry + resume). `pydantic-settings` `AppSettings` provides typed access; services read `os.getenv()`. See ADR 0028.
 - Dashboard shows `configured ✅` or `missing ❌`, never exposes values.
 
 ### 5.2 Authentication & Authorization
