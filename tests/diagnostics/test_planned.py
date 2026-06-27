@@ -96,6 +96,26 @@ def test_derive_planned_boundaries_final_beat_absorbs_trailing_audio() -> None:
     assert planned == [(0.0, 10.0)]
 
 
+def test_derive_planned_boundaries_uses_clamped_rendered_durations() -> None:
+    """A beat whose raw audio span is < 0.5s is rendered at the 0.5s minimum
+    (canonical ``_MIN_BEAT_DURATION_SEC`` clamp). PLANNED uses the rendered
+    (clamped) duration, so two sub-half-second beats still plan as 0.5s each
+    (Codex P2 on ffb2e77)."""
+    # Arrange — two beats, each spanning only 0.1s of audio.
+    beats = [
+        {"beat_id": 1, "word_range": [0, 0]},
+        {"beat_id": 2, "word_range": [1, 1]},
+    ]
+    timestamps = [
+        {"word": "a", "start": 0.0, "end": 0.1},
+        {"word": "b", "start": 0.1, "end": 0.2},
+    ]
+    # Act — both beats clamp to 0.5s; cumulative => [(0.0, 0.5), (0.5, 1.0)].
+    planned = derive_planned_boundaries(beats, timestamps)
+    # Assert
+    assert planned == [(0.0, 0.5), (0.5, 1.0)]
+
+
 # ---------------------------------------------------------------------------
 # compute_transition_count
 # ---------------------------------------------------------------------------

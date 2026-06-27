@@ -75,8 +75,8 @@ def _build_report(job_dir: str, assets_cache: str | None, pixel_threshold: float
             "(no ElevenLabs job available)"
         )
     notes.append(
-        "rendered_scene_manifest not persisted; PLANNED via canonical timeline "
-        "(build_canonical_timeline, ADR 0020)"
+        "PLANNED via canonical timeline rendered durations (ADR 0020) — matches "
+        "the Composer's placed layout"
     )
     tail_audio = signals.voiceover_duration_sec - (planned[-1][1] if planned else 0.0)
     if tail_audio > 1.0:

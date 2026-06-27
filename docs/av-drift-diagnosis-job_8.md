@@ -21,4 +21,4 @@
 ## Notes
 
 - provider is gemini_tts; measured fallback-TTS path (no ElevenLabs job available)
-- rendered_scene_manifest not persisted; PLANNED via canonical timeline (build_canonical_timeline, ADR 0020)
+- PLANNED via canonical timeline rendered durations (ADR 0020) — matches the Composer's placed layout
