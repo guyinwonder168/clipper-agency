@@ -16,6 +16,7 @@ from clipper_agency.agents.scriptwriter import ScriptwriterAgent
 from clipper_agency.agents.segment_producer import SegmentProducerAgent
 from clipper_agency.agents.visual_director import VisualDirectorAgent
 from clipper_agency.agents.voice_producer import VoiceProducerAgent
+from clipper_agency.bootstrap import load_env
 from clipper_agency.config.loader import (
     build_channel_description,
     get_angle_name,
@@ -126,6 +127,10 @@ class Orchestrator:
     """Coordinates the full gated agent pipeline: Topic → Output Package."""
 
     def __init__(self, db_path: str = "data/clipper.db") -> None:
+        # Load .env before any service reads env vars. Orchestrator is the
+        # common chokepoint for CLI + dashboard + retry + resume, so this
+        # guarantees os.getenv is populated regardless of the entry point.
+        load_env()
         self.db_path = db_path
         self._trace_writer = self._build_trace_writer()
         # DEV gate-relax: frozenset of gate IDs whose hard_fail is downgraded

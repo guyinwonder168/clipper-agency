@@ -1,17 +1,15 @@
 """Tests for ElevenLabs voice generation service."""
 
 import base64
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from clipper_agency.services.elevenlabs import (
+    DEFAULT_VOICE_SETTINGS,
     ElevenLabsService,
     chars_to_words,
-    DEFAULT_VOICE_SETTINGS,
 )
-
 
 # ---------------------------------------------------------------------------
 # Existing tests (backward compat)
@@ -59,7 +57,7 @@ def _make_timestamps_response(chars: list[str], starts: list[float], ends: list[
     """Build a fake /with-timestamps JSON response."""
     audio_b64 = base64.b64encode(b"fake_audio_bytes").decode()
     return {
-        "audio": audio_b64,
+        "audio_base64": audio_b64,
         "alignment": {
             "chars": chars,
             "character_start_times_seconds": starts,
@@ -99,17 +97,36 @@ def test_generate_voice_with_timestamps_no_key():
             svc.generate_voice_with_timestamps("test", "voice")
 
 
+# Env knobs read by _voice_settings_from_env / _model_id. Cleared in
+# default-settings tests so a developer's loaded .env cannot leak through and
+# flip the asserted defaults (hermetic — no real network / no .env dependency).
+_VOICE_ENV_KNOBS = (
+    "ELEVENLABS_MODEL",
+    "ELEVENLABS_VOICE_STABILITY",
+    "ELEVENLABS_VOICE_SIMILARITY",
+    "ELEVENLABS_VOICE_STYLE",
+    "ELEVENLABS_VOICE_SPEAKER_BOOST",
+    "ELEVENLABS_VOICE_SPEED",
+)
+
+
 @patch("httpx.Client")
-def test_generate_voice_with_timestamps_uses_default_settings(mock_httpx):
+def test_generate_voice_with_timestamps_uses_default_settings(mock_httpx, monkeypatch):
     """Voice settings should default to the audio-first architecture defaults."""
+    # Arrange — isolate env: API key set, every voice/model knob removed so a
+    # developer's loaded .env cannot flip the asserted defaults.
     mock_response = MagicMock()
     mock_response.json.return_value = _make_timestamps_response([], [], [])
     mock_httpx.return_value.__enter__.return_value.post.return_value = mock_response
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    for knob in _VOICE_ENV_KNOBS:
+        monkeypatch.delenv(knob, raising=False)
 
-    with patch.dict("os.environ", {"ELEVENLABS_API_KEY": "test-key"}):
-        svc = ElevenLabsService()
-        svc.generate_voice_with_timestamps(text="test", voice_id="v")
+    # Act
+    svc = ElevenLabsService()
+    svc.generate_voice_with_timestamps(text="test", voice_id="v")
 
+    # Assert
     call_kwargs = mock_httpx.return_value.__enter__.return_value.post.call_args
     body = call_kwargs.kwargs.get("json", call_kwargs[1].get("json", {}))
     assert body["voice_settings"]["stability"] == 0.4
@@ -119,19 +136,26 @@ def test_generate_voice_with_timestamps_uses_default_settings(mock_httpx):
 
 
 @patch("httpx.Client")
-def test_generate_voice_with_timestamps_custom_settings(mock_httpx):
+def test_generate_voice_with_timestamps_custom_settings(mock_httpx, monkeypatch):
     """Custom voice settings should override defaults."""
+    # Arrange
     mock_response = MagicMock()
     mock_response.json.return_value = _make_timestamps_response([], [], [])
     mock_httpx.return_value.__enter__.return_value.post.return_value = mock_response
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    for knob in _VOICE_ENV_KNOBS:
+        monkeypatch.delenv(knob, raising=False)
 
+    # Act
     custom = {"stability": 0.8, "similarity_boost": 0.9}
-    with patch.dict("os.environ", {"ELEVENLABS_API_KEY": "test-key"}):
-        svc = ElevenLabsService()
-        svc.generate_voice_with_timestamps(
-            text="test", voice_id="v", voice_settings=custom,
-        )
+    svc = ElevenLabsService()
+    svc.generate_voice_with_timestamps(
+        text="test",
+        voice_id="v",
+        voice_settings=custom,
+    )
 
+    # Assert
     call_kwargs = mock_httpx.return_value.__enter__.return_value.post.call_args
     body = call_kwargs.kwargs.get("json", call_kwargs[1].get("json", {}))
     assert body["voice_settings"]["stability"] == 0.8

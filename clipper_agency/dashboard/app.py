@@ -6,6 +6,7 @@ from flask import Flask, abort, jsonify, render_template, request
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
 from clipper_agency import __version__
+from clipper_agency.bootstrap import load_env
 from clipper_agency.config.loader import load_settings
 from clipper_agency.core.job_debug import collect_job_debug, summarize_jobs
 from clipper_agency.dashboard.auth import requires_auth
@@ -13,6 +14,11 @@ from clipper_agency.db.connection import get_connection
 from clipper_agency.db.queries import PIPELINE_ORDER, get_agent_state, get_job, list_jobs
 from clipper_agency.db.schema import initialize_schema
 from clipper_agency.orchestrator.engine import Orchestrator
+
+# Load .env BEFORE reading any env var (e.g. DASHBOARD_SECRET_KEY below) and
+# before services are constructed. The dashboard/retry/resume paths previously
+# skipped this, leaving every os.getenv service misconfigured.
+load_env()
 
 app = Flask(__name__, template_folder="templates")
 app.secret_key = os.getenv("DASHBOARD_SECRET_KEY")

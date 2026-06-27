@@ -12,13 +12,72 @@ logger = logging.getLogger(__name__)
 
 CHAR_LIMIT = 10_000
 
-# Default voice settings for the audio-first architecture
+# Default voice settings for the audio-first architecture. Single source of
+# truth — _voice_settings_from_env reads every default from here (incl. speed).
 DEFAULT_VOICE_SETTINGS: dict[str, Any] = {
     "stability": 0.4,
     "similarity_boost": 0.75,
     "style": 0.7,
     "use_speaker_boost": True,
+    "speed": 1.0,
 }
+
+# Default TTS model (Free-tier-safe). Paid plans unlock eleven_v3 (emotion /
+# intonation tags) and eleven_turbo_v2_5 (low-latency) — switch via .env.
+DEFAULT_MODEL_ID = "eleven_multilingual_v2"
+
+
+def _model_id() -> str:
+    """TTS model id, env-overridable via ``ELEVENLABS_MODEL``.
+
+    Mitigation: missing/empty var falls back to ``DEFAULT_MODEL_ID`` so a
+    bare ``.env`` never breaks TTS.
+    """
+    return os.getenv("ELEVENLABS_MODEL", DEFAULT_MODEL_ID) or DEFAULT_MODEL_ID
+
+
+def _env_float(name: str, default: float) -> float:
+    """Env var as float; missing or unparseable → ``default``."""
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Env var as bool. Empty → ``default``; ``false/0/no/off`` → False; else True."""
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw not in ("false", "0", "no", "off")
+
+
+def _voice_settings_from_env() -> dict[str, Any]:
+    """Voice settings from env, each knob falling back to its default.
+
+    A partial ``.env`` (e.g. only ``ELEVENLABS_VOICE_STYLE`` set) still yields
+    a valid settings dict and never raises. Knobs:
+
+    - ``ELEVENLABS_VOICE_STABILITY`` (0.0–1.0, default 0.4)
+    - ``ELEVENLABS_VOICE_SIMILARITY`` (0.0–1.0, default 0.75)
+    - ``ELEVENLABS_VOICE_STYLE`` (0.0–1.0, default 0.7; higher = more intonation)
+    - ``ELEVENLABS_VOICE_SPEAKER_BOOST`` (bool, default true)
+    - ``ELEVENLABS_VOICE_SPEED`` (0.7–1.2, default 1.0; pacing)
+    """
+    return {
+        "stability": _env_float("ELEVENLABS_VOICE_STABILITY", DEFAULT_VOICE_SETTINGS["stability"]),
+        "similarity_boost": _env_float(
+            "ELEVENLABS_VOICE_SIMILARITY", DEFAULT_VOICE_SETTINGS["similarity_boost"]
+        ),
+        "style": _env_float("ELEVENLABS_VOICE_STYLE", DEFAULT_VOICE_SETTINGS["style"]),
+        "use_speaker_boost": _env_bool(
+            "ELEVENLABS_VOICE_SPEAKER_BOOST", DEFAULT_VOICE_SETTINGS["use_speaker_boost"]
+        ),
+        "speed": _env_float("ELEVENLABS_VOICE_SPEED", DEFAULT_VOICE_SETTINGS["speed"]),
+    }
 
 
 def _scan_word_chars(
@@ -68,14 +127,18 @@ def chars_to_words(text: str, char_timestamps: list[dict]) -> list[dict]:
 
     for word in words:
         word_start, word_end, char_idx = _scan_word_chars(
-            word, char_idx, char_timestamps,
+            word,
+            char_idx,
+            char_timestamps,
         )
         if word_start is not None and word_end is not None:
-            word_timestamps.append({
-                "word": word,
-                "start": word_start,
-                "end": word_end,
-            })
+            word_timestamps.append(
+                {
+                    "word": word,
+                    "start": word_start,
+                    "end": word_end,
+                }
+            )
 
     return word_timestamps
 
@@ -88,9 +151,36 @@ class ElevenLabsService:
     def __init__(self) -> None:
         self.api_key = os.getenv("ELEVENLABS_API_KEY")
 
-    def generate_voice(
-        self, text: str, voice_id: str, output_path: str
-    ) -> str:
+    def _post_tts(
+        self,
+        client: httpx.Client,
+        path: str,
+        text: str,
+        voice_settings: dict[str, Any],
+    ) -> httpx.Response:
+        """POST a text-to-speech request and return the raw response.
+
+        Shared by :meth:`generate_voice` and
+        :meth:`generate_voice_with_timestamps` — same headers, timeout, and
+        body shape (``text`` / ``model_id`` / ``voice_settings``); only the
+        endpoint *path* differs. Raises ``HTTPStatusError`` on API errors.
+        """
+        resp = client.post(
+            path,
+            headers={
+                "xi-api-key": self.api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "text": text,
+                "model_id": _model_id(),
+                "voice_settings": voice_settings,
+            },
+        )
+        resp.raise_for_status()
+        return resp
+
+    def generate_voice(self, text: str, voice_id: str, output_path: str) -> str:
         """Generate speech audio from text and write to a file.
 
         Returns:
@@ -104,19 +194,12 @@ class ElevenLabsService:
 
         logger.info("ElevenLabs: TTS request — voice_id=%s text_len=%d", voice_id, len(text))
         with httpx.Client(base_url=self.BASE_URL, timeout=120) as client:
-            resp = client.post(
+            resp = self._post_tts(
+                client,
                 f"/text-to-speech/{voice_id}",
-                headers={
-                    "xi-api-key": self.api_key,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "text": text,
-                    "model_id": "eleven_multilingual_v2",
-                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.7},
-                },
+                text,
+                _voice_settings_from_env(),
             )
-            resp.raise_for_status()
             path.write_bytes(resp.content)
 
         logger.info("ElevenLabs: saved audio to %s (%d bytes)", output_path, len(resp.content))
@@ -149,26 +232,20 @@ class ElevenLabsService:
         if not self.api_key:
             raise ValueError("ELEVENLABS_API_KEY not set")
 
-        settings = voice_settings or DEFAULT_VOICE_SETTINGS
+        settings = voice_settings or _voice_settings_from_env()
 
         logger.info(
             "ElevenLabs: TTS+timestamps request — voice_id=%s text_len=%d",
-            voice_id, len(text),
+            voice_id,
+            len(text),
         )
         with httpx.Client(base_url=self.BASE_URL, timeout=120) as client:
-            resp = client.post(
+            resp = self._post_tts(
+                client,
                 f"/text-to-speech/{voice_id}/with-timestamps",
-                headers={
-                    "xi-api-key": self.api_key,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "text": text,
-                    "model_id": "eleven_multilingual_v2",
-                    "voice_settings": settings,
-                },
+                text,
+                settings,
             )
-            resp.raise_for_status()
             data = resp.json()
 
         audio_bytes = _extract_audio_bytes(data)
@@ -176,14 +253,20 @@ class ElevenLabsService:
 
         logger.info(
             "ElevenLabs: got audio (%d bytes) + %d char timestamps",
-            len(audio_bytes), len(char_timestamps),
+            len(audio_bytes),
+            len(char_timestamps),
         )
         return audio_bytes, char_timestamps
 
 
 def _extract_audio_bytes(data: dict) -> bytes:
-    """Extract audio bytes from the with-timestamps response."""
-    audio_b64 = data.get("audio", "")
+    """Extract audio bytes from the with-timestamps response.
+
+    The ``/with-timestamps`` endpoint returns the audio under the
+    ``audio_base64`` key (verified live: top-level keys are ``audio_base64``,
+    ``alignment``, ``normalized_alignment`` — there is no ``audio`` key).
+    """
+    audio_b64 = data.get("audio_base64", "")
     if not audio_b64:
         raise ValueError("ElevenLabs response missing audio data")
     return base64.b64decode(audio_b64)
@@ -199,7 +282,4 @@ def _extract_char_timestamps(data: dict) -> list[dict]:
     if not chars:
         return []
 
-    return [
-        {"char": c, "start": s, "end": e}
-        for c, s, e in zip(chars, starts, ends)
-    ]
+    return [{"char": c, "start": s, "end": e} for c, s, e in zip(chars, starts, ends)]

@@ -61,7 +61,7 @@ OUTPUT_DIR/job_{id}/     # final customer-ready package only
 | **Database** | SQLite → PostgreSQL | Same schema, swap for scale |
 | **Queue** | None/sequential (MVP) → DB-backed → Redis + RQ/Celery | Avoid overhead until multi-account |
 | **LLM Access** | OpenRouter API | Large Language Model (LLM) access, multi-model, single key |
-| **Secrets** | `python-dotenv` + `pydantic-settings` `AppSettings` | `.env` loaded at CLI entry (`__main__.py`); services use `os.getenv()`. No secrets in DB. |
+| **Secrets** | `python-dotenv` (via `clipper_agency/bootstrap.py`) + `pydantic-settings` `AppSettings` | `.env` loaded centrally at CLI + dashboard import-time + `Orchestrator.__init__` (`bootstrap.load_env()`); services use `os.getenv()`. No secrets in DB. See ADR 0028. |
 | **Logging** | Python `logging` + `clipper_agency/core/logging.py` | `setup_logging()` + `get_logger()`. All agents, services, orchestrator, and LLM client log at DEBUG/INFO/ERROR. Configurable via `LOG_LEVEL` env var. |
 | **Prompts** | Filesystem (`prompts/*.md`) | Git-tracked, versioned, Markdown format |
 | **Container** | Docker Compose | VPS-ready |

@@ -4,9 +4,9 @@ import json
 import os
 
 import click
-from dotenv import load_dotenv
 
 from clipper_agency import __version__
+from clipper_agency.bootstrap import load_env
 from clipper_agency.config.loader import (
     get_agent_config,
     load_niche,
@@ -18,8 +18,10 @@ from clipper_agency.core.logging import get_logger, setup_logging
 from clipper_agency.db.queries import PIPELINE_ORDER
 from clipper_agency.orchestrator.engine import Orchestrator
 
-# Load .env into os.environ before any service reads env vars.
-load_dotenv()
+# Load .env into os.environ before any service reads env vars. Idempotent;
+# the same call lives in dashboard.app and Orchestrator.__init__ so EVERY
+# entry point (CLI / dashboard / retry / resume) loads .env, not just the CLI.
+load_env()
 
 logger = get_logger(__name__)
 
