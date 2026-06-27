@@ -155,3 +155,75 @@ def test_load_job_signals_rejects_non_dict_narrative_entry(tmp_path: Path) -> No
     # Act / Assert
     with pytest.raises(ValueError):
         load_job_signals(job_dir, assets_cache=cache)
+
+
+def test_load_job_signals_rejects_non_list_timestamps(tmp_path: Path) -> None:
+    """A voice_producer/output.json whose 'timestamps' is not a JSON array
+    raises ValueError at the boundary (Codex P2 — PR #78 thread PRRT_kwDOSepZ-M6Mrw_F)
+    instead of an uncaught TypeError/IndexError later in build_drift_table."""
+    # Arrange — valid narrative; timestamps is a string, not an array.
+    cache = tmp_path / "cache"
+    job_dir = tmp_path / "outputs" / "job_8"
+    job_dir.mkdir(parents=True)
+    (job_dir / "video.mp4").write_bytes(b"fake")
+    sw = cache / "job_8" / "agents" / "scriptwriter"
+    vp = cache / "job_8" / "agents" / "voice_producer"
+    sw.mkdir(parents=True)
+    vp.mkdir(parents=True)
+    (sw / "narrative_structure.json").write_text(json.dumps([{"beat_id": 1, "word_range": [0, 0]}]))
+    (vp / "output.json").write_text(json.dumps({"provider": "x", "timestamps": "nope"}))
+    # Act / Assert
+    with pytest.raises(ValueError, match="timestamps"):
+        load_job_signals(job_dir, assets_cache=cache)
+
+
+def test_load_job_signals_rejects_non_dict_timestamp_entry(tmp_path: Path) -> None:
+    """A non-dict entry inside the timestamps array raises ValueError (reject)
+    rather than being silently dropped — mirrors narrative_structure validation."""
+    # Arrange — valid narrative; timestamps array contains a bare string.
+    cache = tmp_path / "cache"
+    job_dir = tmp_path / "outputs" / "job_8"
+    job_dir.mkdir(parents=True)
+    (job_dir / "video.mp4").write_bytes(b"fake")
+    sw = cache / "job_8" / "agents" / "scriptwriter"
+    vp = cache / "job_8" / "agents" / "voice_producer"
+    sw.mkdir(parents=True)
+    vp.mkdir(parents=True)
+    (sw / "narrative_structure.json").write_text(json.dumps([{"beat_id": 1, "word_range": [0, 0]}]))
+    (vp / "output.json").write_text(
+        json.dumps(
+            {"provider": "x", "timestamps": [{"word": "a", "start": 0.0, "end": 1.0}, "bad"]}
+        )
+    )
+    # Act / Assert
+    with pytest.raises(ValueError, match="timestamps"):
+        load_job_signals(job_dir, assets_cache=cache)
+
+
+def test_load_job_signals_rejects_empty_timestamps_with_non_empty_narrative(
+    tmp_path: Path,
+) -> None:
+    """Empty timestamps with a non-empty narrative raises ValueError —
+    derive_planned_boundaries would return [] and build_drift_table's
+    planned[i] would otherwise IndexError."""
+    # Arrange — narrative has 1 beat; timestamps is an empty array.
+    cache = tmp_path / "cache"
+    job_dir = tmp_path / "outputs" / "job_8"
+    job_dir.mkdir(parents=True)
+    (job_dir / "video.mp4").write_bytes(b"fake")
+    sw = cache / "job_8" / "agents" / "scriptwriter"
+    vp = cache / "job_8" / "agents" / "voice_producer"
+    sw.mkdir(parents=True)
+    vp.mkdir(parents=True)
+    (sw / "narrative_structure.json").write_text(
+        json.dumps(
+            [
+                {"beat_id": 1, "word_range": [0, 0]},
+                {"beat_id": 2, "word_range": [0, 0]},
+            ]
+        )
+    )
+    (vp / "output.json").write_text(json.dumps({"provider": "x", "timestamps": []}))
+    # Act / Assert
+    with pytest.raises(ValueError, match="empty"):
+        load_job_signals(job_dir, assets_cache=cache)

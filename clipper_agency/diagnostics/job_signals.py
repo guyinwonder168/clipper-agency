@@ -20,6 +20,7 @@ from clipper_agency.diagnostics.planned import read_ts
 
 _CACHE_DIR_NAME = "data/assets/cache"
 _JOB_RE = re.compile(r"job_(\d+)$")
+_TIMESTAMP_HINT = "'timestamps'"
 
 
 def _resolve_assets_cache(job_dir: Path, override: str | Path | None) -> Path:
@@ -75,6 +76,35 @@ def _read_json_list(path: Path, missing_hint: str) -> list[dict]:
     return data
 
 
+def _read_timestamps(voice: dict, narrative_beats: int) -> list[dict]:
+    """Extract + validate ``voice['timestamps']`` (Codex P2 — PR #78).
+
+    Mirrors the ``_read_json_list`` reject-don't-drop contract: a non-list
+    value or a non-dict entry raises ``ValueError`` (mapped to exit 2 by the
+    CLI), and empty timestamps with a non-empty narrative is rejected because
+    ``derive_planned_boundaries`` would return ``[]`` and ``build_drift_table``'s
+    ``planned[i]`` would otherwise raise an uncaught ``IndexError``.
+    """
+    raw = voice.get("timestamps", [])
+    if not isinstance(raw, list):
+        raise ValueError(
+            f"AV-drift input malformed ({_TIMESTAMP_HINT}): must be a JSON array, "
+            f"got {type(raw).__name__}"
+        )
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"AV-drift input malformed ({_TIMESTAMP_HINT}): expected JSON array "
+                f"of objects, got a {type(item).__name__} entry"
+            )
+    if narrative_beats and not raw:
+        raise ValueError(
+            f"AV-drift input malformed ({_TIMESTAMP_HINT}): is empty but narrative "
+            f"has {narrative_beats} beats"
+        )
+    return list(raw)
+
+
 def _parse_job_id(job_dir: Path) -> int:
     """Parse the integer job id from a ``job_<N>`` basename."""
     match = _JOB_RE.search(job_dir.name)
@@ -112,7 +142,7 @@ def load_job_signals(
     if not video_path.is_file():
         raise FileNotFoundError(f"AV-drift input missing: job_{job_id} muxed video ({video_path})")
 
-    timestamps = list(voice.get("timestamps", []))
+    timestamps = _read_timestamps(voice, len(narrative_structure))
     provider = str(voice.get("provider", "unknown"))
     voiceover_duration = float(voice.get("voiceover_duration_sec", 0.0))
 
