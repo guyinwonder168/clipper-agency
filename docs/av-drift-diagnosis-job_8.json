@@ -88,7 +88,7 @@
       "scene_planned_start": 17.677,
       "scene_planned_end": 20.202,
       "scene_achieved_start": 17.1333,
-      "scene_achieved_end": null,
+      "scene_achieved_end": 17.9,
       "caption_window_start": 17.677,
       "caption_window_end": 20.202,
       "offset_ms_planned": 0.0,
@@ -102,12 +102,12 @@
       "beat_word_end": 21.465,
       "scene_planned_start": 20.202,
       "scene_planned_end": 21.465,
-      "scene_achieved_start": null,
+      "scene_achieved_start": 17.9,
       "scene_achieved_end": null,
       "caption_window_start": 20.202,
       "caption_window_end": 21.465,
       "offset_ms_planned": 0.0,
-      "offset_ms_achieved": null,
+      "offset_ms_achieved": -2302.000000000003,
       "offset_ms_predicted_margin": 600.0
     },
     {
@@ -116,7 +116,7 @@
       "beat_word_start": 21.465,
       "beat_word_end": 23.569,
       "scene_planned_start": 21.465,
-      "scene_planned_end": 23.569,
+      "scene_planned_end": 34.091,
       "scene_achieved_start": null,
       "scene_achieved_end": null,
       "caption_window_start": 21.465,
@@ -128,7 +128,6 @@
   ],
   "notes": [
     "provider is gemini_tts; measured fallback-TTS path (no ElevenLabs job available)",
-    "manifest not persisted; PLANNED derived from narrative_structure+timestamps",
-    "uncovered tail audio: 10.522s after last planned beat end (timestamps beyond the final beat's word_range)"
+    "rendered_scene_manifest not persisted; PLANNED via canonical timeline (build_canonical_timeline, ADR 0020)"
   ]
 }

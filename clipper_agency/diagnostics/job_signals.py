@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 
 from clipper_agency.diagnostics.models import JobSignals
-from clipper_agency.diagnostics.planned import _ts
+from clipper_agency.diagnostics.planned import read_ts
 
 _CACHE_DIR_NAME = "data/assets/cache"
 _JOB_RE = re.compile(r"job_(\d+)$")
@@ -53,7 +53,11 @@ def _read_json_dict(path: Path, missing_hint: str) -> dict:
 
 
 def _read_json_list(path: Path, missing_hint: str) -> list[dict]:
-    """Read + parse JSON, requiring a list of dicts; raise on miss/malformed."""
+    """Read + parse JSON, requiring a list of dicts; raise on miss/malformed.
+
+    A non-dict entry raises ``ValueError`` (reject) rather than being silently
+    dropped — a diagnosis tool must surface malformed beats, not hide them.
+    """
     if not path.is_file():
         raise FileNotFoundError(f"AV-drift input missing: {missing_hint} ({path})")
     data = json.loads(path.read_text())
@@ -62,7 +66,13 @@ def _read_json_list(path: Path, missing_hint: str) -> list[dict]:
             f"AV-drift input malformed ({missing_hint}): expected JSON array, "
             f"got {type(data).__name__}"
         )
-    return [item for item in data if isinstance(item, dict)]
+    for item in data:
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"AV-drift input malformed ({missing_hint}): expected JSON array "
+                f"of objects, got a {type(item).__name__} entry"
+            )
+    return data
 
 
 def _parse_job_id(job_dir: Path) -> int:
@@ -111,7 +121,7 @@ def load_job_signals(
     if narrative_structure and timestamps:
         first = narrative_structure[0]
         w0, w1 = first.get("word_range", [0, 0])
-        hook_duration = _ts(timestamps, w1, "end") - _ts(timestamps, w0, "start")
+        hook_duration = read_ts(timestamps, w1, "end") - read_ts(timestamps, w0, "start")
 
     return JobSignals(
         job_id=job_id,

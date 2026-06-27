@@ -74,7 +74,10 @@ def _build_report(job_dir: str, assets_cache: str | None, pixel_threshold: float
             f"provider is {signals.provider}; measured fallback-TTS path "
             "(no ElevenLabs job available)"
         )
-    notes.append("manifest not persisted; PLANNED derived from narrative_structure+timestamps")
+    notes.append(
+        "rendered_scene_manifest not persisted; PLANNED via canonical timeline "
+        "(build_canonical_timeline, ADR 0020)"
+    )
     tail_audio = signals.voiceover_duration_sec - (planned[-1][1] if planned else 0.0)
     if tail_audio > 1.0:
         notes.append(

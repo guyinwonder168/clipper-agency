@@ -79,6 +79,23 @@ def test_derive_planned_boundaries_empty_returns_empty() -> None:
     assert planned == []
 
 
+def test_derive_planned_boundaries_final_beat_absorbs_trailing_audio() -> None:
+    """The canonical timeline extends the final beat to the last timestamp end
+    (ADR 0020) — so PLANNED matches the layout the Composer renders, including
+    trailing audio beyond the last beat's own word_range."""
+    # Arrange — one beat covering only word 0, but timestamps run to 10s.
+    beats = [{"beat_id": 1, "word_range": [0, 0]}]
+    timestamps = [
+        {"word": "a", "start": 0.0, "end": 1.0},
+        {"word": "b", "start": 1.0, "end": 2.0},
+        {"word": "c", "start": 2.0, "end": 10.0},
+    ]
+    # Act
+    planned = derive_planned_boundaries(beats, timestamps)
+    # Assert — beat 1 spans 0.0 -> final timestamp end (10.0), NOT 0.0 -> 1.0.
+    assert planned == [(0.0, 10.0)]
+
+
 # ---------------------------------------------------------------------------
 # compute_transition_count
 # ---------------------------------------------------------------------------

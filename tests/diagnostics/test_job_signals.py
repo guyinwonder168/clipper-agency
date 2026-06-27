@@ -131,3 +131,27 @@ def test_load_job_signals_rejects_non_list_narrative(tmp_path: Path) -> None:
     # Act / Assert
     with pytest.raises(ValueError):
         load_job_signals(job_dir, assets_cache=cache)
+
+
+def test_load_job_signals_rejects_non_dict_narrative_entry(tmp_path: Path) -> None:
+    """A non-dict entry inside the narrative array raises ValueError (reject)
+    rather than being silently dropped — a diagnosis tool must surface malformed
+    beats (Codex P3)."""
+    # Arrange — a valid array but one entry is a bare string.
+    cache = tmp_path / "cache"
+    job_dir = tmp_path / "outputs" / "job_8"
+    job_dir.mkdir(parents=True)
+    (job_dir / "video.mp4").write_bytes(b"fake")
+    sw = cache / "job_8" / "agents" / "scriptwriter"
+    vp = cache / "job_8" / "agents" / "voice_producer"
+    sw.mkdir(parents=True)
+    vp.mkdir(parents=True)
+    (sw / "narrative_structure.json").write_text(
+        json.dumps([{"beat_id": 1, "word_range": [0, 0]}, "not_a_dict"])
+    )
+    (vp / "output.json").write_text(
+        json.dumps({"provider": "x", "timestamps": [{"word": "a", "start": 0.0, "end": 1.0}]})
+    )
+    # Act / Assert
+    with pytest.raises(ValueError):
+        load_job_signals(job_dir, assets_cache=cache)

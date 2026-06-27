@@ -13,7 +13,7 @@ inclusive word_range directly rather than calling the canonical builder.
 
 from __future__ import annotations
 
-from clipper_agency.diagnostics.planned import _ts
+from clipper_agency.diagnostics.planned import read_ts
 
 
 def derive_caption_windows(
@@ -32,7 +32,7 @@ def derive_caption_windows(
     for beat in narrative_structure:
         beat_id = beat.get("beat_id", len(windows) + 1)
         w0, w1 = beat["word_range"]
-        start = _ts(timestamps, w0, "start")
-        end = _ts(timestamps, w1, "end")
+        start = read_ts(timestamps, w0, "start")
+        end = read_ts(timestamps, w1, "end")
         windows[beat_id] = (start, end)
     return windows

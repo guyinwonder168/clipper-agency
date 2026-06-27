@@ -12,14 +12,13 @@
 | 3 | story_1_reveal | 10.943 | 13.047 | 10.943 | 13.047 | 11.467 | 12.633 | 10.943 | 13.047 | 0.000 | 523.700 | 200.000 |
 | 4 | story_2 | 13.047 | 15.993 | 13.047 | 15.993 | 12.633 | 15.100 | 13.047 | 15.993 | 0.000 | -413.700 | 300.000 |
 | 5 | story_2_reveal | 15.993 | 17.677 | 15.993 | 17.677 | 15.100 | 17.133 | 15.993 | 17.677 | 0.000 | -893.000 | 400.000 |
-| 6 | story_3 | 17.677 | 20.202 | 17.677 | 20.202 | 17.133 | - | 17.677 | 20.202 | 0.000 | -543.700 | 500.000 |
-| 7 | reaction | 20.202 | 21.465 | 20.202 | 21.465 | - | - | 20.202 | 21.465 | 0.000 | - | 600.000 |
-| 8 | closing_cta | 21.465 | 23.569 | 21.465 | 23.569 | - | - | 21.465 | 23.569 | 0.000 | - | 700.000 |
+| 6 | story_3 | 17.677 | 20.202 | 17.677 | 20.202 | 17.133 | 17.900 | 17.677 | 20.202 | 0.000 | -543.700 | 500.000 |
+| 7 | reaction | 20.202 | 21.465 | 20.202 | 21.465 | 17.900 | - | 20.202 | 21.465 | 0.000 | -2302.000 | 600.000 |
+| 8 | closing_cta | 21.465 | 23.569 | 21.465 | 34.091 | - | - | 21.465 | 23.569 | 0.000 | - | 700.000 |
 
 **transition_count**: 7
 
 ## Notes
 
 - provider is gemini_tts; measured fallback-TTS path (no ElevenLabs job available)
-- manifest not persisted; PLANNED derived from narrative_structure+timestamps
-- uncovered tail audio: 10.522s after last planned beat end (timestamps beyond the final beat's word_range)
+- rendered_scene_manifest not persisted; PLANNED via canonical timeline (build_canonical_timeline, ADR 0020)

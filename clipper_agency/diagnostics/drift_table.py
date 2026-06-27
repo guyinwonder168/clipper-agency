@@ -10,7 +10,7 @@ against the deterministic ``N * 0.1s`` upper bound.
 from __future__ import annotations
 
 from clipper_agency.diagnostics.models import DriftRow, JobSignals
-from clipper_agency.diagnostics.planned import _ts
+from clipper_agency.diagnostics.planned import read_ts
 
 # Upper-bound _SAFETY_MARGIN drift per xfade transition (ms). The PR-13 Q4
 # hypothesis tests whether measured achieved drift approaches N * 100ms.
@@ -36,8 +36,8 @@ def build_drift_table(
         beat_id = beat.get("beat_id", i + 1)
         section = str(beat.get("section", ""))
         w0, w1 = beat.get("word_range", [0, 0])
-        beat_word_start = _ts(signals.timestamps, w0, "start")
-        beat_word_end = _ts(signals.timestamps, w1, "end")
+        beat_word_start = read_ts(signals.timestamps, w0, "start")
+        beat_word_end = read_ts(signals.timestamps, w1, "end")
 
         planned_start, planned_end = planned[i]
 
