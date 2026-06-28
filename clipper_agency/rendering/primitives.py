@@ -10,20 +10,28 @@ from clipper_agency.rendering.contracts import CaptionOverlay, VisualOverlay
 from clipper_agency.rendering.templates import RenderTemplateConfig
 
 # --- FFmpeg drawtext special characters (order matters: \ must be first) ---
+# Single quote is NOT here — it needs POSIX close-escape-reopen (see below),
+# not a bare backslash escape.
 
-_ESCAPE_CHARS = ("\\", ":", "%", "{", "}", "'")
+_ESCAPE_CHARS = ("\\", ":", "%", "{", "}")
 
 
 def escape_drawtext(text: str) -> str:
-    """Escape FFmpeg drawtext special characters in *text*.
+    """Escape FFmpeg drawtext special characters for use inside ``text='...'``.
 
-    The returned string is safe for use inside FFmpeg ``drawtext`` filter
-    ``text='...'`` values (colon, backslash, percent, braces, and single
-    quotes are all backslash-escaped).
+    Backslash, colon, percent, and braces are backslash-escaped. A literal
+    single quote uses the POSIX ``'\\''`` close-escape-reopen sequence — a bare
+    ``\\'`` does NOT survive ffmpeg's single-quoted filtergraph parser (it
+    terminates the string, leaking subsequent content as filter names; job_18
+    failed with "No such filter: '14.663'" from a caption containing
+    ``'Cong'``).
     """
     result = text
     for char in _ESCAPE_CHARS:
         result = result.replace(char, "\\" + char)
+    # Single quote: POSIX close-quote, escaped-quote, reopen-quote. A bare \'
+    # terminates the single-quoted filtergraph string.
+    result = result.replace("'", "'\\''")
     return result
 
 
