@@ -1,14 +1,11 @@
 """Tests for VoiceProducerAgent — provider fallback, timestamps, and artifacts."""
 
 import json
-import os
-from pathlib import Path
 from unittest import mock
 
 import pytest
 
 from clipper_agency.agents.voice_producer import VoiceProducerAgent
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -65,8 +62,10 @@ class TestVoiceProducerFallback:
         agent = VoiceProducerAgent()
         el_svc = _mock_elevenlabs_service()
 
-        with mock.patch.object(agent, "_create_service", return_value=el_svc), \
-             mock.patch.object(agent, "_probe_audio_duration", return_value=5.0):
+        with (
+            mock.patch.object(agent, "_create_service", return_value=el_svc),
+            mock.patch.object(agent, "_probe_audio_duration", return_value=5.0),
+        ):
             result = agent.execute(
                 job_id=1,
                 voiceover_text=VOICEOVER_TEXT,
@@ -94,8 +93,10 @@ class TestVoiceProducerFallback:
         def _create(provider):
             return services[provider]
 
-        with mock.patch.object(agent, "_create_service", side_effect=_create), \
-             mock.patch.object(agent, "_probe_audio_duration", return_value=3.0):
+        with (
+            mock.patch.object(agent, "_create_service", side_effect=_create),
+            mock.patch.object(agent, "_probe_audio_duration", return_value=3.0),
+        ):
             result = agent.execute(
                 job_id=2,
                 voiceover_text=VOICEOVER_TEXT,
@@ -164,8 +165,10 @@ class TestVoiceProducerFallback:
             assert provider == "fish_audio"
             return _mock_service(True)
 
-        with mock.patch.object(agent, "_create_service", side_effect=_create), \
-             mock.patch.object(agent, "_probe_audio_duration", return_value=3.0):
+        with (
+            mock.patch.object(agent, "_create_service", side_effect=_create),
+            mock.patch.object(agent, "_probe_audio_duration", return_value=3.0),
+        ):
             result = agent.execute(
                 job_id=5,
                 voiceover_text=VOICEOVER_TEXT,
@@ -256,10 +259,13 @@ class TestVoiceProducerArtifacts:
         agent = VoiceProducerAgent()
         el_svc = _mock_elevenlabs_service()
 
-        with mock.patch.object(agent, "_create_service", return_value=el_svc), \
-             mock.patch.object(agent, "_probe_audio_duration", return_value=3.0):
+        with (
+            mock.patch.object(agent, "_create_service", return_value=el_svc),
+            mock.patch.object(agent, "_probe_audio_duration", return_value=3.0),
+        ):
             agent.execute(
-                job_id=7, voiceover_text=VOICEOVER_TEXT,
+                job_id=7,
+                voiceover_text=VOICEOVER_TEXT,
                 assets_cache=str(tmp_path),
             )
 
@@ -274,10 +280,13 @@ class TestVoiceProducerArtifacts:
         agent = VoiceProducerAgent()
         el_svc = _mock_elevenlabs_service()
 
-        with mock.patch.object(agent, "_create_service", return_value=el_svc), \
-             mock.patch.object(agent, "_probe_audio_duration", return_value=3.0):
+        with (
+            mock.patch.object(agent, "_create_service", return_value=el_svc),
+            mock.patch.object(agent, "_probe_audio_duration", return_value=3.0),
+        ):
             agent.execute(
-                job_id=8, voiceover_text=VOICEOVER_TEXT,
+                job_id=8,
+                voiceover_text=VOICEOVER_TEXT,
                 assets_cache=str(tmp_path),
             )
 
@@ -293,10 +302,13 @@ class TestVoiceProducerArtifacts:
         agent = VoiceProducerAgent()
         el_svc = _mock_elevenlabs_service(audio=b"real_audio_data")
 
-        with mock.patch.object(agent, "_create_service", return_value=el_svc), \
-             mock.patch.object(agent, "_probe_audio_duration", return_value=3.0):
+        with (
+            mock.patch.object(agent, "_create_service", return_value=el_svc),
+            mock.patch.object(agent, "_probe_audio_duration", return_value=3.0),
+        ):
             agent.execute(
-                job_id=10, voiceover_text=VOICEOVER_TEXT,
+                job_id=10,
+                voiceover_text=VOICEOVER_TEXT,
                 assets_cache=str(tmp_path),
             )
 
@@ -310,10 +322,13 @@ class TestVoiceProducerArtifacts:
         agent = VoiceProducerAgent()
         el_svc = _mock_elevenlabs_service(audio=b"audio_data")
 
-        with mock.patch.object(agent, "_create_service", return_value=el_svc), \
-             mock.patch.object(agent, "_probe_audio_duration", return_value=3.0):
+        with (
+            mock.patch.object(agent, "_create_service", return_value=el_svc),
+            mock.patch.object(agent, "_probe_audio_duration", return_value=3.0),
+        ):
             agent.execute(
-                job_id=11, voiceover_text=VOICEOVER_TEXT,
+                job_id=11,
+                voiceover_text=VOICEOVER_TEXT,
                 assets_cache=str(tmp_path),
             )
 
@@ -341,10 +356,13 @@ class TestVoiceProducerScriptCompat:
         agent = VoiceProducerAgent()
         el_svc = _mock_elevenlabs_service()
 
-        with mock.patch.object(agent, "_create_service", return_value=el_svc), \
-             mock.patch.object(agent, "_probe_audio_duration", return_value=3.0):
+        with (
+            mock.patch.object(agent, "_create_service", return_value=el_svc),
+            mock.patch.object(agent, "_probe_audio_duration", return_value=3.0),
+        ):
             result = agent.execute(
-                job_id=20, script=self.SCENES,
+                job_id=20,
+                script=self.SCENES,
                 assets_cache=str(tmp_path),
             )
 
@@ -406,3 +424,113 @@ def test_stitch_timestamps_adds_cumulative_offset():
     assert result[0]["start"] == 0.0
     assert result[1]["start"] == pytest.approx(10.0)
     assert result[1]["end"] == pytest.approx(10.5)
+
+
+# ---------------------------------------------------------------------------
+# Per-chunk resilience tests (P2 — any chunk failure fails over to the next
+# provider for a COMPLETE voiceover; a partial voiceover would silently desync
+# the audio-first beat-timing, so it is never returned).
+# ---------------------------------------------------------------------------
+
+
+class TestChunkedVoiceoverPerChunkResilience:
+    """Per-chunk isolation in _generate_chunked_voiceover."""
+
+    def _long_text(self) -> str:
+        """Text long enough to exceed the elevenlabs 10k char chunking limit."""
+        sentence = "This is a numbered test sentence that should be repeated. "
+        return sentence * 600  # ~33k chars → multiple chunks
+
+    def test_one_chunk_fails_aborts_for_provider_failover(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Chunk 1 succeeds, chunk 2 raises → abort (raise) for provider fail-over.
+
+        A partial voiceover missing chunk 2's narration would silently desync
+        downstream beat-timing, so any chunk failure must fail over to the next
+        provider for a full-text re-generation rather than return partial.
+        """
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
+        text = self._long_text()
+        agent = VoiceProducerAgent()
+
+        call_count = {"n": 0}
+
+        def _flaky_service(_provider):
+            svc = mock.MagicMock()
+
+            def _gen(chunk, voice_id):
+                call_count["n"] += 1
+                if call_count["n"] == 2:
+                    raise RuntimeError("transient chunk 2 failure")
+                return (
+                    b"chunk_audio",
+                    [
+                        {"char": "H", "start": 0.0, "end": 0.05},
+                        {"char": "i", "start": 0.05, "end": 0.1},
+                    ],
+                )
+
+            svc.generate_voice_with_timestamps.side_effect = _gen
+            return svc
+
+        with (
+            mock.patch.object(agent, "_create_service", side_effect=_flaky_service),
+            mock.patch.object(agent, "_probe_audio_duration", return_value=2.0),
+            mock.patch.object(
+                agent, "_concat_audio_chunks", return_value=str(tmp_path / "voiceover.mp3")
+            ),
+        ):
+            # Chunk 2 failure aborts the chunked voiceover (raise) — no partial.
+            with pytest.raises(RuntimeError, match="transient chunk 2 failure"):
+                agent._generate_chunked_voiceover(
+                    text,
+                    "voice-x",
+                    job_id=99,
+                    assets_cache=str(tmp_path),
+                    provider="elevenlabs",
+                )
+
+        # Fail-fast: the chunked path did NOT keep generating past the failure.
+        assert call_count["n"] == 2
+
+    def test_all_chunks_fail_propagates_to_provider_fallback(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Every chunk raising → re-raise so the provider-fallback chain runs."""
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
+        monkeypatch.setenv("GEMINI_API_KEY", "gem-key")  # fallback available
+        text = self._long_text()
+        agent = VoiceProducerAgent()
+
+        def _failing_service(_provider):
+            svc = mock.MagicMock()
+            svc.generate_voice_with_timestamps.side_effect = RuntimeError("all chunks fail")
+            return svc
+
+        gemini_svc = _mock_service(True)
+
+        def _create(provider):
+            if provider == "elevenlabs":
+                return _failing_service(provider)
+            return gemini_svc
+
+        gemini_out = str(tmp_path / "voiceover.mp3")
+        with (
+            mock.patch.object(agent, "_create_service", side_effect=_create),
+            mock.patch.object(agent, "_probe_audio_duration", return_value=2.0),
+            mock.patch.object(agent, "_concat_audio_chunks", return_value=gemini_out),
+        ):
+            result = agent.execute(
+                job_id=100,
+                voiceover_text=text,
+                assets_cache=str(tmp_path),
+            )
+
+        # All ElevenLabs chunks failed → propagated → Gemini fallback engaged.
+        assert result["status"] == "success"
+        assert result["provider"] == "gemini_tts"
