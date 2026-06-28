@@ -55,7 +55,7 @@ def _chunk_text(text: str, chunk_size_words: int = 250) -> list[str]:
     """Split text at sentence boundaries into chunks of ~chunk_size_words."""
     import re
 
-    sentences = re.split(r'(?<=[.!?])\s+', text)
+    sentences = re.split(r"(?<=[.!?])\s+", text)
     chunks: list[str] = []
     current_chunk: list[str] = []
     current_words = 0
@@ -115,21 +115,26 @@ class VoiceProducerAgent(BaseAgent):
 
         # Persist input contract
         if agent_dir:
-            write_json(agent_input_file(assets_cache, job_id, "voice_producer"), {
-                "job_id": job_id,
-                "text_length": len(text),
-                "voice_id": voice_id,
-            })
+            write_json(
+                agent_input_file(assets_cache, job_id, "voice_producer"),
+                {
+                    "job_id": job_id,
+                    "text_length": len(text),
+                    "voice_id": voice_id,
+                },
+            )
 
         # Generate single continuous voiceover
         result = self._generate_continuous_voiceover(
-            text, voice_id, job_id, assets_cache,
+            text,
+            voice_id,
+            job_id,
+            assets_cache,
         )
 
         # Persist output contract
         if agent_dir:
-            write_json(agent_output_file(assets_cache, job_id, "voice_producer"),
-                        result)
+            write_json(agent_output_file(assets_cache, job_id, "voice_producer"), result)
 
         return result
 
@@ -160,27 +165,41 @@ class VoiceProducerAgent(BaseAgent):
                 if len(text) > char_limit:
                     logger.warning(
                         "Voice: text (%d chars) exceeds %s limit (%d), chunking",
-                        len(text), provider, char_limit,
+                        len(text),
+                        provider,
+                        char_limit,
                     )
                     return self._build_success_output(
                         self._generate_chunked_voiceover(
-                            text, resolved_voice, job_id, assets_cache, provider,
+                            text,
+                            resolved_voice,
+                            job_id,
+                            assets_cache,
+                            provider,
                         ),
                         provider,
                     )
 
                 if provider == "elevenlabs":
                     result = self._try_elevenlabs_with_timestamps(
-                        text, resolved_voice, job_id, assets_cache,
+                        text,
+                        resolved_voice,
+                        job_id,
+                        assets_cache,
                     )
                 else:
                     result = self._try_provider_with_approx_timestamps(
-                        provider, text, resolved_voice, job_id, assets_cache,
+                        provider,
+                        text,
+                        resolved_voice,
+                        job_id,
+                        assets_cache,
                     )
 
                 if result.get("status") == "success":
                     return self._build_success_output(
-                        result, provider,
+                        result,
+                        provider,
                     )
 
             except Exception:
@@ -200,7 +219,8 @@ class VoiceProducerAgent(BaseAgent):
         """Generate voiceover using ElevenLabs with native timestamps."""
         service = self._create_service("elevenlabs")
         audio_bytes, char_timestamps = service.generate_voice_with_timestamps(
-            text, voice_id,
+            text,
+            voice_id,
         )
 
         # Save audio file
@@ -245,7 +265,9 @@ class VoiceProducerAgent(BaseAgent):
     # ── Timestamp methods ──
 
     def _extract_word_timestamps(
-        self, char_timestamps: list[dict], text: str,
+        self,
+        char_timestamps: list[dict],
+        text: str,
     ) -> list[dict]:
         """Convert ElevenLabs character-level timestamps to word-level."""
         raw = chars_to_words(text, char_timestamps)
@@ -253,7 +275,9 @@ class VoiceProducerAgent(BaseAgent):
         return [WordTimestamp(**w).model_dump() for w in raw]
 
     def _approximate_timestamps(
-        self, audio_path: str, text: str,
+        self,
+        audio_path: str,
+        text: str,
     ) -> list[dict]:
         """Estimate word timestamps by distributing words across audio duration.
 
@@ -339,11 +363,13 @@ class VoiceProducerAgent(BaseAgent):
 
         for chunk_ts, duration in zip(chunk_timestamps, chunk_durations):
             for ts in chunk_ts:
-                stitched.append({
-                    "word": ts["word"],
-                    "start": ts["start"] + offset,
-                    "end": ts["end"] + offset,
-                })
+                stitched.append(
+                    {
+                        "word": ts["word"],
+                        "start": ts["start"] + offset,
+                        "end": ts["end"] + offset,
+                    }
+                )
             offset += duration
 
         return stitched
@@ -354,15 +380,26 @@ class VoiceProducerAgent(BaseAgent):
         from pathlib import Path
 
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False,
+            mode="w",
+            suffix=".txt",
+            delete=False,
         ) as list_file:
             for path in chunk_paths:
                 list_file.write(f"file '{path}'\n")
             list_path = Path(list_file.name)
 
         cmd = [
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-            "-i", str(list_path), "-c", "copy", output_path,
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_path),
+            "-c",
+            "copy",
+            output_path,
         ]
         subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=True)
         list_path.unlink(missing_ok=True)
@@ -376,7 +413,18 @@ class VoiceProducerAgent(BaseAgent):
         assets_cache: str,
         provider: str,
     ) -> dict[str, Any]:
-        """Generate voiceover by chunking text, generating per-chunk, then concatenating."""
+        """Generate voiceover by chunking text, generating per-chunk, then concatenating.
+
+        Per-chunk fail-over: ANY failing chunk is logged and re-raised
+        immediately so the outer provider-fallback chain re-attempts the WHOLE
+        script on the next provider for a COMPLETE voiceover. A partial
+        voiceover (missing a chunk's narration) is never returned — the
+        audio-first architecture drives beat-timing off the COMPLETE
+        word-timestamp set, so a hole would silently desync downstream
+        composition. Only successfully-generated chunks are appended to the
+        three parallel lists (chunk_paths / chunk_timestamps /
+        chunk_durations), keeping them index-aligned for concat + stitching.
+        """
         chunks = _chunk_text(text)
         logger.warning("Voice: chunking %d chars into %d chunks", len(text), len(chunks))
 
@@ -389,19 +437,38 @@ class VoiceProducerAgent(BaseAgent):
         for i, chunk in enumerate(chunks):
             chunk_path = os.path.join(output_dir, f"chunk_{i:03d}.mp3")
 
-            if provider == "elevenlabs":
-                service = self._create_service("elevenlabs")
-                audio_bytes, char_ts = service.generate_voice_with_timestamps(
-                    chunk, voice_id or "",
+            # Broad except is intentional: this IS the per-chunk isolation
+            # boundary. The audio-first architecture drives beat-timing off the
+            # COMPLETE word-timestamp set, so a voiceover missing any chunk's
+            # narration would silently desync downstream composition. Therefore
+            # any chunk failure FAILS OVER to the next provider (full-text
+            # re-generation) rather than returning a partial voiceover — log +
+            # raise so the outer provider-fallback chain (ElevenLabs → Gemini →
+            # Fish) re-attempts the whole script for a complete audio.
+            try:
+                if provider == "elevenlabs":
+                    service = self._create_service("elevenlabs")
+                    audio_bytes, char_ts = service.generate_voice_with_timestamps(
+                        chunk,
+                        voice_id or "",
+                    )
+                    os.makedirs(os.path.dirname(chunk_path), exist_ok=True)
+                    with open(chunk_path, "wb") as f:
+                        f.write(audio_bytes)
+                    word_ts = self._extract_word_timestamps(char_ts, chunk)
+                else:
+                    service = self._create_service(provider)
+                    service.generate_voice(chunk, voice_id or "", chunk_path)
+                    word_ts = self._approximate_timestamps(chunk_path, chunk)
+            except Exception as chunk_err:
+                logger.warning(
+                    "Voice: chunk %d/%d failed (%s); aborting chunked "
+                    "voiceover for provider fail-over",
+                    i + 1,
+                    len(chunks),
+                    chunk_err,
                 )
-                os.makedirs(os.path.dirname(chunk_path), exist_ok=True)
-                with open(chunk_path, "wb") as f:
-                    f.write(audio_bytes)
-                word_ts = self._extract_word_timestamps(char_ts, chunk)
-            else:
-                service = self._create_service(provider)
-                service.generate_voice(chunk, voice_id or "", chunk_path)
-                word_ts = self._approximate_timestamps(chunk_path, chunk)
+                raise
 
             chunk_paths.append(chunk_path)
             chunk_timestamps.append(word_ts)
@@ -458,9 +525,10 @@ class VoiceProducerAgent(BaseAgent):
             return 0.0
         try:
             result = subprocess.run(
-                ["ffprobe", "-v", "quiet", "-print_format", "json",
-                 "-show_format", filepath],
-                capture_output=True, text=True, timeout=10,
+                ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", filepath],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode != 0:
                 return 0.0
