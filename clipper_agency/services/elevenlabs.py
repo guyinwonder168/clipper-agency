@@ -1,12 +1,24 @@
-"""ElevenLabs text-to-speech service."""
+"""ElevenLabs text-to-speech service.
+
+Migrated (Phase 1, ADR 0029) from hand-rolled httpx calls to the OFFICIAL
+``elevenlabs`` Python SDK. The SDK returns TYPED response objects, which
+permanently eliminates the bug class where a wrong JSON key silently produced
+empty timestamps: alignment is now accessed via the typed attributes
+``.characters`` / ``.character_start_times_seconds`` /
+``.character_end_times_seconds`` on ``CharacterAlignmentResponseModel`` rather
+than via fragile string-dict lookups.
+
+The public service contract is UNCHANGED so ``voice_producer`` is untouched.
+"""
 
 import base64
 import logging
 import os
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-import httpx
+from elevenlabs import ElevenLabs, VoiceSettings
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +92,53 @@ def _voice_settings_from_env() -> dict[str, Any]:
     }
 
 
+def _build_voice_settings(settings: dict[str, Any]) -> VoiceSettings:
+    """Build a typed SDK ``VoiceSettings`` from a plain settings dict.
+
+    Only known fields are forwarded; unknown keys are ignored so a partial
+    caller-supplied dict cannot break construction. All ``VoiceSettings``
+    fields are optional in the SDK, so missing keys simply use SDK defaults.
+    """
+    return VoiceSettings(
+        stability=settings.get("stability"),
+        similarity_boost=settings.get("similarity_boost"),
+        style=settings.get("style"),
+        use_speaker_boost=settings.get("use_speaker_boost"),
+        speed=settings.get("speed"),
+    )
+
+
+class _TimestampsResponse(Protocol):
+    """Structural type for the SDK ``AudioWithTimestampsResponse``.
+
+    Lets tests inject a lightweight stub (e.g. ``SimpleNamespace``) without
+    importing the concrete SDK type.
+    """
+
+    audio_base_64: str
+
+    @property
+    def alignment(self) -> Any: ...
+
+
+def _alignment_to_char_timestamps(alignment: Any) -> list[dict]:
+    """Project a typed alignment onto the ``{"char","start","end"}`` shape.
+
+    Reads the TYPED attributes ``.characters`` / ``.character_start_times_seconds``
+    / ``.character_end_times_seconds`` (the SDK never exposes the old ``chars``
+    key here), so a key-typo cannot silently yield an empty list. Returns ``[]``
+    when the alignment is absent or empty — matching the legacy contract.
+    """
+    if alignment is None:
+        return []
+    chars = getattr(alignment, "characters", None) or []
+    starts = getattr(alignment, "character_start_times_seconds", None) or []
+    ends = getattr(alignment, "character_end_times_seconds", None) or []
+    if not chars:
+        return []
+    return [{"char": c, "start": s, "end": e} for c, s, e in zip(chars, starts, ends)]
+
+
 def _scan_word_chars(
     word: str,
     char_idx: int,
@@ -143,42 +202,30 @@ def chars_to_words(text: str, char_timestamps: list[dict]) -> list[dict]:
     return word_timestamps
 
 
-class ElevenLabsService:
-    """Text-to-speech generation via ElevenLabs API."""
+def _decode_audio(resp: _TimestampsResponse) -> bytes:
+    """Decode the SDK response's base64 audio payload to raw bytes.
 
-    BASE_URL = "https://api.elevenlabs.io/v1"
+    The SDK exposes audio as ``audio_base_64`` (a base64 STRING, not bytes).
+    """
+    audio_b64 = getattr(resp, "audio_base_64", "") or ""
+    if not audio_b64:
+        raise ValueError("ElevenLabs response missing audio data")
+    return base64.b64decode(audio_b64)
+
+
+def _join_audio_stream(stream: Iterator[bytes]) -> bytes:
+    """Materialize a chunked ``convert()`` byte stream into one buffer."""
+    return b"".join(stream)
+
+
+class ElevenLabsService:
+    """Text-to-speech generation via the official ElevenLabs SDK."""
 
     def __init__(self) -> None:
         self.api_key = os.getenv("ELEVENLABS_API_KEY")
-
-    def _post_tts(
-        self,
-        client: httpx.Client,
-        path: str,
-        text: str,
-        voice_settings: dict[str, Any],
-    ) -> httpx.Response:
-        """POST a text-to-speech request and return the raw response.
-
-        Shared by :meth:`generate_voice` and
-        :meth:`generate_voice_with_timestamps` — same headers, timeout, and
-        body shape (``text`` / ``model_id`` / ``voice_settings``); only the
-        endpoint *path* differs. Raises ``HTTPStatusError`` on API errors.
-        """
-        resp = client.post(
-            path,
-            headers={
-                "xi-api-key": self.api_key,
-                "Content-Type": "application/json",
-            },
-            json={
-                "text": text,
-                "model_id": _model_id(),
-                "voice_settings": voice_settings,
-            },
-        )
-        resp.raise_for_status()
-        return resp
+        # One client per service; api_key is None here when unset — guarded by
+        # the per-method ``if not self.api_key`` checks (legacy contract).
+        self._client = ElevenLabs(api_key=self.api_key or "")
 
     def generate_voice(self, text: str, voice_id: str, output_path: str) -> str:
         """Generate speech audio from text and write to a file.
@@ -193,16 +240,17 @@ class ElevenLabsService:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info("ElevenLabs: TTS request — voice_id=%s text_len=%d", voice_id, len(text))
-        with httpx.Client(base_url=self.BASE_URL, timeout=120) as client:
-            resp = self._post_tts(
-                client,
-                f"/text-to-speech/{voice_id}",
-                text,
-                _voice_settings_from_env(),
+        audio_bytes = _join_audio_stream(
+            self._client.text_to_speech.convert(
+                voice_id=voice_id,
+                model_id=_model_id(),
+                text=text,
+                voice_settings=_build_voice_settings(_voice_settings_from_env()),
             )
-            path.write_bytes(resp.content)
+        )
+        path.write_bytes(audio_bytes)
 
-        logger.info("ElevenLabs: saved audio to %s (%d bytes)", output_path, len(resp.content))
+        logger.info("ElevenLabs: saved audio to %s (%d bytes)", output_path, len(audio_bytes))
         return str(path)
 
     def generate_voice_with_timestamps(
@@ -210,15 +258,17 @@ class ElevenLabsService:
     ) -> tuple[bytes, list[dict]]:
         """Generate speech audio with character-level timestamps.
 
-        Uses the ``POST /v1/text-to-speech/{voice_id}/with-timestamps``
-        endpoint which returns JSON with both audio (base64) and alignment
-        data containing per-character start/end times.
+        Uses the SDK ``text_to_speech.convert_with_timestamps`` which returns a
+        TYPED ``AudioWithTimestampsResponse`` (audio as base64 +
+        ``CharacterAlignmentResponseModel`` alignment). Alignment is read via
+        typed attributes, so the legacy ``chars`` vs ``characters`` key-typo
+        bug class cannot recur.
 
         Args:
             text: The text to synthesize.
             voice_id: ElevenLabs voice identifier.
-            voice_settings: Optional voice configuration.  Defaults to
-                :data:`DEFAULT_VOICE_SETTINGS`.
+            voice_settings: Optional voice configuration dict. Defaults to
+                :data:`DEFAULT_VOICE_SETTINGS` via ``_voice_settings_from_env``.
 
         Returns:
             Tuple of ``(audio_bytes, char_timestamps)`` where
@@ -227,7 +277,6 @@ class ElevenLabsService:
 
         Raises:
             ValueError: If ``ELEVENLABS_API_KEY`` is not set.
-            httpx.HTTPStatusError: On API errors.
         """
         if not self.api_key:
             raise ValueError("ELEVENLABS_API_KEY not set")
@@ -239,47 +288,24 @@ class ElevenLabsService:
             voice_id,
             len(text),
         )
-        with httpx.Client(base_url=self.BASE_URL, timeout=120) as client:
-            resp = self._post_tts(
-                client,
-                f"/text-to-speech/{voice_id}/with-timestamps",
-                text,
-                settings,
-            )
-            data = resp.json()
+        resp = self._client.text_to_speech.convert_with_timestamps(
+            voice_id=voice_id,
+            model_id=_model_id(),
+            text=text,
+            voice_settings=_build_voice_settings(settings),
+        )
 
-        audio_bytes = _extract_audio_bytes(data)
-        char_timestamps = _extract_char_timestamps(data)
+        audio_bytes = _decode_audio(resp)
+        char_timestamps = _alignment_to_char_timestamps(getattr(resp, "alignment", None))
 
+        # DEBUG-only character count — never logs raw audio / base64.
+        logger.debug(
+            "ElevenLabs: alignment character count=%d",
+            len(char_timestamps),
+        )
         logger.info(
             "ElevenLabs: got audio (%d bytes) + %d char timestamps",
             len(audio_bytes),
             len(char_timestamps),
         )
         return audio_bytes, char_timestamps
-
-
-def _extract_audio_bytes(data: dict) -> bytes:
-    """Extract audio bytes from the with-timestamps response.
-
-    The ``/with-timestamps`` endpoint returns the audio under the
-    ``audio_base64`` key (verified live: top-level keys are ``audio_base64``,
-    ``alignment``, ``normalized_alignment`` — there is no ``audio`` key).
-    """
-    audio_b64 = data.get("audio_base64", "")
-    if not audio_b64:
-        raise ValueError("ElevenLabs response missing audio data")
-    return base64.b64decode(audio_b64)
-
-
-def _extract_char_timestamps(data: dict) -> list[dict]:
-    """Extract character-level timestamps from the with-timestamps response."""
-    alignment = data.get("alignment", {})
-    chars = alignment.get("chars", [])
-    starts = alignment.get("character_start_times_seconds", [])
-    ends = alignment.get("character_end_times_seconds", [])
-
-    if not chars:
-        return []
-
-    return [{"char": c, "start": s, "end": e} for c, s, e in zip(chars, starts, ends)]
