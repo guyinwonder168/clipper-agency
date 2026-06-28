@@ -110,6 +110,15 @@ class TestParseScenesJsonSalvage:
         content = '{"scenes": {"scene_number": 1}}'
         assert VisualDirectorAgent._parse_scenes_json(content) == []
 
+    def test_non_dict_scene_items_route_to_fallback(self) -> None:
+        """A `scenes` LIST with a non-dict entry (e.g. a stray string) must
+        route to fallback ([]) — `_normalize_beat_plan` calls `item.get(...)`
+        per scene, so a non-dict item would raise before the fallback runs.
+        (Codex P2 review.)"""
+        # `scenes` is a list, but item 2 is a string, not a dict.
+        content = '{"scenes": [{"scene_number": 1}, "bad"]}'
+        assert VisualDirectorAgent._parse_scenes_json(content) == []
+
     def test_unsalvageable_garbage_raises(self) -> None:
         # Truly broken (no JSON structure at all) must still raise so the
         # caller's try/except logs + degrades as before.

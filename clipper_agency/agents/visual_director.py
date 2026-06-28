@@ -556,13 +556,22 @@ class VisualDirectorAgent(BaseAgent):
             # wrong-shaped `scenes` would break `_normalize_beat_plan`
             # downstream instead of routing to the deterministic fallback.
             # Return [] so the caller's empty-plan contract engages. (Codex P2.)
-            if isinstance(scenes, list):
-                return scenes
-            logger.warning(
-                "VD planning JSON recovered but 'scenes' is %s (not a list); routing to fallback",
-                type(scenes).__name__,
-            )
-            return []
+            if not isinstance(scenes, list):
+                logger.warning(
+                    "VD planning JSON recovered but 'scenes' is %s (not a list); routing to fallback",
+                    type(scenes).__name__,
+                )
+                return []
+            # Reject non-dict scene items (e.g. a stray string in the list): a
+            # non-dict item would break `_normalize_beat_plan` (`item.get(...)`)
+            # downstream. Route to the deterministic fallback (covers ALL beats)
+            # rather than return a partial/invalid plan. (Codex P2.)
+            if not all(isinstance(item, dict) for item in scenes):
+                logger.warning(
+                    "VD planning JSON recovered but 'scenes' has non-dict items; routing to fallback"
+                )
+                return []
+            return scenes
         return []
 
     def _llm_plan_scenes_response(
