@@ -415,12 +415,15 @@ class VoiceProducerAgent(BaseAgent):
     ) -> dict[str, Any]:
         """Generate voiceover by chunking text, generating per-chunk, then concatenating.
 
-        Per-chunk resilience: a single failing chunk is logged and skipped so one
-        bad chunk cannot kill the whole voiceover. If EVERY chunk fails, the last
-        error is re-raised so the outer provider-fallback chain still triggers.
-        Only successfully-generated chunks are appended to the three parallel
-        lists (chunk_paths / chunk_timestamps / chunk_durations), keeping them
-        index-aligned for concat + timestamp stitching.
+        Per-chunk fail-over: ANY failing chunk is logged and re-raised
+        immediately so the outer provider-fallback chain re-attempts the WHOLE
+        script on the next provider for a COMPLETE voiceover. A partial
+        voiceover (missing a chunk's narration) is never returned — the
+        audio-first architecture drives beat-timing off the COMPLETE
+        word-timestamp set, so a hole would silently desync downstream
+        composition. Only successfully-generated chunks are appended to the
+        three parallel lists (chunk_paths / chunk_timestamps /
+        chunk_durations), keeping them index-aligned for concat + stitching.
         """
         chunks = _chunk_text(text)
         logger.warning("Voice: chunking %d chars into %d chunks", len(text), len(chunks))
