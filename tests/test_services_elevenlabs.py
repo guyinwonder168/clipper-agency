@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from elevenlabs.core import ApiError
 
 from clipper_agency.services.elevenlabs import (
     DEFAULT_VOICE_SETTINGS,
@@ -342,3 +343,123 @@ def test_default_voice_settings_values():
     assert DEFAULT_VOICE_SETTINGS["similarity_boost"] == 0.75
     assert DEFAULT_VOICE_SETTINGS["style"] == 0.7
     assert DEFAULT_VOICE_SETTINGS["use_speaker_boost"] is True
+
+
+# ---------------------------------------------------------------------------
+# Retry / backoff / typed-error propagation (Phase 2, ADR 0029)
+# ---------------------------------------------------------------------------
+# ``elevenlabs.core.ApiError`` is the SDK's base HTTP error (4xx subclasses
+# like BadRequestError extend it; 5xx raise the base class with status_code
+# set). It is constructed with ``ApiError(status_code=N)`` and exposes the
+# status via the ``.status_code`` attribute (keyword-only at construction).
+# Tests build it with the REAL class so the helper's isinstance + getattr
+# status_code reads are exercised against the genuine SDK type.
+
+
+def _retry_service(svc: ElevenLabsService, side_effects: list):
+    """Patch the SDK client whose ``convert_with_timestamps`` plays back
+    *side_effects* in order (raise / return). Returns the mock client."""
+    mock_client = MagicMock()
+    mock_client.text_to_speech.convert_with_timestamps.side_effect = side_effects
+    svc._client = mock_client
+    return mock_client
+
+
+def test_retry_on_5xx_then_success(monkeypatch):
+    """Retry on transient HTTP 500/429, then succeed: 3 calls, result returned."""
+    # Arrange — make backoff sleeps instant so the test does not wait.
+    monkeypatch.setattr("clipper_agency.services.elevenlabs.time.sleep", lambda _: None)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    ok_resp = _make_timestamps_response(["H", "i"], [0.0, 0.1], [0.1, 0.2])
+    svc = ElevenLabsService()
+    mock_client = _retry_service(
+        svc,
+        [
+            ApiError(status_code=500),
+            ApiError(status_code=429),
+            ok_resp,
+        ],
+    )
+
+    # Act
+    audio_bytes, timestamps = svc.generate_voice_with_timestamps(text="Hi", voice_id="v")
+
+    # Assert — retried twice (3 total attempts) and returned the 3rd result.
+    assert mock_client.text_to_speech.convert_with_timestamps.call_count == 3
+    assert audio_bytes == b"fake_audio_bytes"
+    assert len(timestamps) == 2
+
+
+def test_no_retry_on_4xx_caller_error(monkeypatch):
+    """Non-retryable HTTP 400: 1 call, propagates unchanged (no retries)."""
+    # Arrange — sleep must NOT be called for a 4xx (no backoff).
+    monkeypatch.setattr("clipper_agency.services.elevenlabs.time.sleep", lambda _: None)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    svc = ElevenLabsService()
+    mock_client = _retry_service(svc, [ApiError(status_code=400)])
+
+    # Act / Assert — propagates the SAME typed error after a single attempt.
+    with pytest.raises(ApiError) as excinfo:
+        svc.generate_voice_with_timestamps(text="x", voice_id="v")
+    assert excinfo.value.status_code == 400
+    assert mock_client.text_to_speech.convert_with_timestamps.call_count == 1
+
+
+def test_exhaust_retries_then_raise(monkeypatch):
+    """Always HTTP 503: 3 attempts (max), last ApiError re-raised unchanged."""
+    # Arrange
+    monkeypatch.setattr("clipper_agency.services.elevenlabs.time.sleep", lambda _: None)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    svc = ElevenLabsService()
+    mock_client = _retry_service(
+        svc,
+        [ApiError(status_code=503), ApiError(status_code=503), ApiError(status_code=503)],
+    )
+
+    # Act / Assert — exhausted retries, the typed error propagates.
+    with pytest.raises(ApiError) as excinfo:
+        svc.generate_voice_with_timestamps(text="x", voice_id="v")
+    assert excinfo.value.status_code == 503
+    assert mock_client.text_to_speech.convert_with_timestamps.call_count == 3
+
+
+def _raising_iter(exc):
+    """Iterator that raises *exc* on first ``next()`` — simulates the SDK's LAZY
+    ``convert`` byte-stream, whose HTTP request + transient ``ApiError`` fire
+    during ITERATION, not at iterator construction. A mock that raises on CALL
+    would falsely pass even a buggy wrapper that only retries construction."""
+
+    def _gen():
+        raise exc
+        yield  # pragma: no cover — makes _gen a generator function
+
+    return _gen()
+
+
+def test_retry_on_streaming_convert_then_success(monkeypatch, tmp_path):
+    """generate_voice (streaming convert): retry must wrap stream MATERIALIZATION.
+
+    The transient ApiError fires during ``b"".join`` iteration (lazy HTTP), so it
+    must be caught + retried — not escape past _with_retry. This test FAILS on a
+    wrapper that only retries the bare convert() call (iterator construction).
+    """
+    # Arrange — instant backoff.
+    monkeypatch.setattr("clipper_agency.services.elevenlabs.time.sleep", lambda _: None)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    svc = ElevenLabsService()
+    mock_client = MagicMock()
+    mock_client.text_to_speech.convert.side_effect = [
+        _raising_iter(ApiError(status_code=500)),
+        _raising_iter(ApiError(status_code=429)),
+        iter([b"chunk1", b"chunk2"]),
+    ]
+    svc._client = mock_client
+
+    # Act
+    out = tmp_path / "voice.mp3"
+    result = svc.generate_voice(text="Hi", voice_id="v", output_path=str(out))
+
+    # Assert — retried twice (3 total attempts) + the joined bytes were written.
+    assert mock_client.text_to_speech.convert.call_count == 3
+    assert out.read_bytes() == b"chunk1chunk2"
+    assert result == str(out)

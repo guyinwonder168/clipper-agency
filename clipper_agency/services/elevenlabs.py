@@ -8,21 +8,47 @@ empty timestamps: alignment is now accessed via the typed attributes
 ``.character_end_times_seconds`` on ``CharacterAlignmentResponseModel`` rather
 than via fragile string-dict lookups.
 
+Phase 2 (ADR 0029) wraps both ``convert`` calls in ``_with_retry`` for
+production resilience (retry on HTTP 429 / 5xx with exponential backoff +
+jitter; do NOT retry 4xx caller errors). SDK typed errors propagate unchanged
+after retries exhaust — see :data:`_RETRY_STATUS_CODES`.
+
 The public service contract is UNCHANGED so ``voice_producer`` is untouched.
 """
 
 import base64
 import logging
 import os
-from collections.abc import Iterator
+import random
+import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from elevenlabs import ElevenLabs, VoiceSettings
+from elevenlabs.core import ApiError
 
 logger = logging.getLogger(__name__)
 
 CHAR_LIMIT = 10_000
+
+# --- Retry / backoff policy (CLAUDE.md: every external API call needs retry +
+# exponential backoff + jitter — non-negotiable). ---------------------------------
+# Retry ONLY transient failures: HTTP 429 (rate limit) + 5xx (server errors).
+# 4xx caller errors (400/401/403/404/...) are NOT retried — the request itself
+# is wrong; retrying burns quota without changing the outcome.
+_RETRY_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+_MAX_ATTEMPTS = 3  # 1 initial + 2 retries.
+_BACKOFF_BASE_SEC = 1.0  # delay = base * 2**(attempt-1) + jitter.
+_BACKOFF_JITTER_FRAC = 0.5  # jitter ∈ [0, 0.5 * base_delay).
+
+# Per-call request timeout (seconds). Restores the P1 httpx timeout=120 ceiling
+# the SDK migration dropped (ECC P1 review). The SDK exposes this as the native
+# ``request_options={"timeout_in_seconds": N}`` RequestOptions knob on BOTH
+# ``convert`` and ``convert_with_timestamps`` — no guessing, no httpx leak.
+_REQUEST_TIMEOUT_SEC = 120
+
+_T = TypeVar("_T")
 
 # Default voice settings for the audio-first architecture. Single source of
 # truth — _voice_settings_from_env reads every default from here (incl. speed).
@@ -37,6 +63,70 @@ DEFAULT_VOICE_SETTINGS: dict[str, Any] = {
 # Default TTS model (Free-tier-safe). Paid plans unlock eleven_v3 (emotion /
 # intonation tags) and eleven_turbo_v2_5 (low-latency) — switch via .env.
 DEFAULT_MODEL_ID = "eleven_multilingual_v2"
+
+
+def _request_options() -> dict[str, Any]:
+    """Per-call SDK ``RequestOptions`` for both ``convert`` methods.
+
+    Restores the P1-dropped httpx timeout=120 ceiling via the SDK's NATIVE
+    ``request_options={"timeout_in_seconds": N}`` knob (a ``RequestOptions``
+    TypedDict field on both ``convert`` and ``convert_with_timestamps``) — no
+    httpx leak, no guessing. Returned as a plain dict (TypedDict is structural).
+    """
+    return {"timeout_in_seconds": _REQUEST_TIMEOUT_SEC}
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Exponential backoff + jitter for *attempt* (1-based, the attempt that
+    just failed). ``base * 2**(attempt-1) + uniform(0, jitter_frac * base)``.
+    """
+    base = _BACKOFF_BASE_SEC * (2 ** (attempt - 1))
+    return base + random.uniform(0.0, _BACKOFF_JITTER_FRAC * base)
+
+
+def _with_retry(call: Callable[[], _T], *, what: str) -> _T:
+    """Run a SDK call with retry-on-transient-failure.
+
+    Retries ONLY on ``elevenlabs.core.ApiError`` whose ``status_code`` is in
+    :data:`_RETRY_STATUS_CODES` (HTTP 429 + 5xx). Non-retryable errors — 4xx
+    caller errors (400/401/403/...) and any non-``ApiError`` exception —
+    propagate UNCHANGED on the first attempt (Phase 1 contract: SDK typed
+    errors propagate untouched; nothing is swallowed). After retries exhaust,
+    the last ``ApiError`` is re-raised.
+
+    Args:
+        call: Zero-arg callable performing ONE SDK request.
+        what: Human label for the retry log (e.g. ``"convert_with_timestamps"``).
+
+    Returns:
+        Whatever *call* returns on a successful attempt.
+    """
+    last_exc: ApiError | None = None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            return call()
+        except ApiError as exc:
+            # status_code may be None on transport-level failures (no response).
+            status = getattr(exc, "status_code", None)
+            if status not in _RETRY_STATUS_CODES:
+                raise  # Non-retryable: 4xx caller error or unknown status.
+            last_exc = exc
+            if attempt < _MAX_ATTEMPTS:
+                delay = _backoff_delay(attempt)
+                logger.warning(
+                    "ElevenLabs %s transient failure (HTTP %s); retry %d/%d in %.2fs",
+                    what,
+                    status,
+                    attempt,
+                    _MAX_ATTEMPTS - 1,
+                    delay,
+                )
+                time.sleep(delay)
+            # else: final attempt exhausted → fall through to re-raise.
+    # Exhausted all retries on a retryable status — re-raise the typed error
+    # unchanged (Phase 1 propagation contract).
+    assert last_exc is not None  # loop only reaches here via the ApiError path.
+    raise last_exc
 
 
 def _model_id() -> str:
@@ -240,13 +330,24 @@ class ElevenLabsService:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info("ElevenLabs: TTS request — voice_id=%s text_len=%d", voice_id, len(text))
-        audio_bytes = _join_audio_stream(
-            self._client.text_to_speech.convert(
-                voice_id=voice_id,
-                model_id=_model_id(),
-                text=text,
-                voice_settings=_build_voice_settings(_voice_settings_from_env()),
-            )
+        # Materialize the stream INSIDE _with_retry: convert() returns a LAZY
+        # Iterator[bytes] and the HTTP request (and any transient ApiError) only
+        # fires during iteration. Wrapping _join_audio_stream in the retry lambda
+        # keeps the materialization — and thus the transient error — inside the
+        # retry's try/except. Wrapping only the bare convert() call would retry
+        # iterator CONSTRUCTION (which cannot fail), letting the real HTTP error
+        # escape past _with_retry during b"".join.
+        audio_bytes = _with_retry(
+            lambda: _join_audio_stream(
+                self._client.text_to_speech.convert(
+                    voice_id=voice_id,
+                    model_id=_model_id(),
+                    text=text,
+                    voice_settings=_build_voice_settings(_voice_settings_from_env()),
+                    request_options=_request_options(),
+                )
+            ),
+            what="convert",
         )
         path.write_bytes(audio_bytes)
 
@@ -288,11 +389,15 @@ class ElevenLabsService:
             voice_id,
             len(text),
         )
-        resp = self._client.text_to_speech.convert_with_timestamps(
-            voice_id=voice_id,
-            model_id=_model_id(),
-            text=text,
-            voice_settings=_build_voice_settings(settings),
+        resp = _with_retry(
+            lambda: self._client.text_to_speech.convert_with_timestamps(
+                voice_id=voice_id,
+                model_id=_model_id(),
+                text=text,
+                voice_settings=_build_voice_settings(settings),
+                request_options=_request_options(),
+            ),
+            what="convert_with_timestamps",
         )
 
         audio_bytes = _decode_audio(resp)
