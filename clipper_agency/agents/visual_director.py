@@ -550,7 +550,19 @@ class VisualDirectorAgent(BaseAgent):
                 raise primary_err
             logger.info("VD planning JSON recovered via json_repair (primary parse failed)")
         if isinstance(parsed, dict):
-            return parsed.get("scenes", [])
+            scenes = parsed.get("scenes", [])
+            # Reject non-list `scenes` (e.g. a dict from a half-repaired
+            # payload): json_repair fixes SYNTAX, not SCHEMA, so a truthy-but-
+            # wrong-shaped `scenes` would break `_normalize_beat_plan`
+            # downstream instead of routing to the deterministic fallback.
+            # Return [] so the caller's empty-plan contract engages. (Codex P2.)
+            if isinstance(scenes, list):
+                return scenes
+            logger.warning(
+                "VD planning JSON recovered but 'scenes' is %s (not a list); routing to fallback",
+                type(scenes).__name__,
+            )
+            return []
         return []
 
     def _llm_plan_scenes_response(

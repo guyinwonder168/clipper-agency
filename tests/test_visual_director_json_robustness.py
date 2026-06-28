@@ -101,6 +101,15 @@ class TestParseScenesJsonSalvage:
         content = '{"other": 1}'
         assert VisualDirectorAgent._parse_scenes_json(content) == []
 
+    def test_non_list_scenes_routes_to_fallback(self) -> None:
+        """json_repair fixes SYNTAX, not SCHEMA: a recovered payload whose
+        `scenes` is a dict (or any non-list) must route to fallback ([]) —
+        returning it truthy would break _normalize_beat_plan downstream.
+        (Codex P2 review.)"""
+        # Valid JSON, but `scenes` is a dict, not a list.
+        content = '{"scenes": {"scene_number": 1}}'
+        assert VisualDirectorAgent._parse_scenes_json(content) == []
+
     def test_unsalvageable_garbage_raises(self) -> None:
         # Truly broken (no JSON structure at all) must still raise so the
         # caller's try/except logs + degrades as before.
