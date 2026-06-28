@@ -571,6 +571,16 @@ class VisualDirectorAgent(BaseAgent):
                     "VD planning JSON recovered but 'scenes' has non-dict items; routing to fallback"
                 )
                 return []
+            # Reject scenes missing the required `scene_number` identifier (the
+            # primary key the LLM is asked to produce + the field the legacy
+            # executor indexes via `item["scene_number"]`). A salvaged-but-
+            # schema-incomplete scene (e.g. `{reasoning:"x"}`) would KeyError
+            # downstream — route to the deterministic fallback. (Codex P2.)
+            if not all("scene_number" in item for item in scenes):
+                logger.warning(
+                    "VD planning JSON recovered but some scenes lack 'scene_number'; routing to fallback"
+                )
+                return []
             return scenes
         return []
 

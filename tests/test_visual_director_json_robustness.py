@@ -119,6 +119,14 @@ class TestParseScenesJsonSalvage:
         content = '{"scenes": [{"scene_number": 1}, "bad"]}'
         assert VisualDirectorAgent._parse_scenes_json(content) == []
 
+    def test_scenes_missing_scene_number_route_to_fallback(self) -> None:
+        """A salvaged scene dict missing the required `scene_number` identifier
+        (e.g. a truncated `{reasoning:"x"}`) must route to fallback ([]) — the
+        legacy executor indexes `item["scene_number"]`, so a missing key would
+        KeyError + abort the Visual Director run. (Codex P2 review.)"""
+        content = '{"scenes": [{"reasoning": "x"}]}'
+        assert VisualDirectorAgent._parse_scenes_json(content) == []
+
     def test_unsalvageable_garbage_raises(self) -> None:
         # Truly broken (no JSON structure at all) must still raise so the
         # caller's try/except logs + degrades as before.
