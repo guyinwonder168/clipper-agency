@@ -1,6 +1,15 @@
-"""Tests for ElevenLabs voice generation service."""
+"""Tests for ElevenLabs voice generation service.
+
+Migrated (Phase 1, ADR 0029) to mock the OFFICIAL ``elevenlabs`` SDK client
+instead of patching ``httpx``. ``convert_with_timestamps`` returns a TYPED
+``AudioWithTimestampsResponse``; tests stub it with ``SimpleNamespace`` holding
+the same typed attributes (``.characters`` / ``.character_start_times_seconds``
+/ ``.character_end_times_seconds``) the production code reads — so a key-typo
+bug (e.g. ``chars`` vs ``characters``) would surface here, not slip through.
+"""
 
 import base64
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,6 +19,57 @@ from clipper_agency.services.elevenlabs import (
     ElevenLabsService,
     chars_to_words,
 )
+
+# ---------------------------------------------------------------------------
+# SDK stub helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_alignment(
+    characters: list[str], starts: list[float], ends: list[float]
+) -> SimpleNamespace:
+    """Stub the SDK ``CharacterAlignmentResponseModel`` typed attributes."""
+    return SimpleNamespace(
+        characters=characters,
+        character_start_times_seconds=starts,
+        character_end_times_seconds=ends,
+    )
+
+
+def _make_timestamps_response(
+    characters: list[str],
+    starts: list[float],
+    ends: list[float],
+    audio: bytes = b"fake_audio_bytes",
+) -> SimpleNamespace:
+    """Stub the SDK ``AudioWithTimestampsResponse`` typed object.
+
+    Mirrors the real SDK shape: ``audio_base_64`` is a base64 STRING (not
+    bytes) and ``alignment`` carries the typed char/seconds attributes.
+    """
+    return SimpleNamespace(
+        audio_base_64=base64.b64encode(audio).decode(),
+        alignment=_make_alignment(characters, starts, ends),
+        normalized_alignment=_make_alignment(characters, starts, ends),
+    )
+
+
+def _stub_service(
+    svc: ElevenLabsService, timestamps_resp=None, convert_audio: bytes = b"fake_audio_data"
+):
+    """Patch the SDK client bound to *svc* with a MagicMock.
+
+    ``convert`` returns a byte stream (joined in production); ``convert_with_timestamps``
+    returns the provided typed stub. Returns the mock for call assertions.
+    """
+    mock_client = MagicMock()
+    mock_client.text_to_speech.convert.return_value = iter([convert_audio])
+    if timestamps_resp is None:
+        timestamps_resp = _make_timestamps_response([], [], [])
+    mock_client.text_to_speech.convert_with_timestamps.return_value = timestamps_resp
+    svc._client = mock_client
+    return mock_client
+
 
 # ---------------------------------------------------------------------------
 # Existing tests (backward compat)
@@ -22,15 +82,10 @@ def test_service_init():
         assert svc.api_key is None
 
 
-@patch("httpx.Client")
-def test_generate_voice(mock_httpx, tmp_path):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.content = b"fake_audio_data"
-    mock_httpx.return_value.__enter__.return_value.post.return_value = mock_response
-
+def test_generate_voice(tmp_path):
     with patch.dict("os.environ", {"ELEVENLABS_API_KEY": "test-key"}):
         svc = ElevenLabsService()
+        _stub_service(svc, convert_audio=b"fake_audio_data")
         output_path = tmp_path / "voice.mp3"
         result = svc.generate_voice(
             text="Halo, ini suara uji coba",
@@ -53,32 +108,15 @@ def test_generate_voice_no_key(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _make_timestamps_response(chars: list[str], starts: list[float], ends: list[float]) -> dict:
-    """Build a fake /with-timestamps JSON response."""
-    audio_b64 = base64.b64encode(b"fake_audio_bytes").decode()
-    return {
-        "audio_base64": audio_b64,
-        "alignment": {
-            "chars": chars,
-            "character_start_times_seconds": starts,
-            "character_end_times_seconds": ends,
-        },
-    }
-
-
-@patch("httpx.Client")
-def test_generate_voice_with_timestamps(mock_httpx):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = _make_timestamps_response(
-        chars=["H", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d"],
+def test_generate_voice_with_timestamps():
+    resp = _make_timestamps_response(
+        characters=["H", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d"],
         starts=[0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5],
         ends=[0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55],
     )
-    mock_httpx.return_value.__enter__.return_value.post.return_value = mock_response
-
     with patch.dict("os.environ", {"ELEVENLABS_API_KEY": "test-key"}):
         svc = ElevenLabsService()
+        _stub_service(svc, timestamps_resp=resp)
         audio_bytes, timestamps = svc.generate_voice_with_timestamps(
             text="Hello world",
             voice_id="test-voice-id",
@@ -110,45 +148,41 @@ _VOICE_ENV_KNOBS = (
 )
 
 
-@patch("httpx.Client")
-def test_generate_voice_with_timestamps_uses_default_settings(mock_httpx, monkeypatch):
+def test_generate_voice_with_timestamps_uses_default_settings(monkeypatch):
     """Voice settings should default to the audio-first architecture defaults."""
     # Arrange — isolate env: API key set, every voice/model knob removed so a
     # developer's loaded .env cannot flip the asserted defaults.
-    mock_response = MagicMock()
-    mock_response.json.return_value = _make_timestamps_response([], [], [])
-    mock_httpx.return_value.__enter__.return_value.post.return_value = mock_response
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
     for knob in _VOICE_ENV_KNOBS:
         monkeypatch.delenv(knob, raising=False)
+
+    svc = ElevenLabsService()
+    mock_client = _stub_service(svc)
 
     # Act
-    svc = ElevenLabsService()
     svc.generate_voice_with_timestamps(text="test", voice_id="v")
 
-    # Assert
-    call_kwargs = mock_httpx.return_value.__enter__.return_value.post.call_args
-    body = call_kwargs.kwargs.get("json", call_kwargs[1].get("json", {}))
-    assert body["voice_settings"]["stability"] == 0.4
-    assert body["voice_settings"]["similarity_boost"] == 0.75
-    assert body["voice_settings"]["style"] == 0.7
-    assert body["voice_settings"]["use_speaker_boost"] is True
+    # Assert — SDK received a typed VoiceSettings with default values.
+    call_kwargs = mock_client.text_to_speech.convert_with_timestamps.call_args.kwargs
+    vs = call_kwargs["voice_settings"]
+    assert vs.stability == 0.4
+    assert vs.similarity_boost == 0.75
+    assert vs.style == 0.7
+    assert vs.use_speaker_boost is True
 
 
-@patch("httpx.Client")
-def test_generate_voice_with_timestamps_custom_settings(mock_httpx, monkeypatch):
+def test_generate_voice_with_timestamps_custom_settings(monkeypatch):
     """Custom voice settings should override defaults."""
     # Arrange
-    mock_response = MagicMock()
-    mock_response.json.return_value = _make_timestamps_response([], [], [])
-    mock_httpx.return_value.__enter__.return_value.post.return_value = mock_response
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
     for knob in _VOICE_ENV_KNOBS:
         monkeypatch.delenv(knob, raising=False)
+
+    svc = ElevenLabsService()
+    mock_client = _stub_service(svc)
 
     # Act
     custom = {"stability": 0.8, "similarity_boost": 0.9}
-    svc = ElevenLabsService()
     svc.generate_voice_with_timestamps(
         text="test",
         voice_id="v",
@@ -156,10 +190,68 @@ def test_generate_voice_with_timestamps_custom_settings(mock_httpx, monkeypatch)
     )
 
     # Assert
-    call_kwargs = mock_httpx.return_value.__enter__.return_value.post.call_args
-    body = call_kwargs.kwargs.get("json", call_kwargs[1].get("json", {}))
-    assert body["voice_settings"]["stability"] == 0.8
-    assert body["voice_settings"]["similarity_boost"] == 0.9
+    call_kwargs = mock_client.text_to_speech.convert_with_timestamps.call_args.kwargs
+    vs = call_kwargs["voice_settings"]
+    assert vs.stability == 0.8
+    assert vs.similarity_boost == 0.9
+
+
+# ---------------------------------------------------------------------------
+# Regression: typed-alignment shape lock
+# ---------------------------------------------------------------------------
+
+
+def test_generate_voice_with_timestamps_locks_char_shape(monkeypatch):
+    """Regression (ADR 0029): a typed alignment of ['H','i'] with known
+    start/end must yield EXACTLY the {"char","start","end"} list shape —
+    locking the contract that a ``chars`` vs ``characters`` key-typo
+    cannot silently empty out.
+    """
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    resp = _make_timestamps_response(
+        characters=["H", "i"],
+        starts=[0.0, 0.12],
+        ends=[0.12, 0.24],
+        audio=b"hi",
+    )
+    svc = ElevenLabsService()
+    _stub_service(svc, timestamps_resp=resp)
+
+    audio_bytes, timestamps = svc.generate_voice_with_timestamps(text="Hi", voice_id="v")
+
+    assert audio_bytes == b"hi"
+    assert timestamps == [
+        {"char": "H", "start": 0.0, "end": 0.12},
+        {"char": "i", "start": 0.12, "end": 0.24},
+    ]
+
+
+def test_generate_voice_with_timestamps_empty_alignment(monkeypatch):
+    """Missing/empty typed alignment → empty char list (no KeyError)."""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    resp = _make_timestamps_response([], [], [])
+    svc = ElevenLabsService()
+    _stub_service(svc, timestamps_resp=resp)
+
+    audio_bytes, timestamps = svc.generate_voice_with_timestamps(text="", voice_id="v")
+    assert audio_bytes == b"fake_audio_bytes"
+    assert timestamps == []
+
+
+def test_generate_voice_with_timestamps_missing_audio(monkeypatch):
+    """Empty audio_base_64 raises ValueError (no silent empty file)."""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    # audio_base_64 present but empty string
+    resp = SimpleNamespace(
+        audio_base_64="",
+        alignment=_make_alignment([], [], []),
+        normalized_alignment=_make_alignment([], [], []),
+    )
+    svc = ElevenLabsService()
+    _stub_service(svc, timestamps_resp=resp)
+
+    with pytest.raises(ValueError, match="missing audio data"):
+        svc.generate_voice_with_timestamps(text="x", voice_id="v")
 
 
 # ---------------------------------------------------------------------------

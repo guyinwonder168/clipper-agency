@@ -10,6 +10,7 @@ assets/cache/
 *.db-wal
 *.db-shm
 :memory:
+:memory:-*
 .pytest_cache/
 ruff_cache/
 coverage.xml

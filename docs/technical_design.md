@@ -71,7 +71,7 @@ OUTPUT_DIR/job_{id}/     # final customer-ready package only
 | Service | Purpose |
 |---------|---------|
 | OpenRouter | LLM for all agents |
-| ElevenLabs | Voice generation |
+| ElevenLabs | Voice generation (official `elevenlabs` SDK — ADR 0029; typed `VoiceSettings` + typed alignment; service contract unchanged) |
 | Google AI Studio Gemini TTS | Voice generation fallback after ElevenLabs |
 | Fish Audio | Voice generation fallback after Gemini TTS |
 | Pexels API | Stock video/images fallback |
