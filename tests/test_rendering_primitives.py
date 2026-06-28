@@ -7,10 +7,8 @@ from pydantic import ValidationError
 from clipper_agency.rendering.contracts import CaptionOverlay, VisualOverlay
 from clipper_agency.rendering.templates import (
     RenderTemplateConfig,
-    TemplateLayout,
     TemplateTransition,
 )
-
 
 # ---------------------------------------------------------------------------
 # escape_drawtext
@@ -55,10 +53,23 @@ def test_escape_drawtext_escapes_braces():
 
 
 def test_escape_drawtext_escapes_single_quote():
-    """Single quote characters are escaped for FFmpeg drawtext safety."""
+    """Single quote uses POSIX close-escape-reopen (``'\\''``) — a bare ``\\'``
+    terminates the single-quoted filtergraph string (job_18: 'No such filter:
+    14.663')."""
     from clipper_agency.rendering.primitives import escape_drawtext
 
-    assert escape_drawtext("It's a test") == r"It\'s a test"
+    assert escape_drawtext("It's a test") == "It'\\''s a test"
+
+
+def test_escape_drawtext_apostrophe_in_quotes_regression():
+    """Regression (job_18): a caption with a quoted word like ``'Cong'`` must
+    escape each apostrophe POSIX close-escape-reopen so the single-quoted
+    ``text='...'`` value does not terminate early + leak subsequent filters."""
+    from clipper_agency.rendering.primitives import escape_drawtext
+
+    # Each ' becomes the 4-char POSIX sequence: close-quote, \, quote, reopen.
+    assert escape_drawtext("'Cong'") == "'\\''Cong'\\''"
+    assert escape_drawtext("sosok 'Cong' yang") == "sosok '\\''Cong'\\'' yang"
 
 
 def test_escape_drawtext_escapes_all_special_chars_combined():
@@ -66,7 +77,7 @@ def test_escape_drawtext_escapes_all_special_chars_combined():
     from clipper_agency.rendering.primitives import escape_drawtext
 
     result = escape_drawtext(r"100% {test}: it's done\now")
-    expected = r"100\% \{test\}\: it\'s done\\now"
+    expected = r"100\% \{test\}\: it'\''s done\\now"
     assert result == expected
 
 
@@ -178,9 +189,7 @@ def test_make_caption_overlays_passes_position_and_style():
     """Position and style parameters are forwarded to each CaptionOverlay."""
     from clipper_agency.rendering.primitives import make_caption_overlays
 
-    result = make_caption_overlays(
-        "hello world", 5.0, position="top", style="bold"
-    )
+    result = make_caption_overlays("hello world", 5.0, position="top", style="bold")
     assert len(result) == 1
     assert result[0].position == "top"
     assert result[0].style == "bold"
