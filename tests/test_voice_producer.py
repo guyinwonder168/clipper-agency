@@ -427,7 +427,9 @@ def test_stitch_timestamps_adds_cumulative_offset():
 
 
 # ---------------------------------------------------------------------------
-# Per-chunk resilience tests (P2 — one failed chunk must not kill the voiceover)
+# Per-chunk resilience tests (P2 — any chunk failure fails over to the next
+# provider for a COMPLETE voiceover; a partial voiceover would silently desync
+# the audio-first beat-timing, so it is never returned).
 # ---------------------------------------------------------------------------
 
 
@@ -439,12 +441,17 @@ class TestChunkedVoiceoverPerChunkResilience:
         sentence = "This is a numbered test sentence that should be repeated. "
         return sentence * 600  # ~33k chars → multiple chunks
 
-    def test_one_chunk_fails_others_succeed_builds_partial_voiceover(
+    def test_one_chunk_fails_aborts_for_provider_failover(
         self,
         tmp_path,
         monkeypatch,
     ):
-        """Chunk 1 succeeds, chunk 2 raises → voiceover still builds from chunk 1."""
+        """Chunk 1 succeeds, chunk 2 raises → abort (raise) for provider fail-over.
+
+        A partial voiceover missing chunk 2's narration would silently desync
+        downstream beat-timing, so any chunk failure must fail over to the next
+        provider for a full-text re-generation rather than return partial.
+        """
         monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
         text = self._long_text()
         agent = VoiceProducerAgent()
@@ -476,20 +483,18 @@ class TestChunkedVoiceoverPerChunkResilience:
                 agent, "_concat_audio_chunks", return_value=str(tmp_path / "voiceover.mp3")
             ),
         ):
-            result = agent._generate_chunked_voiceover(
-                text,
-                "voice-x",
-                job_id=99,
-                assets_cache=str(tmp_path),
-                provider="elevenlabs",
-            )
+            # Chunk 2 failure aborts the chunked voiceover (raise) — no partial.
+            with pytest.raises(RuntimeError, match="transient chunk 2 failure"):
+                agent._generate_chunked_voiceover(
+                    text,
+                    "voice-x",
+                    job_id=99,
+                    assets_cache=str(tmp_path),
+                    provider="elevenlabs",
+                )
 
-        # Voiceover still built from the successful chunks (not failed).
-        assert result["status"] == "success"
-        assert result["provider"] == "elevenlabs"
-        # The exception was contained: service was called for every chunk,
-        # not aborted after the failure.
-        assert call_count["n"] > 2
+        # Fail-fast: the chunked path did NOT keep generating past the failure.
+        assert call_count["n"] == 2
 
     def test_all_chunks_fail_propagates_to_provider_fallback(
         self,

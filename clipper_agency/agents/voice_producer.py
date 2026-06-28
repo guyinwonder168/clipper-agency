@@ -428,7 +428,6 @@ class VoiceProducerAgent(BaseAgent):
         chunk_paths: list[str] = []
         chunk_timestamps: list[list[dict]] = []
         chunk_durations: list[float] = []
-        last_error: Exception | None = None
 
         output_dir = os.path.dirname(self._voiceover_output_path(job_id, assets_cache))
 
@@ -436,11 +435,13 @@ class VoiceProducerAgent(BaseAgent):
             chunk_path = os.path.join(output_dir, f"chunk_{i:03d}.mp3")
 
             # Broad except is intentional: this IS the per-chunk isolation
-            # boundary. We must not let one chunk's failure (network blip,
-            # provider 5xx, transient decode error) abort the remaining
-            # chunks — that would silently downgrade the whole ElevenLabs
-            # voiceover to the Gemini fallback. We log + skip + continue;
-            # only an all-chunks-failed condition re-raises.
+            # boundary. The audio-first architecture drives beat-timing off the
+            # COMPLETE word-timestamp set, so a voiceover missing any chunk's
+            # narration would silently desync downstream composition. Therefore
+            # any chunk failure FAILS OVER to the next provider (full-text
+            # re-generation) rather than returning a partial voiceover — log +
+            # raise so the outer provider-fallback chain (ElevenLabs → Gemini →
+            # Fish) re-attempts the whole script for a complete audio.
             try:
                 if provider == "elevenlabs":
                     service = self._create_service("elevenlabs")
@@ -457,23 +458,18 @@ class VoiceProducerAgent(BaseAgent):
                     service.generate_voice(chunk, voice_id or "", chunk_path)
                     word_ts = self._approximate_timestamps(chunk_path, chunk)
             except Exception as chunk_err:
-                last_error = chunk_err
                 logger.warning(
-                    "Voice: chunk %d/%d failed (%s), skipping",
+                    "Voice: chunk %d/%d failed (%s); aborting chunked "
+                    "voiceover for provider fail-over",
                     i + 1,
                     len(chunks),
                     chunk_err,
                 )
-                continue
+                raise
 
             chunk_paths.append(chunk_path)
             chunk_timestamps.append(word_ts)
             chunk_durations.append(self._probe_audio_duration(chunk_path))
-
-        if not chunk_paths:
-            # Every chunk failed → propagate so the provider-fallback chain
-            # (ElevenLabs → Gemini → Fish) still gets a chance.
-            raise last_error  # type: ignore[misc]
 
         # Concatenate audio
         final_path = self._voiceover_output_path(job_id, assets_cache)

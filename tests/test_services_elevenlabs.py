@@ -12,6 +12,7 @@ import base64
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from elevenlabs.core import ApiError
 
@@ -463,3 +464,30 @@ def test_retry_on_streaming_convert_then_success(monkeypatch, tmp_path):
     assert mock_client.text_to_speech.convert.call_count == 3
     assert out.read_bytes() == b"chunk1chunk2"
     assert result == str(out)
+
+
+def test_retry_on_transport_error_then_success(monkeypatch):
+    """Transport/timeout failures (httpx.TransportError — timeout, connection
+    reset, DNS) are retried. The SDK surfaces these DIRECTLY during the request
+    send / stream materialization; they are NOT ApiError (which is only for
+    received HTTP error responses), so without this predicate a network blip
+    would bypass backoff entirely (Codex P2 review)."""
+    # Arrange — instant backoff.
+    monkeypatch.setattr("clipper_agency.services.elevenlabs.time.sleep", lambda _: None)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    svc = ElevenLabsService()
+    mock_client = MagicMock()
+    mock_client.text_to_speech.convert_with_timestamps.side_effect = [
+        httpx.ConnectTimeout("connect timeout"),
+        httpx.ReadError("connection reset"),
+        _make_timestamps_response(["H", "i"], [0.0, 0.1], [0.1, 0.2]),
+    ]
+    svc._client = mock_client
+
+    # Act
+    audio_bytes, timestamps = svc.generate_voice_with_timestamps(text="Hi", voice_id="v")
+
+    # Assert — both transport failures retried, 3rd attempt succeeded.
+    assert mock_client.text_to_speech.convert_with_timestamps.call_count == 3
+    assert audio_bytes == b"fake_audio_bytes"
+    assert len(timestamps) == 2

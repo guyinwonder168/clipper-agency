@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
+import httpx
 from elevenlabs import ElevenLabs, VoiceSettings
 from elevenlabs.core import ApiError
 
@@ -87,12 +88,16 @@ def _backoff_delay(attempt: int) -> float:
 def _with_retry(call: Callable[[], _T], *, what: str) -> _T:
     """Run a SDK call with retry-on-transient-failure.
 
-    Retries ONLY on ``elevenlabs.core.ApiError`` whose ``status_code`` is in
-    :data:`_RETRY_STATUS_CODES` (HTTP 429 + 5xx). Non-retryable errors — 4xx
-    caller errors (400/401/403/...) and any non-``ApiError`` exception —
-    propagate UNCHANGED on the first attempt (Phase 1 contract: SDK typed
-    errors propagate untouched; nothing is swallowed). After retries exhaust,
-    the last ``ApiError`` is re-raised.
+    Retries on two transient-failure kinds:
+    - ``httpx.TransportError`` (timeout, connection reset, DNS, ...) — the SDK
+      surfaces these DIRECTLY (they are NOT ``ApiError``); inherently transient,
+      always retried.
+    - ``elevenlabs.core.ApiError`` whose ``status_code`` is in
+      :data:`_RETRY_STATUS_CODES` (HTTP 429 + 5xx).
+    Non-retryable errors — 4xx caller errors (400/401/403/...) and any other
+    exception — propagate UNCHANGED on the first attempt (Phase 1 contract: SDK
+    typed errors propagate untouched; nothing is swallowed). After retries
+    exhaust, the last error is re-raised.
 
     Args:
         call: Zero-arg callable performing ONE SDK request.
@@ -101,31 +106,40 @@ def _with_retry(call: Callable[[], _T], *, what: str) -> _T:
     Returns:
         Whatever *call* returns on a successful attempt.
     """
-    last_exc: ApiError | None = None
+    last_exc: Exception | None = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             return call()
-        except ApiError as exc:
-            # status_code may be None on transport-level failures (no response).
-            status = getattr(exc, "status_code", None)
-            if status not in _RETRY_STATUS_CODES:
-                raise  # Non-retryable: 4xx caller error or unknown status.
+        except (httpx.TransportError, ApiError) as exc:
+            # - httpx.TransportError (timeout, connection reset, DNS, ...): the
+            #   SDK surfaces these DIRECTLY — they are NOT ApiError (which is
+            #   only for received HTTP error responses) — and are inherently
+            #   transient, so always retry.
+            # - ApiError: retry only on transient status codes (429 + 5xx);
+            #   4xx caller errors propagate immediately.
+            if isinstance(exc, ApiError):
+                status = getattr(exc, "status_code", None)
+                if status not in _RETRY_STATUS_CODES:
+                    raise  # Non-retryable: 4xx caller error or unknown status.
+                detail = f"HTTP {status}"
+            else:
+                detail = f"transport {type(exc).__name__}"
             last_exc = exc
             if attempt < _MAX_ATTEMPTS:
                 delay = _backoff_delay(attempt)
                 logger.warning(
-                    "ElevenLabs %s transient failure (HTTP %s); retry %d/%d in %.2fs",
+                    "ElevenLabs %s transient failure (%s); retry %d/%d in %.2fs",
                     what,
-                    status,
+                    detail,
                     attempt,
                     _MAX_ATTEMPTS - 1,
                     delay,
                 )
                 time.sleep(delay)
             # else: final attempt exhausted → fall through to re-raise.
-    # Exhausted all retries on a retryable status — re-raise the typed error
-    # unchanged (Phase 1 propagation contract).
-    assert last_exc is not None  # loop only reaches here via the ApiError path.
+    # Exhausted all retries on a retryable failure — re-raise the last error
+    # unchanged (Phase 1 propagation contract: typed errors propagate untouched).
+    assert last_exc is not None  # loop only reaches here after a retryable failure.
     raise last_exc
 
 
