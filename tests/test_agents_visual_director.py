@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from clipper_agency.agents.visual_director import VisualDirectorAgent
 from clipper_agency.config.schema import StoryBeat
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_candidate(url: str = "https://example.com/vid1.mp4", ctype: str = "tiktok_clip"):
     """Create a minimal AssetCandidate-like object."""
@@ -105,7 +104,12 @@ class TestSourceCleanlinessWiring:
         # A candidate with low cleanliness should get a lower final score
         from clipper_agency.core.candidate_semantic_ranker import compute_final_score
 
-        insp = {"person_match": 0.8, "event_match": 0.8, "claim_support": 0.8, "visual_quality": 0.8}
+        insp = {
+            "person_match": 0.8,
+            "event_match": 0.8,
+            "claim_support": 0.8,
+            "visual_quality": 0.8,
+        }
         rel = {"person_match": 0.8, "event_match": 0.8, "claim_support": 0.8, "visual_quality": 0.8}
 
         clean_score = compute_final_score(insp, rel, cleanliness_score=1.0)
@@ -171,7 +175,8 @@ class TestSourceCleanlinessWiring:
             return_value=None,
         )
         mocker.patch.object(
-            agent, "_run_multimodal_inspection",
+            agent,
+            "_run_multimodal_inspection",
             return_value={"visual_quality": 0.7, "decision": "accept"},
         )
         mocker.patch(
@@ -190,14 +195,17 @@ class TestSourceCleanlinessWiring:
 
         # Mock _compute_cleanliness_score to return a specific value
         mocker.patch.object(
-            agent, "_compute_cleanliness_score",
+            agent,
+            "_compute_cleanliness_score",
             return_value=0.42,
         )
 
         result = agent._score_one_candidate(
-            candidate, beat,
+            candidate,
+            beat,
             plan_item={"treatment": "fullscreen"},
-            job_id=1, cache_dir="/tmp/cache",
+            job_id=1,
+            cache_dir="/tmp/cache",
         )
 
         assert result is not None
@@ -211,7 +219,11 @@ class TestVisualDirectorLLMTracing:
         writer = object()
         mock_traced = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat_traced",
-            return_value={"content": '{"scenes": []}', "model": "test", "usage": {}},
+            return_value={
+                "content": '{"scenes": [{"scene_number": 1}]}',
+                "model": "test",
+                "usage": {},
+            },
         )
 
         result = VisualDirectorAgent(trace_writer=writer)._plan_with_llm(
@@ -220,7 +232,7 @@ class TestVisualDirectorLLMTracing:
             job_id=15,
         )
 
-        assert result == []
+        assert result == [{"scene_number": 1}]
         mock_traced.assert_called_once()
         assert mock_traced.call_args.kwargs["job_id"] == 15
         assert mock_traced.call_args.kwargs["agent"] == "visual_director"
@@ -229,7 +241,11 @@ class TestVisualDirectorLLMTracing:
     def test_plan_with_llm_uses_plain_chat_when_writer_is_none(self, mocker):
         mock_chat = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat",
-            return_value={"content": '{"scenes": []}', "model": "test", "usage": {}},
+            return_value={
+                "content": '{"scenes": [{"scene_number": 1}]}',
+                "model": "test",
+                "usage": {},
+            },
         )
         mock_traced = mocker.patch(
             "clipper_agency.llm.client.OpenRouterClient.chat_traced",
@@ -241,7 +257,7 @@ class TestVisualDirectorLLMTracing:
             job_id=16,
         )
 
-        assert result == []
+        assert result == [{"scene_number": 1}]
         mock_chat.assert_called_once()
         mock_traced.assert_not_called()
 
@@ -262,7 +278,8 @@ class TestOCRandFaceWiring:
 
         # Mock frame extraction to return 2 frames
         mocker.patch.object(
-            agent, "_extract_candidate_frames",
+            agent,
+            "_extract_candidate_frames",
             return_value=["/tmp/frame1.jpg", "/tmp/frame2.jpg"],
         )
 
@@ -286,7 +303,8 @@ class TestOCRandFaceWiring:
             "clipper_agency.llm.multimodal_client.MultimodalInspectionClient",
         )
         mock_inspector.return_value.inspect_asset.return_value = {
-            "decision": "accept", "visual_quality": 0.8,
+            "decision": "accept",
+            "visual_quality": 0.8,
         }
         mocker.patch("clipper_agency.llm.client.OpenRouterClient")
         mocker.patch("clipper_agency.agents.visual_director.store")
@@ -298,7 +316,12 @@ class TestOCRandFaceWiring:
         )
 
         agent._run_multimodal_inspection(
-            candidate, beat, 1, "/tmp/cache", "key", agent_dir="/tmp/agent",
+            candidate,
+            beat,
+            1,
+            "/tmp/cache",
+            "key",
+            agent_dir="/tmp/agent",
         )
 
         # PaddleOCRAdapter.inspect called twice — once per frame
@@ -315,7 +338,8 @@ class TestOCRandFaceWiring:
         beat = _make_beat()
 
         mocker.patch.object(
-            agent, "_extract_candidate_frames",
+            agent,
+            "_extract_candidate_frames",
             return_value=["/tmp/frame1.jpg"],
         )
 
@@ -343,14 +367,20 @@ class TestOCRandFaceWiring:
         mocker.patch(
             "clipper_agency.llm.multimodal_client.MultimodalInspectionClient",
         ).return_value.inspect_asset.return_value = {
-            "decision": "accept", "visual_quality": 0.8,
+            "decision": "accept",
+            "visual_quality": 0.8,
         }
         mocker.patch("clipper_agency.llm.client.OpenRouterClient")
         mocker.patch("clipper_agency.agents.visual_director.store")
 
         agent._face_data = {}
         agent._run_multimodal_inspection(
-            candidate, beat, 1, "/tmp/cache", "key", agent_dir="/tmp/agent",
+            candidate,
+            beat,
+            1,
+            "/tmp/cache",
+            "key",
+            agent_dir="/tmp/agent",
         )
 
         # MediaPipeFaceDetector.detect called once
@@ -366,7 +396,8 @@ class TestOCRandFaceWiring:
         beat = _make_beat()
 
         mocker.patch.object(
-            agent, "_extract_candidate_frames",
+            agent,
+            "_extract_candidate_frames",
             return_value=["/tmp/frame1.jpg"],
         )
 
@@ -386,13 +417,19 @@ class TestOCRandFaceWiring:
         mocker.patch(
             "clipper_agency.llm.multimodal_client.MultimodalInspectionClient",
         ).return_value.inspect_asset.return_value = {
-            "decision": "accept", "visual_quality": 0.8,
+            "decision": "accept",
+            "visual_quality": 0.8,
         }
         mocker.patch("clipper_agency.llm.client.OpenRouterClient")
         mocker.patch("clipper_agency.agents.visual_director.store")
 
         agent._run_multimodal_inspection(
-            candidate, beat, 1, "/tmp/cache", "key", agent_dir="/tmp/agent",
+            candidate,
+            beat,
+            1,
+            "/tmp/cache",
+            "key",
+            agent_dir="/tmp/agent",
         )
 
         mock_ocr_cls.assert_not_called()
@@ -404,7 +441,8 @@ class TestOCRandFaceWiring:
         beat = _make_beat()
 
         mocker.patch.object(
-            agent, "_extract_candidate_frames",
+            agent,
+            "_extract_candidate_frames",
             return_value=["/tmp/frame1.jpg"],
         )
 
@@ -424,13 +462,19 @@ class TestOCRandFaceWiring:
         mocker.patch(
             "clipper_agency.llm.multimodal_client.MultimodalInspectionClient",
         ).return_value.inspect_asset.return_value = {
-            "decision": "accept", "visual_quality": 0.8,
+            "decision": "accept",
+            "visual_quality": 0.8,
         }
         mocker.patch("clipper_agency.llm.client.OpenRouterClient")
         mocker.patch("clipper_agency.agents.visual_director.store")
 
         agent._run_multimodal_inspection(
-            candidate, beat, 1, "/tmp/cache", "key", agent_dir="/tmp/agent",
+            candidate,
+            beat,
+            1,
+            "/tmp/cache",
+            "key",
+            agent_dir="/tmp/agent",
         )
 
         mock_face_cls.assert_not_called()
@@ -442,7 +486,8 @@ class TestOCRandFaceWiring:
         beat = _make_beat()
 
         mocker.patch.object(
-            agent, "_extract_candidate_frames",
+            agent,
+            "_extract_candidate_frames",
             return_value=["/tmp/frame1.jpg"],
         )
 
@@ -465,13 +510,19 @@ class TestOCRandFaceWiring:
             "clipper_agency.llm.multimodal_client.MultimodalInspectionClient",
         ).return_value.inspect_asset
         mock_inspect_asset.return_value = {
-            "decision": "accept", "visual_quality": 0.8,
+            "decision": "accept",
+            "visual_quality": 0.8,
         }
         mocker.patch("clipper_agency.llm.client.OpenRouterClient")
         mocker.patch("clipper_agency.agents.visual_director.store")
 
         result = agent._run_multimodal_inspection(
-            candidate, beat, 1, "/tmp/cache", "key", agent_dir="/tmp/agent",
+            candidate,
+            beat,
+            1,
+            "/tmp/cache",
+            "key",
+            agent_dir="/tmp/agent",
         )
 
         # Must not crash — returns result with empty ocr_text

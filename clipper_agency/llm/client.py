@@ -40,12 +40,12 @@ class OpenRouterClient:
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY not set")
 
-        total_input_chars = sum(
-            len(m.get("content", "")) for m in messages
-        )
+        total_input_chars = sum(len(m.get("content", "")) for m in messages)
         logger.debug(
             "LLM request: model=%s messages=%d input_chars=%d",
-            model, len(messages), total_input_chars,
+            model,
+            len(messages),
+            total_input_chars,
         )
 
         start = time.monotonic()
@@ -61,7 +61,11 @@ class OpenRouterClient:
                     "messages": messages,
                     "temperature": temperature,
                     "reasoning_effort": "none",
-                    **({"max_completion_tokens": max_completion_tokens} if max_completion_tokens is not None else {}),
+                    **(
+                        {"max_completion_tokens": max_completion_tokens}
+                        if max_completion_tokens is not None
+                        else {}
+                    ),
                     **kwargs,
                 },
             )
@@ -73,7 +77,10 @@ class OpenRouterClient:
                 detail = resp.text[:1000]
                 logger.error(
                     "LLM error: HTTP %d model=%s in %.1fs — %s",
-                    resp.status_code, model, elapsed, detail,
+                    resp.status_code,
+                    model,
+                    elapsed,
+                    detail,
                 )
                 raise httpx.HTTPStatusError(
                     f"{resp.status_code} - {detail[:500]}",
@@ -111,12 +118,18 @@ class OpenRouterClient:
         prompt_template_id: str = "",
         prompt_version: str = "",
         repair_cycle: int = 0,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """Send a traced chat completion request.
 
         Falls back to :meth:`chat` without tracing when no trace writer
         is configured.  Trace failures are caught and logged — they never
         prevent the LLM call from completing.
+
+        Extra ``kwargs`` (e.g. ``response_format={"type": "json_object"}``)
+        are forwarded to :meth:`chat` on both the traced and untraced paths,
+        so callers can request OpenRouter structured outputs through the
+        traced path.  Backward compatible: ``kwargs`` defaults to empty.
         """
         if self.trace_writer is None:
             return self.chat(
@@ -124,6 +137,7 @@ class OpenRouterClient:
                 messages=messages,
                 temperature=temperature,
                 max_completion_tokens=max_completion_tokens,
+                **kwargs,
             )
 
         handle = self.trace_writer.start_call(
@@ -143,6 +157,7 @@ class OpenRouterClient:
                 parameters={
                     "temperature": temperature,
                     "max_completion_tokens": max_completion_tokens,
+                    **kwargs,
                 },
             )
         except Exception:
@@ -153,6 +168,7 @@ class OpenRouterClient:
             messages=messages,
             temperature=temperature,
             max_completion_tokens=max_completion_tokens,
+            **kwargs,
         )
 
         try:

@@ -333,6 +333,8 @@ The Visual Director uses LLM-driven planning with video production expertise to 
 
 **Configuration:** `visual_director_model` in `AppSettings` controls which LLM is used. Default: `mimo-v2-flash`.
 
+**LLM JSON-parse robustness (job_17 fix):** the VD planning LLM call (`_llm_plan_scenes_response`) requests OpenRouter JSON mode via `response_format={"type":"json_object"}` on both the traced (`chat_traced`) and untraced (`chat`) paths, and the parse is centralized in a static `_parse_scenes_json` helper backed by a `json_repair` salvage net — on `JSONDecodeError` from the primary `json.loads`, `json_repair.repair_json` runs, and only when BOTH passes fail does it raise (so the caller's existing try/except logs + degrades to the deterministic legacy fallback). Per OpenRouter + Xiaomi MiMo docs, MiMo-V2.5 supports `json_object` (JSON mode) but NOT native strict `json_schema` constrained-decoding (schema enforcement is prompt-based/"transformed"), so `json_object` is the safe default that eliminates the syntax-error class, backed by the repair net for models whose JSON mode is only best-effort. Both planning entry points (`_plan_with_llm`, `_plan_beats_with_llm`) return `None` when the recovered plan is empty, so an empty/garbage response routes to the legacy fallback rather than producing a 0-scene plan (the job_17 0-assets → G9 hard-fail class). `chat_traced` forwards extra `**kwargs` (e.g. `response_format`) to `chat` on both code paths.
+
 ### Researcher Structured Output
 
 #### Research Query Construction

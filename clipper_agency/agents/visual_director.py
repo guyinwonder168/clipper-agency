@@ -484,17 +484,74 @@ class VisualDirectorAgent(BaseAgent):
                 },
                 {"role": "user", "content": user_content},
             ]
-            return self._llm_plan_scenes_response(
+            plan = self._llm_plan_scenes_response(
                 llm=llm,
                 messages=messages,
                 agent_cfg=agent_cfg,
                 job_id=job_id,
                 task="plan_beats",
             )
+            # An empty recovered plan (e.g. garbage input the json-repair net
+            # collapsed to ``{}``) is not a usable plan — return None so the
+            # caller routes to the deterministic fallback rather than emitting
+            # a 0-scene plan that would trigger a downstream G9 hard-fail.
+            return plan if plan else None
 
         except Exception:
             logger.warning("Beat-driven LLM planning failed", exc_info=True)
             return None
+
+    # OpenRouter JSON mode (``response_format={"type": "json_object"}``).
+    # Per OpenRouter docs (https://openrouter.ai/docs/guides/features/structured-outputs)
+    # and Xiaomi's MiMo docs, ``json_object`` mode is broadly supported by
+    # MiMo-V2.5 while native strict ``json_schema`` is NOT — so we use the
+    # safe ``json_object`` default that eliminates the syntax-error class of
+    # malformed-JSON responses, and back it with the json-repair salvage net
+    # in :meth:`_parse_scenes_json` for any model whose JSON mode is only
+    # best-effort (transformed, not native constrained-decoding).
+    _JSON_OBJECT_RESPONSE_FORMAT: dict[str, str] = {"type": "json_object"}
+
+    @staticmethod
+    def _parse_scenes_json(content: str) -> list[dict]:
+        """Parse the VD planning LLM response into a scenes list.
+
+        Tolerant of two realities: (1) the LLM may wrap its JSON in a
+        ```` ```json ```` fence, and (2) budget models (e.g. MiMo-V2.5)
+        occasionally emit near-valid JSON with a stray brace, missing comma,
+        or unquoted key even under ``json_object`` mode. The primary
+        ``json.loads`` is therefore backed by a ``json_repair`` salvage pass
+        so a single brace miscount no longer collapses an entire job into a
+        0-assets G9 hard-fail (root cause of job_17).
+
+        Raises ``json.JSONDecodeError`` only when BOTH passes fail, so the
+        caller's existing ``try/except`` logs + degrades as before.
+        """
+        stripped = content.strip().strip("```json").strip("```").strip()
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as primary_err:
+            # Lazy import: a missing/optional dep degrades to the old
+            # behavior (raise) rather than crashing at module import time.
+            try:
+                from json_repair import repair_json
+            except ImportError:
+                logger.warning(
+                    "VD planning JSON parse failed and json_repair unavailable; "
+                    "raising primary error"
+                )
+                raise primary_err
+            repaired = repair_json(stripped)
+            try:
+                parsed = json.loads(repaired)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "VD planning JSON parse failed even after json_repair; raising primary error"
+                )
+                raise primary_err
+            logger.info("VD planning JSON recovered via json_repair (primary parse failed)")
+        if isinstance(parsed, dict):
+            return parsed.get("scenes", [])
+        return []
 
     def _llm_plan_scenes_response(
         self,
@@ -510,7 +567,13 @@ class VisualDirectorAgent(BaseAgent):
         try/except logs + degrades. Centralizes the traced/untraced call and
         JSON-extract so the logic is not duplicated across planning methods
         (SonarCloud duplicated-lines gate).
+
+        Passes ``response_format={"type": "json_object"}`` (OpenRouter JSON
+        mode) on both the traced and untraced paths to prevent the
+        malformed-JSON class at the source; the parse is additionally backed
+        by the json-repair salvage in :meth:`_parse_scenes_json`.
         """
+        response_format = self._JSON_OBJECT_RESPONSE_FORMAT
         if self._trace_writer:
             response = llm.chat_traced(
                 model=agent_cfg["model"],
@@ -521,6 +584,7 @@ class VisualDirectorAgent(BaseAgent):
                 temperature=agent_cfg["temperature"],
                 max_completion_tokens=agent_cfg.get("max_completion_tokens"),
                 prompt_template_id="visual_director.md",
+                response_format=response_format,
             )
         else:
             response = llm.chat(
@@ -528,9 +592,9 @@ class VisualDirectorAgent(BaseAgent):
                 messages=messages,
                 temperature=agent_cfg["temperature"],
                 max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                response_format=response_format,
             )
-        parsed = json.loads(response["content"].strip().strip("```json").strip("```").strip())
-        return parsed.get("scenes", [])
+        return self._parse_scenes_json(response["content"])
 
     def _plan_beats_fallback(
         self,
@@ -1519,13 +1583,18 @@ class VisualDirectorAgent(BaseAgent):
                 },
                 {"role": "user", "content": user_content},
             ]
-            return self._llm_plan_scenes_response(
+            plan = self._llm_plan_scenes_response(
                 llm=llm,
                 messages=messages,
                 agent_cfg=agent_cfg,
                 job_id=job_id,
                 task="plan_scenes",
             )
+            # An empty recovered plan (e.g. garbage input the json-repair net
+            # collapsed to ``{}``) is not a usable plan — return None so the
+            # caller (_run_llm_planning) routes to the deterministic fallback
+            # rather than emitting a 0-scene plan (the job_17 failure class).
+            return plan if plan else None
 
         except Exception:
             logger.warning("LLM planning failed", exc_info=True)
