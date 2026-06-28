@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -13,7 +12,6 @@ import pytest
 from clipper_agency.llm.client import OpenRouterClient
 from clipper_agency.llm.multimodal_client import MultimodalInspectionClient
 from clipper_agency.observability.llm_trace import LLMTraceWriter
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -59,14 +57,19 @@ class TestOpenRouterClientTracing:
     """Trace integration for OpenRouterClient.chat_traced()."""
 
     def test_text_client_traces_full_lifecycle(
-        self, mock_httpx_response: MagicMock, trace_writer: LLMTraceWriter, tmp_path: Path,
+        self,
+        mock_httpx_response: MagicMock,
+        trace_writer: LLMTraceWriter,
+        tmp_path: Path,
     ) -> None:
         client = OpenRouterClient(trace_writer=trace_writer)
 
         with patch("httpx.Client") as mock_client_cls:
             mock_client_cls.return_value.__enter__ = MagicMock(return_value=MagicMock())
             mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_httpx_response
+            mock_client_cls.return_value.__enter__.return_value.post.return_value = (
+                mock_httpx_response
+            )
 
             result = client.chat_traced(
                 model="test-model",
@@ -108,14 +111,18 @@ class TestOpenRouterClientTracing:
         assert response["usage"]["total_tokens"] == 150
 
     def test_text_client_no_trace_when_writer_is_none(
-        self, mock_httpx_response: MagicMock, tmp_path: Path,
+        self,
+        mock_httpx_response: MagicMock,
+        tmp_path: Path,
     ) -> None:
         client = OpenRouterClient(trace_writer=None)
 
         with patch("httpx.Client") as mock_client_cls:
             mock_client_cls.return_value.__enter__ = MagicMock(return_value=MagicMock())
             mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_httpx_response
+            mock_client_cls.return_value.__enter__.return_value.post.return_value = (
+                mock_httpx_response
+            )
 
             result = client.chat_traced(
                 model="test-model",
@@ -131,14 +138,18 @@ class TestOpenRouterClientTracing:
         assert not llm_traces.exists()
 
     def test_text_client_existing_chat_unchanged(
-        self, mock_httpx_response: MagicMock, tmp_path: Path,
+        self,
+        mock_httpx_response: MagicMock,
+        tmp_path: Path,
     ) -> None:
         client = OpenRouterClient(trace_writer=None)
 
         with patch("httpx.Client") as mock_client_cls:
             mock_client_cls.return_value.__enter__ = MagicMock(return_value=MagicMock())
             mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_httpx_response
+            mock_client_cls.return_value.__enter__.return_value.post.return_value = (
+                mock_httpx_response
+            )
 
             result = client.chat(
                 model="test-model",
@@ -163,20 +174,30 @@ class TestMultimodalClientTracing:
     def mock_llm_client(self) -> MagicMock:
         client = MagicMock()
         client.chat.return_value = {
-            "content": json.dumps({
-                "person_match": 0.9, "event_match": 0.8,
-                "claim_support": 0.7, "visual_quality": 0.85,
-                "temporal_match": 0.75, "source_credibility": 0.8,
-                "cleanliness_score": 0.6, "misleading_risk": 0.1,
-                "decision": "accept", "reason": "Good match",
-            }),
+            "content": json.dumps(
+                {
+                    "person_match": 0.9,
+                    "event_match": 0.8,
+                    "claim_support": 0.7,
+                    "visual_quality": 0.85,
+                    "temporal_match": 0.75,
+                    "source_credibility": 0.8,
+                    "cleanliness_score": 0.6,
+                    "misleading_risk": 0.1,
+                    "decision": "accept",
+                    "reason": "Good match",
+                }
+            ),
             "model": "test-mm-model",
             "usage": {"prompt_tokens": 200, "completion_tokens": 100},
         }
         return client
 
     def test_multimodal_client_traces_inspection(
-        self, mock_llm_client: MagicMock, trace_writer: LLMTraceWriter, tmp_path: Path,
+        self,
+        mock_llm_client: MagicMock,
+        trace_writer: LLMTraceWriter,
+        tmp_path: Path,
     ) -> None:
         mm = MultimodalInspectionClient(
             client=mock_llm_client,
@@ -213,7 +234,9 @@ class TestMultimodalClientTracing:
         assert (call_dir / "parsed_response.json").exists()
 
     def test_multimodal_client_tracing_failure_doesnt_break_inspection(
-        self, mock_llm_client: MagicMock, tmp_path: Path,
+        self,
+        mock_llm_client: MagicMock,
+        tmp_path: Path,
     ) -> None:
         broken_writer = MagicMock(spec=LLMTraceWriter)
         broken_writer.start_call.side_effect = RuntimeError("disk full")
@@ -249,14 +272,19 @@ class TestTraceCorrelationFields:
     """Verify trace metadata has all required correlation fields."""
 
     def test_trace_includes_correlation_fields(
-        self, mock_httpx_response: MagicMock, trace_writer: LLMTraceWriter, tmp_path: Path,
+        self,
+        mock_httpx_response: MagicMock,
+        trace_writer: LLMTraceWriter,
+        tmp_path: Path,
     ) -> None:
         client = OpenRouterClient(trace_writer=trace_writer)
 
         with patch("httpx.Client") as mock_client_cls:
             mock_client_cls.return_value.__enter__ = MagicMock(return_value=MagicMock())
             mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_httpx_response
+            mock_client_cls.return_value.__enter__.return_value.post.return_value = (
+                mock_httpx_response
+            )
 
             client.chat_traced(
                 model="test-model",
@@ -279,7 +307,10 @@ class TestTraceCorrelationFields:
         assert metadata["provider"] == "openrouter"
 
     def test_trace_request_contains_messages(
-        self, mock_httpx_response: MagicMock, trace_writer: LLMTraceWriter, tmp_path: Path,
+        self,
+        mock_httpx_response: MagicMock,
+        trace_writer: LLMTraceWriter,
+        tmp_path: Path,
     ) -> None:
         client = OpenRouterClient(trace_writer=trace_writer)
         messages = [
@@ -290,7 +321,9 @@ class TestTraceCorrelationFields:
         with patch("httpx.Client") as mock_client_cls:
             mock_client_cls.return_value.__enter__ = MagicMock(return_value=MagicMock())
             mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_httpx_response
+            mock_client_cls.return_value.__enter__.return_value.post.return_value = (
+                mock_httpx_response
+            )
 
             client.chat_traced(
                 model="test-model",
@@ -308,3 +341,87 @@ class TestTraceCorrelationFields:
         assert request["messages"][0]["role"] == "system"
         assert request["messages"][0]["content"] == "You are helpful."
         assert request["messages"][1]["content"] == "Write a script about cats."
+
+
+class TestChatTracedKwargsPassthrough:
+    """chat_traced must forward extra kwargs (e.g. response_format) to chat()."""
+
+    def test_kwargs_forwarded_into_request_body_traced(
+        self,
+        mock_httpx_response: MagicMock,
+        trace_writer: LLMTraceWriter,
+    ) -> None:
+        client = OpenRouterClient(trace_writer=trace_writer)
+        response_format = {"type": "json_object"}
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_post = MagicMock(return_value=mock_httpx_response)
+            mock_client_cls.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
+            mock_client_cls.return_value.__enter__.return_value.post = mock_post
+
+            client.chat_traced(
+                model="test-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                job_id=1,
+                agent="visual_director",
+                task="plan_scenes",
+                response_format=response_format,
+            )
+
+        sent_body = mock_post.call_args.kwargs["json"]
+        assert sent_body["response_format"] == response_format
+
+    def test_kwargs_forwarded_into_request_body_untraced(
+        self,
+        mock_httpx_response: MagicMock,
+    ) -> None:
+        client = OpenRouterClient(trace_writer=None)
+        response_format = {"type": "json_object"}
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_post = MagicMock(return_value=mock_httpx_response)
+            mock_client_cls.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
+            mock_client_cls.return_value.__enter__.return_value.post = mock_post
+
+            client.chat_traced(
+                model="test-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                job_id=1,
+                agent="visual_director",
+                task="plan_scenes",
+                response_format=response_format,
+            )
+
+        sent_body = mock_post.call_args.kwargs["json"]
+        assert sent_body["response_format"] == response_format
+
+    def test_kwargs_persisted_into_trace_parameters(
+        self,
+        mock_httpx_response: MagicMock,
+        trace_writer: LLMTraceWriter,
+        tmp_path: Path,
+    ) -> None:
+        client = OpenRouterClient(trace_writer=trace_writer)
+        response_format = {"type": "json_object"}
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client_cls.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
+            mock_client_cls.return_value.__enter__.return_value.post.return_value = (
+                mock_httpx_response
+            )
+
+            client.chat_traced(
+                model="test-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                job_id=77,
+                agent="visual_director",
+                task="plan_scenes",
+                response_format=response_format,
+            )
+
+        call_dir = list((tmp_path / "job_77" / "llm_traces" / "visual_director").iterdir())[0]
+        request = json.loads((call_dir / "request.json").read_text())
+        assert request["parameters"]["response_format"] == response_format
