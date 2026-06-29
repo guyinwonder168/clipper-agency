@@ -695,6 +695,15 @@ class Orchestrator:
             )
         )
 
+        # G7 (ADR 0030 / FIX-1): enforce coverage on the cached-repair path
+        # too. A pre-G7 / cached job_18-style word_range must not recreate the
+        # mega-beat when a VD/composer repair reloads it (Codex P2).
+        g7_abort = self._enforce_narrative_coverage(
+            ctx.conn, ctx.job_id, script_output, ctx.assets_cache
+        )
+        if g7_abort:
+            return (research_output, script_output, voice_output, {}, [], g7_abort)
+
         # Build canonical timeline for repair cycle (ADR 0020)
         from clipper_agency.core.beat_timeline import build_canonical_timeline
 
