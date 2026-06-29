@@ -52,6 +52,11 @@
 - **Fix**: Check coverage BEFORE pushing PR: `.venv/bin/python3 -m pytest --cov=clipper_agency --cov-report=term-missing -m "not external and not integration" -q`
 - **Rule**: Coverage check = pre-PR step. Fix uncovered spots before `git push`.
 
+### 11. Boundary Gate Wired Into Only the Happy Path (Codex P1, FIX-1 / ADR 0030)
+- **Pattern**: A gate/contract added at an inter-stage boundary (e.g. G7 `GateNarrativeCoverage` at Scriptwriter→Voice) is wired into the normal `_stage_content` path ONLY. The retry path (`_retry_downstream_stages`), the repair path (`_rerun_upstream_cascade`), and the cache-replay path ALSO rerun the upstream stage and feed its output to the consumer with NO gate → an operator retrying after a gate failure, or an upstream repair, lets the SAME defect the gate blocks sail through on the alternate path. The gate is a half-fix: front door locked, side doors open. (In-workflow code-quality + behavior reviewers MISS this — they review the gate in isolation; only a whole-control-flow pass catches it.)
+- **Fix**: Extract ONE shared enforcement helper (e.g. `_enforce_narrative_coverage`) and call it from EVERY Scriptwriter→consumer hop — `_stage_content` + `_retry_downstream_stages` + `_rerun_upstream_cascade` — so a new re-entry path cannot bypass it without re-discovering the contract. Add a regression test per re-entry path, not just the normal path.
+- **Rule**: A boundary gate must fire on ALL re-entry points (normal + retry + repair + resume + cache-replay), not just the happy path. Before claiming a gate done, enumerate every consumer via CodeGraph blast-radius and assert the gate fires on each.
+
 ## AGENTS.md Rules That Would Have Prevented These
 
 | Failure Pattern | AGENTS.md Rule |

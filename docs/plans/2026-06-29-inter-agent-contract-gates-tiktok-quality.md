@@ -92,7 +92,12 @@ Each fix = its own branch `phase/27-fixN-<slug>` + PR + SonarCloud (zero new iss
 For each fix:
 1. `git checkout -b phase/27-fixN-<slug>` (never push `master`).
 2. TDD: failing test first → impl → green.
-3. **Workflow tool** (ultracode): impl agent + read-only audit agent + `ecc:python-reviewer` (and `ecc:silent-failure-hunter` for the gate/repair-router fixes) in parallel; native queueing handles over-capacity.
+3. **Workflow tool** (ultracode), Design → Implement (TDD) → Review (4 parallel reviewers):
+   - `ecc:python-reviewer` — gate/validator code quality (immutability, off-by-one, naming, purity).
+   - `ecc:silent-failure-hunter` — silent failures / swallowed errors / unsafe fallbacks inside the gate.
+   - contract/acceptance auditor — the frozen job_18-shape fixture hard-fails; the happy fixture passes; re-runs the tests itself to confirm GREEN is real.
+   - **blast-radius / wiring-completeness reviewer** — *"This fix adds a contract at the A→B boundary. Use CodeGraph to enumerate EVERY path that produces A's output and feeds B — normal `_stage_content` + retry `_retry_downstream_stages` + repair `_rerun_upstream_cascade` + cache-replay. For each, assert the gate fires. Report any bypass."* (Learned from FIX-1 Codex P1: a gate on the happy path only is a half-fix; the first three reviewers review the gate in isolation and cannot see this — see `docs/repetitive-failure-patterns.md` #11.)
+   Native queueing handles over-capacity.
 4. Offline gate: `.venv/bin/python3 -m pytest -m "not external and not integration" -q` (all pass) + `--cov=clipper_agency --cov-report=term-missing` (≥93%).
 5. `ruff` clean; **CHANGELOG.md** entry under `[Unreleased]`; spec-doc entries (SRS/PRD/design/traceability already have the FR/PR placeholders — fill in the "Implemented" status on merge).
 6. `git push -u origin phase/27-fixN-<slug>` → `gh pr create --base master`.

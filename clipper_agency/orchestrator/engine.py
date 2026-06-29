@@ -616,6 +616,12 @@ class Orchestrator:
                 ctx.conn, ctx.job_id, "scriptwriter", script_output, _SCRIPT_BUDGET_FAILED
             )
 
+        # G7 (ADR 0030 / FIX-1): enforce coverage on the repair-rerun path too.
+        if abort := self._enforce_narrative_coverage(
+            ctx.conn, ctx.job_id, script_output, ctx.assets_cache
+        ):
+            return abort
+
         # Rerun Voice Producer
         mark_agent_running(ctx.conn, ctx.job_id, "voice_producer")
         voice_output = self._run_voice_producer(
@@ -821,6 +827,42 @@ class Orchestrator:
                 "job_id": job_id,
             }
         return None
+
+    def _enforce_narrative_coverage(
+        self,
+        conn,
+        job_id: int,
+        script_output: dict[str, Any],
+        assets_cache: str,
+    ) -> dict[str, Any] | None:
+        """G7 (ADR 0030 / FIX-1): assert narrative_structure word_range
+        covers [0, word_count-1] before any consumer (Voice Producer, the
+        canonical timeline, or Visual Director) touches it.
+
+        Applies eligible in-place tail repair to script_output first, records
+        the gate, and returns an ``_enforce_gate`` abort dict on hard_fail
+        (else None). SHARED across the normal ``_stage_content`` path AND the
+        retry / repair rerun paths, so an under-covered word_range can never
+        recreate the job_18 mega-beat regardless of entry point (Codex P1:
+        the contract must fire on every Scriptwriter -> consumer hop).
+        """
+        voiceover_text = script_output.get("voiceover_text", "")
+        narrative = script_output.get("narrative_structure", [])
+        coverage = validate_narrative_coverage(narrative, _word_count_for_coverage(voiceover_text))
+        if coverage.repaired_structure is not None:
+            script_output["narrative_structure"] = coverage.repaired_structure
+            logger.info(
+                "G7 narrative coverage: in-place tail repair absorbed %d word(s) "
+                "into beat %s (tolerance %d)",
+                coverage.details.get("tail_words"),
+                coverage.details.get("repaired_final_beat_id"),
+                coverage.details.get("tolerance_words"),
+            )
+        g7_result = GateNarrativeCoverage().evaluate(coverage=coverage)
+        self._record_gate(assets_cache, job_id, "G7_narrative_coverage", g7_result)
+        return self._enforce_gate(
+            conn, job_id, "G7_narrative_coverage", g7_result, failed_at="narrative_coverage"
+        )
 
     def _evaluate_and_enforce_gate(
         self,
@@ -1049,31 +1091,9 @@ class Orchestrator:
             )
 
         # G7 (active): Narrative coverage contract (ADR 0030 / FIX-1).
-        # Assert narrative_structure word_range covers [0, word_count-1]
-        # before Voice Producer renders audio against it. build_canonical_
-        # timeline silently clamps OOB indices and stretches the final beat
-        # to the last timestamp, so an under-covering structure (job_18)
-        # produced a 25 s mega-beat — this gate stops that at the source.
-        _voiceover_text = script_output.get("voiceover_text", "")
-        _narrative = script_output.get("narrative_structure", [])
-        _coverage = validate_narrative_coverage(
-            _narrative, _word_count_for_coverage(_voiceover_text)
-        )
-        if _coverage.repaired_structure is not None:
-            script_output["narrative_structure"] = _coverage.repaired_structure
-            logger.info(
-                "G7 narrative coverage: in-place tail repair absorbed %d word(s) "
-                "into beat %s (tolerance %d)",
-                _coverage.details.get("tail_words"),
-                _coverage.details.get("repaired_final_beat_id"),
-                _coverage.details.get("tolerance_words"),
-            )
-        g7 = GateNarrativeCoverage()
-        g7_result = g7.evaluate(coverage=_coverage)
-        self._record_gate(assets_cache, job_id, "G7_narrative_coverage", g7_result)
-        if abort := self._enforce_gate(
-            conn, job_id, "G7_narrative_coverage", g7_result, failed_at="narrative_coverage"
-        ):
+        # Shared helper enforces it on this path AND on the retry/repair
+        # rerun paths (Codex P1) so the contract fires on every hop.
+        if abort := self._enforce_narrative_coverage(conn, job_id, script_output, assets_cache):
             return abort
 
         logger.info("Voice Producer agent")
@@ -2051,6 +2071,11 @@ class Orchestrator:
                 return self._fail_agent(
                     conn, job_id, "scriptwriter", script_output, _SCRIPT_BUDGET_FAILED
                 )
+
+        # G7 (ADR 0030 / FIX-1): enforce coverage on the retry path too —
+        # whether Scriptwriter was rerun or reused from cache.
+        if abort := self._enforce_narrative_coverage(conn, job_id, script_output, assets_cache):
+            return abort
 
         if from_idx <= PIPELINE_ORDER.index("voice_producer"):
             voice_output = self._run_cached_or_fresh(

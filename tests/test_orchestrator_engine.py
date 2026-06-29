@@ -2072,6 +2072,10 @@ class TestRunPipelineFrom:
                 "caption": "Test caption",
                 "hashtags": [],
                 "estimated_duration": 3,
+                # G7 (FIX-1): covering narrative so the cached-replay path's
+                # coverage gate passes when this output.json is reloaded.
+                "voiceover_text": "Halo!",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 0]}],
             },
             "voice_producer": {
                 "status": "completed",
@@ -2153,6 +2157,9 @@ class TestRunPipelineFrom:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): covering narrative so the retry path's coverage gate passes.
+                "voiceover_text": "hello world foo bar baz",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_vp.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_vd.return_value = {"status": "completed", "assets": []}
@@ -2213,6 +2220,9 @@ class TestRunPipelineFrom:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): covering narrative so the retry path's coverage gate passes.
+                "voiceover_text": "hello world foo bar baz",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_vp.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_vd.return_value = {"status": "completed", "assets": []}
@@ -2398,6 +2408,9 @@ class TestRunPipelineFrom:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): covering narrative so the retry path's coverage gate passes.
+                "voiceover_text": "hello world foo bar baz",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_vp.return_value = {"status": "completed", "audio_files": [], "voiceover_path": ""}
             mock_vd.return_value = {"status": "completed", "assets": []}
@@ -2511,7 +2524,7 @@ class TestRunPipelineFrom:
             patch.object(Orchestrator, "_run_safety"),
             patch.object(Orchestrator, "_run_researcher"),
             patch.object(Orchestrator, "_run_content_scriptwriter") as mock_sw,
-            patch.object(Orchestrator, "_run_content_voice"),
+            patch.object(Orchestrator, "_run_content_voice") as mock_voice,
             patch.object(Orchestrator, "_run_visual_director_phase"),
             patch.object(Orchestrator, "_run_composer") as mock_comp,
             patch.object(Orchestrator, "_run_reviewer") as mock_rev,
@@ -2523,6 +2536,9 @@ class TestRunPipelineFrom:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): covering narrative so the retry path's coverage gate passes.
+                "voiceover_text": "hello world foo bar baz",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_comp.return_value = {
                 "status": "completed",
@@ -2539,6 +2555,11 @@ class TestRunPipelineFrom:
                 "metadata_path": "",
             }
 
+            mock_voice.return_value = {
+                "status": "completed",
+                "timestamps": [],
+                "voiceover_path": "",
+            }
             result = orch.run_pipeline_from(job_id, from_agent="scriptwriter", use_cache=True)
 
         assert result["status"] == "completed"

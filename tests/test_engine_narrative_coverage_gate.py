@@ -183,3 +183,82 @@ def test_g7_word_count_agrees_with_scriptwriter_tokenizer():
         assert _word_count_for_coverage(text) == _scriptwriter_word_count(text), (
             f"word-count divergence on {text!r}"
         )
+
+
+# ── shared helper (called from _stage_content AND retry/repair paths) ──
+
+
+def _helper_orchestrator(monkeypatch, tmp_path) -> Orchestrator:
+    """Orchestrator with DB side-effects stubbed for direct helper tests."""
+    from clipper_agency.orchestrator.engine import update_job_status  # noqa: F401
+
+    orch = Orchestrator(db_path=str(tmp_path / "g7_helper.db"))
+    monkeypatch.setattr(
+        "clipper_agency.orchestrator.engine.update_job_status", lambda *a, **k: None
+    )
+    return orch
+
+
+def test_enforce_narrative_coverage_helper_hard_fails_job18(tmp_path, monkeypatch):
+    """The shared _enforce_narrative_coverage helper — called from
+    _stage_content AND the retry (_retry_downstream_stages) / repair
+    (_rerun_upstream_cascade) rerun paths (Codex P1) — hard-fails the job_18
+    fixture, proving the contract fires identically regardless of caller."""
+    orch = _helper_orchestrator(monkeypatch, tmp_path)
+    recorded: list[tuple] = []
+    monkeypatch.setattr(
+        orch, "_record_gate", lambda ac, jid, name, res: recorded.append((name, res))
+    )
+
+    script_output = {
+        "voiceover_text": "word " * 76,  # 76 words
+        "narrative_structure": [
+            {"beat_id": 1, "word_range": [0, 2]},
+            {"beat_id": 2, "word_range": [3, 8]},
+            {"beat_id": 3, "word_range": [9, 12]},
+            {"beat_id": 4, "word_range": [13, 15]},
+            {"beat_id": 5, "word_range": [16, 19]},
+            {"beat_id": 6, "word_range": [20, 23]},
+        ],
+    }
+
+    abort = orch._enforce_narrative_coverage(
+        MagicMock(), job_id=1, script_output=script_output, assets_cache=""
+    )
+
+    # Hard-failed with the stable routing token; structure unchanged.
+    assert abort is not None
+    assert abort["status"] == "failed"
+    assert abort["failed_at"] == "narrative_coverage"
+    assert abort["reason"] == "narrative_not_covered"
+    assert script_output["narrative_structure"][-1]["word_range"] == [20, 23]
+    # G7 recorded as a hard_fail.
+    g7 = [r for name, r in recorded if name == "G7_narrative_coverage"]
+    assert len(g7) == 1 and not g7[0].passed and g7[0].severity == "hard_fail"
+
+
+def test_enforce_narrative_coverage_helper_repairs_and_passes(tmp_path, monkeypatch):
+    """The shared helper applies in-place tail repair and returns None (pass)."""
+    orch = _helper_orchestrator(monkeypatch, tmp_path)
+    recorded: list[tuple] = []
+    monkeypatch.setattr(
+        orch, "_record_gate", lambda ac, jid, name, res: recorded.append((name, res))
+    )
+
+    script_output = {
+        "voiceover_text": "word " * 100,  # 100 words
+        "narrative_structure": [
+            {"beat_id": 1, "word_range": [0, 49]},
+            {"beat_id": 2, "word_range": [50, 97]},
+        ],
+    }
+
+    abort = orch._enforce_narrative_coverage(
+        MagicMock(), job_id=1, script_output=script_output, assets_cache=""
+    )
+
+    assert abort is None  # pass
+    # Repair applied in place before the gate evaluated it.
+    assert script_output["narrative_structure"][-1]["word_range"] == [50, 99]
+    g7 = [r for name, r in recorded if name == "G7_narrative_coverage"]
+    assert len(g7) == 1 and g7[0].passed and g7[0].severity == "pass"
