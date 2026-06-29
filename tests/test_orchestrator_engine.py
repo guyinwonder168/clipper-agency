@@ -131,6 +131,11 @@ def mock_script_output():
         "caption": "Breaking news tentang Ariana Grande!",
         "hashtags": ["#ArianaGrande", "#KonserJakarta"],
         "estimated_duration": 7,
+        # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+        "voiceover_text": "Halo semua ada berita terbaru",
+        "narrative_structure": [
+            {"beat_id": 1, "word_range": [0, 4]},
+        ],
     }
 
 
@@ -243,6 +248,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -325,6 +333,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -402,6 +413,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -471,6 +485,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -530,6 +547,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -591,6 +611,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -657,6 +680,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "Caption",
                 "hashtags": [],
                 "estimated_duration": 3,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -732,6 +758,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -796,6 +825,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -939,6 +971,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -991,6 +1026,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "failed",
@@ -1047,6 +1085,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1109,6 +1150,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1176,6 +1220,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1256,6 +1303,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1347,6 +1397,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1426,6 +1479,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "Caption",
                 "hashtags": [],
                 "estimated_duration": 3,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1469,6 +1525,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "Caption",
                 "hashtags": [],
                 "estimated_duration": 3,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1519,6 +1578,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "Caption",
                 "hashtags": [],
                 "estimated_duration": 3,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1586,6 +1648,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "Caption",
                 "hashtags": [],
                 "estimated_duration": 3,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1685,6 +1750,9 @@ class TestOrchestratorRunPipeline:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1811,6 +1879,9 @@ class TestConfigSnapshot:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -1885,6 +1956,9 @@ class TestConfigSnapshot:
                 "caption": "",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -2505,6 +2579,9 @@ class TestRunPipelineFrom:
                 "caption": "cap",
                 "hashtags": [],
                 "estimated_duration": 0,
+                # G7 (FIX-1): narrative_structure must fully cover voiceover_text.
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
             }
             mock_voice.return_value = {
                 "status": "completed",
@@ -3344,7 +3421,7 @@ class TestBoundedRepairLoop:
                 "caption": "Test caption",
                 "voiceover_text": "Hello!",
                 "hashtags": [],
-                "narrative_structure": [],
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 0]}],
                 "estimated_duration": 5,
             },
             "voice_producer": {

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from clipper_agency.core.media_probe import probe_video
+from clipper_agency.core.narrative_coverage import NarrativeCoverageResult
 
 
 @dataclass
@@ -168,6 +169,71 @@ class GateScriptValidation(BaseGate):
             return GateResult(True, "soft_fail",
                               "Caption >150 chars - trim needed")
         return GateResult(True, "pass", "Script and caption valid")
+
+
+
+
+# ════════════════════════════════════════════════════════════════════
+# G7 (active): Narrative coverage contract (ADR 0030 / FIX-1)
+# ════════════════════════════════════════════════════════════════════
+
+class GateNarrativeCoverage(BaseGate):
+    """G7: Narrative coverage contract (ADR 0030 / FIX-1).
+
+    Asserts that ``narrative_structure`` word_range indices fully cover
+    [0, word_count-1] (contiguously, in-bounds). The bounds/contiguity/
+    coverage math and eligible in-place tail repair live in the pure
+    ``clipper_agency.core.narrative_coverage`` module; this gate is the thin
+    adapter that turns a ``NarrativeCoverageResult`` into a ``GateResult``.
+
+    Repair contract: the engine MUST apply ``coverage.repaired_structure``
+    to ``script_output['narrative_structure']`` BEFORE evaluating this gate,
+    so a repaired structure yields ok=True / severity='pass' (not soft_fail —
+    ``_enforce_gate`` only aborts on hard_fail, and in-place repair is a
+    corrected pass, not a degrade).
+
+    Recorded under the DISTINCT label ``G7_narrative_coverage`` so it does
+    not collide with the existing ``GateScriptValidation`` (script/caption
+    quality, recorded under ``G7_script_validation``). Relax it explicitly
+    via ``DEV_RELAX_GATES=G7_NARRATIVE_COVERAGE``.
+    """
+
+    # Stable machine reason emitted in GateResult.data['reason'] on hard_fail.
+    # FIX-5 routes repair on this exact token; do not rename without updating
+    # repair_router.GATE_FAILURE_REPAIR_MAP.
+    FAILURE_REASON = "narrative_not_covered"
+
+    def evaluate(
+        self,
+        coverage: "NarrativeCoverageResult | None" = None,
+        **kwargs: Any,
+    ) -> GateResult:
+        # A missing coverage result is a WIRING error, not a safe default.
+        # Silently passing here would re-open the exact job_18 hole this gate
+        # exists to close (under-covered narrative reaching Voice Producer).
+        # Fail loud; operators bypass via DEV_RELAX_GATES=G7_NARRATIVE_COVERAGE.
+        if coverage is None:
+            return GateResult(
+                False,
+                "hard_fail",
+                "NarrativeCoverageResult not supplied to G7 gate (wiring error)",
+                data={"reason": self.FAILURE_REASON, "violation_type": "not_evaluated"},
+            )
+
+        if coverage.ok:
+            return GateResult(
+                True,
+                "pass",
+                coverage.reason,
+                data={"reason": coverage.reason, **coverage.details},
+            )
+
+        return GateResult(
+            False,
+            "hard_fail",
+            coverage.reason,
+            data={"reason": self.FAILURE_REASON, **coverage.details},
+        )
 
 
 # ════════════════════════════════════════════════════════════════════

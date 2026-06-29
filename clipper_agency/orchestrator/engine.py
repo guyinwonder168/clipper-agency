@@ -36,6 +36,7 @@ from clipper_agency.core.manifest import (
     update_manifest_final,
     update_manifest_gate,
 )
+from clipper_agency.core.narrative_coverage import validate_narrative_coverage
 from clipper_agency.core.paths import gate_result_file
 from clipper_agency.core.repair_metrics import (
     compute_repair_cycle_record,
@@ -75,6 +76,7 @@ from clipper_agency.orchestrator.gates import (
     GateCostEstimate,
     GateCreativeMemory,
     GateInputPreflight,
+    GateNarrativeCoverage,
     GatePostResearchRisk,
     GateResearchCache,
     GateResult,
@@ -94,6 +96,15 @@ _RE_CTRL = re.compile(r"[\r\n\t]")
 def _sanitize_for_log(text: str) -> str:
     """Strip control characters to prevent log injection (CWE-117)."""
     return _RE_CTRL.sub(" ", str(text))[:_LOG_MAX_LEN]
+
+
+def _word_count_for_coverage(text: str) -> int:
+    """Whitespace-separated word count for the G7 coverage gate.
+
+    Local twin of ``agents.scriptwriter._word_count`` so the orchestrator
+    stays decoupled from the agents layer (no orchestrator->agents import).
+    """
+    return len((text or "").split())
 
 
 _COMPOSER_FAILED = "Composer failed"
@@ -1037,7 +1048,35 @@ class Orchestrator:
                 conn, job_id, "scriptwriter", script_output, "Scriptwriter duration exceeded"
             )
 
-        logger.info("G7: running Voice Producer agent")
+        # G7 (active): Narrative coverage contract (ADR 0030 / FIX-1).
+        # Assert narrative_structure word_range covers [0, word_count-1]
+        # before Voice Producer renders audio against it. build_canonical_
+        # timeline silently clamps OOB indices and stretches the final beat
+        # to the last timestamp, so an under-covering structure (job_18)
+        # produced a 25 s mega-beat — this gate stops that at the source.
+        _voiceover_text = script_output.get("voiceover_text", "")
+        _narrative = script_output.get("narrative_structure", [])
+        _coverage = validate_narrative_coverage(
+            _narrative, _word_count_for_coverage(_voiceover_text)
+        )
+        if _coverage.repaired_structure is not None:
+            script_output["narrative_structure"] = _coverage.repaired_structure
+            logger.info(
+                "G7 narrative coverage: in-place tail repair absorbed %d word(s) "
+                "into beat %s (tolerance %d)",
+                _coverage.details.get("tail_words"),
+                _coverage.details.get("repaired_final_beat_id"),
+                _coverage.details.get("tolerance_words"),
+            )
+        g7 = GateNarrativeCoverage()
+        g7_result = g7.evaluate(coverage=_coverage)
+        self._record_gate(assets_cache, job_id, "G7_narrative_coverage", g7_result)
+        if abort := self._enforce_gate(
+            conn, job_id, "G7_narrative_coverage", g7_result, failed_at="narrative_coverage"
+        ):
+            return abort
+
+        logger.info("Voice Producer agent")
         mark_agent_running(conn, job_id, "voice_producer")
         voice_output = self._run_voice_producer(
             job_id=job_id,

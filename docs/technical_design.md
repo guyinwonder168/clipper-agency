@@ -1,8 +1,8 @@
 # Clipper Agency — Technical Design Document
 
-**Version:** 5.3
-**Date:** 2026-06-11
-**Status:** Phase 23 Complete — Reviewer Context + Diagnostics Enforcement Contract
+**Version:** 5.4
+**Date:** 2026-06-29
+**Status:** Phase 23 Complete + ADR 0030 (Inter-Agent Contract Gates — Proposed, investigation complete, implementation pending)
 **Related:** `docs/PRD.md`, `docs/SRS.md`, `docs/requirements_traceability.md`
 
 ---
@@ -1229,4 +1229,58 @@ PR 6 freezes the clip-window **data-flow contract** so the propagation path (qua
 The transcript/whisper backend is **deferred**: faster-whisper behind a config flag, yt-dlp auto-caption extraction, and keyframe-precise snapping. Blocked by ADR 0026 (do-not-rebuild), the GPU-forbidden constraint, the absence of any existing transcript infra, and the fact that the v2.4.0 release gate does NOT require clip-windowing. The "trimmed segment matches beat's spoken point" verification criterion waits for this backend (documented honestly; the PR 6 v1 default cannot satisfy it because it never narrows the window). Until then, the propagation contract is proven end-to-end on the degenerate full-clip window: source bounds are respected, `source_start_sec`/`source_end_sec` flow through, and Composer emits `-ss <start>`.
 
 **Reference design:** `docs/plans/pr6-clip-window-design.md`. **ADR:** `docs/adr/0026-v2.4.0-contract-enforcement-over-rebuild.md`.
+
+## 19. Phase 27 (ADR 0030): Inter-Agent Contract Gates for Narration–Visual Alignment
+
+ADR 0030 governs the post-job_18 output-quality work. **job_18** (first fully-completed ElevenLabs job) produced an unpostable video: a single load-bearing defect cascaded through five blind-trust layers. A read-only trace (PR-13 `scripts/diagnose_av_drift.py` harness + frame extraction + AI-vision verification + a 6-agent research workflow over reference pipelines `MoneyPrinterTurbo-Extended` / `claude-auto-tok` + production short-form tools) established the root cause and validated the decision.
+
+### 19.1 Root Cause (single load-bearing defect)
+
+| Link | Agent / module | Blind trust | job_18 failure |
+|---|---|---|---|
+| 1 | Scriptwriter (`qwen/qwen3-32b`) | trusts LLM-emitted `word_range` covers the script; `_validate_output` checks word-count + emoji, never coverage | `word_range` covered words **0–23 of 76**; 52 words / ~23 s had no beat |
+| 1.5 | `build_canonical_timeline` | silently stretches the last beat to "cover trailing audio" | manufactured a **25.17 s mega-beat** with no warning / max-beat guard |
+| 2 | Visual Director + `asset_qualification` | "accept" = numeric threshold (≥0.60), no entity binding | picked a **wrong-artist image** (Jennifer Coppen for the Sarwendah beat) |
+| 4 | Composer | `-shortest` cuts to the shorter stream | visual 32.7 s < audio 35.3 s → **cut the last 2.6 s** ("…like dan share") |
+| 5 | Reviewer + repair router | `_check_av_sync` = total-duration scalar only; repair re-derives timeline from the broken structure | PASSED (structurally defeated by `-shortest` equalization); repair loop re-ran on the wrong agent; job "completed" garbage |
+
+### 19.2 Decision: contract-gates-in-chain, NOT restructure
+
+KEEP the 7-agent chain + audio-first beat-driven architecture (research-validated as AHEAD of per-sentence tools). ADD deterministic contract gates at every inter-agent boundary + fix the repair router + remove the `-shortest` audio-cut. The chain's brittleness ("one issue → all agents dumb") is solved by making every inter-agent boundary a parse-and-validate gate that fails hard with a reason-keyed repair target. ADR 0030 amends ADR 0026's no-rebuild default FOR OUTPUT-QUALITY WORK ONLY (product owner has lifted the constraint).
+
+### 19.3 Gates + Levers
+
+| Gate / lever | Location | New FR / PR |
+|---|---|---|
+| **G7 GateNarrativeCoverage** — `word_range` union == `[0, word_count-1]`, contiguous, in-bounds; in-place repair for tail <5 % else force Scriptwriter regen | `orchestrator/gates.py`, `engine._stage_content`, `scriptwriter._validate_output` | FR-74 / PR-38 |
+| **Timeline UNCOVERED_TAIL detection + MAX-beat cap (12 s)** | `core/beat_timeline.py` | FR-79 / PR-42 |
+| **Audio-as-master** — drop `-shortest` → `-t voiceover_duration`; pre-render pad visual ≥ audio; G9.5 visual-coverage gate; G10 `AUDIO_NOT_TRUNCATED` re-probe | `agents/composer.py`, `orchestrator/engine.py`, `gates.py` | FR-75 / PR-39 |
+| **Entity-binding rejection** at `candidate_semantic_ranker` chokepoint + VLM `subject_name` + `person_match` 0.8→0.6 + MAX-scene cap | `core/candidate_semantic_ranker.py`, `core/semantic_visual_review.py`, `agents/visual_director.py`, `core/asset_qualification.py`, `core/beat_timeline.py` | FR-76 / PR-40 |
+| **Reviewer per-scene entity-vs-beat + frozen-frame/max-dwell + audio-not-truncated** | `agents/reviewer.py`, `core/reviewer_context.py` | FR-77 / PR-41 |
+| **Repair-router root-cause routing** — route by REASON; force narrative regen on coverage re-fail; bounded `MAX_REPAIR_CYCLES` + terminal fail | `orchestrator/engine.py` (`_rerun_upstream_cascade`) | FR-78 / PR-43 |
+
+### 19.4 Adopted from reference pipelines (policy, not topology)
+
+- **MoneyPrinterTurbo:** `audio_duration` as the single authoritative timing scalar + "use anyway, never freeze" loop-fill (FIX-2) — adopted without its opaque-string topology (which would discard clipper-agency's richer beat-driven contract).
+- **claude-auto-tok:** per-scene targeted repair (`revision_target` names the specific agent, voiceover-text-diff skip) instead of all-or-nothing cascade re-run (FIX-5); typed-contract-as-checkpoint discipline.
+
+### 19.5 Deferred (Phase 27+)
+
+- **CLIP image-text cosine similarity** for final candidate relevance ranking (state-of-the-art fix for the wrong-artist class beyond keyword overlap; complements FIX-3's name-overlap gate).
+- **Multimodal "watch the rendered video" Reviewer** (claude-auto-tok style) — strongest defense against frozen-card/wrong-face but adds cost + latency + a vision-model dependency; the deterministic gates above are the primary line.
+
+**Implementation plan:** `docs/plans/2026-06-29-inter-agent-contract-gates-tiktok-quality.md` (FIX-1..7 in dependency order, per-fix acceptance gates).
+
+## 20. Phase 27 (ADR 0030): Engagement Gates — TikTok-Post-Worthy Quality Bar
+
+FR-80 / PR-44 adds programmatic engagement gates that elevate output from "technically correct" to **post-worthy**. The five "AI low-effort tells" each get a deterministic defender; job_18 hit three at once (frozen static image + mismatched B-roll + audio cutoff), and the bar requires zero.
+
+| Gate | Rule | Rationale |
+|---|---|---|
+| VISUAL-CHANGE-DENSITY | min change-events per 1.5–4 s (~8–15 for 30 s); a 1–2-image plan for 25 s+ fails | creator-economy: ~4 s interrupts ≈ 58 % vs 41 % retention |
+| HOOK | beat 0 is a real image/motion (not a title/text card); first visual change by 1.5 s | >65 % retention at 3 s target; first 3 s drives the algorithm |
+| DURATION-BAND | final video 21–42 s (infotainment/gossip sweet spot) | outside band ⇒ repair |
+| MONOTONY | no same content-hash image across consecutive beats without treatment variation; caption reveals count as change-events | variety breaks the "AI low effort" read |
+
+These are **WARN+repair gates, not pipeline-death** — they differentiate hook pacing ("breathe") from body pacing ("aggressive interrupts") and are sourced from creator-economy guidance, not hard TikTok-API data (documented as a risk in ADR 0030).
 
