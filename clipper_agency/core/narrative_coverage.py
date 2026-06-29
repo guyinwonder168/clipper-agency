@@ -42,6 +42,84 @@ def _is_real_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _coverage_outcome(
+    ordered: list[dict[str, Any]],
+    word_count: int,
+    last_idx: int,
+    reordered: bool,
+    tail_tolerance: float,
+) -> NarrativeCoverageResult:
+    """Decide the coverage outcome for an already bounds/contiguity/head-gap
+    validated + sorted structure. Extracted from validate_narrative_coverage
+    to keep that function under SonarCloud S3776 cognitive-complexity 15."""
+    last_end = ordered[-1]["word_range"][1]
+    tail_words = last_idx - last_end
+
+    if tail_words == 0:
+        if reordered:
+            # Full coverage but beats were out of order — persist the sorted
+            # order so the Composer (iterates narrative_structure as given)
+            # and the canonical timeline agree (Codex P2).
+            return NarrativeCoverageResult(
+                True,
+                "covered_after_reorder",
+                [dict(b) for b in ordered],
+                {
+                    "word_count": word_count,
+                    "beat_count": len(ordered),
+                    "reordered": True,
+                },
+            )
+        return NarrativeCoverageResult(
+            True,
+            "covered",
+            None,
+            {"word_count": word_count, "beat_count": len(ordered)},
+        )
+
+    # In-place repair is eligible only for a tail STRICTLY below the tolerance
+    # fraction (default <5%). Compare the ACTUAL fraction tail_words /
+    # word_count — not a floored integer count — so a 3-word tail on a 76-word
+    # script (3.9% < 5%) is repaired while exactly-5% (e.g. 5/100) hard-fails.
+    tail_fraction = tail_words / word_count
+    if 0 < tail_fraction < tail_tolerance:
+        repaired = [dict(b) for b in ordered]
+        # Provenance: mark the gate-fabricated range so downstream consumers
+        # can distinguish an LLM-emitted range from one the gate extended.
+        repaired[-1]["word_range"] = [repaired[-1]["word_range"][0], last_idx]
+        repaired[-1]["word_range_repaired"] = True
+        repaired[-1]["word_range_original_end"] = last_end
+        return NarrativeCoverageResult(
+            True,
+            "covered_after_tail_repair",
+            repaired,
+            {
+                "word_count": word_count,
+                "beat_count": len(ordered),
+                "reordered": reordered,
+                "tail_words": tail_words,
+                "tail_tolerance": tail_tolerance,
+                "tail_fraction": round(tail_fraction, 4),
+                "repaired_final_beat_id": repaired[-1].get("beat_id"),
+                "repaired_original_end": last_end,
+            },
+        )
+
+    return NarrativeCoverageResult(
+        False,
+        "narrative_not_covered",
+        None,
+        {
+            "violation_type": "uncovered_tail",
+            "tail_words": tail_words,
+            "tail_tolerance": tail_tolerance,
+            "tail_fraction": round(tail_fraction, 4),
+            "word_count": word_count,
+            "last_end": last_end,
+        },
+    )
+
+
 def validate_narrative_coverage(
     narrative_structure: list[dict[str, Any]],
     word_count: int,
@@ -133,73 +211,7 @@ def validate_narrative_coverage(
             },
         )
 
-    # 5. COVERAGE + TAIL REPAIR DECISION
-    last_end = ordered[-1]["word_range"][1]
-    tail_words = last_idx - last_end
-
-    if tail_words == 0:
-        if reordered:
-            # Full coverage but beats were out of order — persist the sorted
-            # order so the Composer (which iterates narrative_structure as
-            # given) and the canonical timeline agree (Codex P2).
-            return NarrativeCoverageResult(
-                True,
-                "covered_after_reorder",
-                [dict(b) for b in ordered],
-                {
-                    "word_count": word_count,
-                    "beat_count": len(ordered),
-                    "reordered": True,
-                },
-            )
-        return NarrativeCoverageResult(
-            True,
-            "covered",
-            None,
-            {"word_count": word_count, "beat_count": len(ordered)},
-        )
-
-    # In-place repair is eligible only for a tail STRICTLY below the tolerance
-    # fraction (default <5%). Compare the ACTUAL fraction tail_words /
-    # word_count — not a floored integer count — so a 3-word tail on a 76-word
-    # script (3.9% < 5%) is repaired while exactly-5% (e.g. 5/100) hard-fails.
-    # (Codex P2: floor(word_count*0.05) rejected floor-boundary sub-5% tails.)
-    tail_fraction = tail_words / word_count
-    if 0 < tail_fraction < tail_tolerance:
-        repaired = [dict(b) for b in ordered]
-        # Provenance: mark the gate-fabricated range so downstream consumers
-        # (and debugging) can distinguish an LLM-emitted range from one the
-        # gate extended. Only the final beat is touched; no new beats, no
-        # other metadata invented.
-        repaired[-1]["word_range"] = [repaired[-1]["word_range"][0], last_idx]
-        repaired[-1]["word_range_repaired"] = True
-        repaired[-1]["word_range_original_end"] = last_end
-        return NarrativeCoverageResult(
-            True,
-            "covered_after_tail_repair",
-            repaired,
-            {
-                "word_count": word_count,
-                "beat_count": len(ordered),
-                "reordered": reordered,
-                "tail_words": tail_words,
-                "tail_tolerance": tail_tolerance,
-                "tail_fraction": round(tail_fraction, 4),
-                "repaired_final_beat_id": repaired[-1].get("beat_id"),
-                "repaired_original_end": last_end,
-            },
-        )
-
-    return NarrativeCoverageResult(
-        False,
-        "narrative_not_covered",
-        None,
-        {
-            "violation_type": "uncovered_tail",
-            "tail_words": tail_words,
-            "tail_tolerance": tail_tolerance,
-            "tail_fraction": round(tail_fraction, 4),
-            "word_count": word_count,
-            "last_end": last_end,
-        },
-    )
+    # 5. COVERAGE + TAIL REPAIR + REORDER DECISION (extracted into
+    # _coverage_outcome to keep this function under SonarCloud S3776
+    # cognitive-complexity 15).
+    return _coverage_outcome(ordered, word_count, last_idx, reordered, tail_tolerance)
