@@ -30,7 +30,7 @@ def test_job18_frozen_fixture_hard_fails_no_repair():
     assert res.repaired_structure is None
     assert res.details["violation_type"] == "uncovered_tail"
     assert res.details["tail_words"] == 52
-    assert res.details["tolerance_words"] == 3  # floor(76 * 0.05)
+    assert res.details["tail_tolerance"] == 0.05
     assert res.details["word_count"] == 76
     assert res.details["last_end"] == 23
 
@@ -83,8 +83,33 @@ def test_eligible_tail_repaired_in_place():
         },
     ]
     assert res.details["tail_words"] == 2
-    assert res.details["tolerance_words"] == 5  # floor(100 * 0.05)
+    assert res.details["tail_tolerance"] == 0.05
     assert res.details["repaired_original_end"] == 97
+
+
+def test_sub5_percent_floor_boundary_tail_is_repaired():
+    """A 3-word tail on a 76-word script is 3.9% < 5% — must be repaired,
+    not hard-failed. (Codex P2: floor(word_count*0.05)=3 rejected tail==3 via
+    `3 < 3`; the actual-fraction comparison repairs it.)"""
+    res = validate_narrative_coverage([{"word_range": [0, 72]}], word_count=76)
+    assert res.ok is True
+    assert res.reason == "covered_after_tail_repair"
+    assert res.repaired_structure is not None
+    assert res.repaired_structure[-1]["word_range"] == [0, 75]
+    assert res.details["tail_words"] == 3
+    assert res.details["tail_fraction"] == round(3 / 76, 4)
+
+
+def test_exactly_5_percent_tail_hard_fails():
+    """Exactly-5% (e.g. 5/100) is NOT below the <5% tolerance → hard-fail,
+    not repair. Pins the strict side of the fraction boundary."""
+    res = validate_narrative_coverage([{"word_range": [0, 94]}], word_count=100)
+    assert res.ok is False
+    assert res.reason == "narrative_not_covered"
+    assert res.repaired_structure is None
+    assert res.details["violation_type"] == "uncovered_tail"
+    assert res.details["tail_words"] == 5
+    assert res.details["tail_fraction"] == 0.05
 
 
 def test_input_not_mutated_by_repair():
@@ -101,7 +126,7 @@ def test_tail_tolerance_zero_disables_repair():
     assert res.repaired_structure is None
     assert res.details["violation_type"] == "uncovered_tail"
     assert res.details["tail_words"] == 2
-    assert res.details["tolerance_words"] == 0
+    assert res.details["tail_tolerance"] == 0.0
 
 
 # ── hard fails (no repair) ──

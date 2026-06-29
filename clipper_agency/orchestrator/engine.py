@@ -862,10 +862,11 @@ class Orchestrator:
             script_output["narrative_structure"] = coverage.repaired_structure
             logger.info(
                 "G7 narrative coverage: in-place tail repair absorbed %d word(s) "
-                "into beat %s (tolerance %d)",
+                "(%.1f%% of %d) into beat %s",
                 coverage.details.get("tail_words"),
+                coverage.details.get("tail_fraction", 0.0) * 100,
+                coverage.details.get("word_count"),
                 coverage.details.get("repaired_final_beat_id"),
-                coverage.details.get("tolerance_words"),
             )
         g7_result = GateNarrativeCoverage().evaluate(coverage=coverage)
         self._record_gate(assets_cache, job_id, "G7_narrative_coverage", g7_result)

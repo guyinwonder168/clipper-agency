@@ -14,7 +14,6 @@ without an orchestrator->agents layering inversion.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -129,7 +128,6 @@ def validate_narrative_coverage(
     # 5. COVERAGE + TAIL REPAIR DECISION
     last_end = ordered[-1]["word_range"][1]
     tail_words = last_idx - last_end
-    tolerance_words = math.floor(word_count * tail_tolerance)
 
     if tail_words == 0:
         return NarrativeCoverageResult(
@@ -139,7 +137,13 @@ def validate_narrative_coverage(
             {"word_count": word_count, "beat_count": len(ordered)},
         )
 
-    if 0 < tail_words < tolerance_words:
+    # In-place repair is eligible only for a tail STRICTLY below the tolerance
+    # fraction (default <5%). Compare the ACTUAL fraction tail_words /
+    # word_count — not a floored integer count — so a 3-word tail on a 76-word
+    # script (3.9% < 5%) is repaired while exactly-5% (e.g. 5/100) hard-fails.
+    # (Codex P2: floor(word_count*0.05) rejected floor-boundary sub-5% tails.)
+    tail_fraction = tail_words / word_count
+    if 0 < tail_fraction < tail_tolerance:
         repaired = [dict(b) for b in ordered]
         # Provenance: mark the gate-fabricated range so downstream consumers
         # (and debugging) can distinguish an LLM-emitted range from one the
@@ -156,7 +160,8 @@ def validate_narrative_coverage(
                 "word_count": word_count,
                 "beat_count": len(ordered),
                 "tail_words": tail_words,
-                "tolerance_words": tolerance_words,
+                "tail_tolerance": tail_tolerance,
+                "tail_fraction": round(tail_fraction, 4),
                 "repaired_final_beat_id": repaired[-1].get("beat_id"),
                 "repaired_original_end": last_end,
             },
@@ -169,7 +174,8 @@ def validate_narrative_coverage(
         {
             "violation_type": "uncovered_tail",
             "tail_words": tail_words,
-            "tolerance_words": tolerance_words,
+            "tail_tolerance": tail_tolerance,
+            "tail_fraction": round(tail_fraction, 4),
             "word_count": word_count,
             "last_end": last_end,
         },
