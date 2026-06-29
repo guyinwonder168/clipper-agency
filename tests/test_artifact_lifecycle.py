@@ -71,6 +71,7 @@ class TestSchemaMigration:
 def mock_niche_config():
     """Return a valid test NicheConfig."""
     from clipper_agency.config.schema import NicheConfig
+
     return NicheConfig(
         name="test_niche",
         description="Test niche",
@@ -166,8 +167,7 @@ def _run_full_pipeline_mocks(mocker, review_output, packager_output=None):
     # Mock gates and validation
     mocker.patch(
         "clipper_agency.orchestrator.engine.validate_content_direction",
-        return_value=MagicMock(format="single_story", story_count=1,
-                               stories=[], fallback=False),
+        return_value=MagicMock(format="single_story", story_count=1, stories=[], fallback=False),
     )
     mocker.patch("clipper_agency.orchestrator.engine.load_settings")
     mocker.patch(
@@ -184,6 +184,9 @@ def _run_full_pipeline_mocks(mocker, review_output, packager_output=None):
     ).return_value.evaluate.return_value = _pass
     mocker.patch(
         "clipper_agency.orchestrator.engine.GateVideoValidation",
+    ).return_value.evaluate.return_value = _pass
+    mocker.patch(
+        "clipper_agency.orchestrator.engine.GateNarrativeCoverage",
     ).return_value.evaluate.return_value = _pass
 
 
@@ -212,16 +215,19 @@ class TestPassedReviewer:
         )
 
         from clipper_agency.orchestrator.engine import Orchestrator
+
         orch = Orchestrator(db_path=db_path)
 
         # Ensure status columns exist
         conn = get_connection(db_path)
         from clipper_agency.db.schema import ensure_status_columns
+
         ensure_status_columns(conn)
         close_connection(db_path)
 
-        result = orch.run_pipeline(topic="test topic", niche="test_niche",
-                                    output_dir=str(tmp_path / "out"))
+        result = orch.run_pipeline(
+            topic="test topic", niche="test_niche", output_dir=str(tmp_path / "out")
+        )
         assert result["status"] == "completed"
 
         conn = get_connection(db_path)
@@ -237,7 +243,10 @@ class TestFailedReviewer:
     """Test status after reviewer fails."""
 
     def test_quality_failure_keeps_rejected_artifacts_but_blocks_publication(
-        self, tmp_path, mocker, mock_niche_config,
+        self,
+        tmp_path,
+        mocker,
+        mock_niche_config,
     ):
         """When reviewer fails (no repair plan), artifact=rejected, publication=blocked."""
         db_path = str(tmp_path / "test.db")
@@ -263,14 +272,16 @@ class TestFailedReviewer:
         )
 
         from clipper_agency.orchestrator.engine import Orchestrator
+
         orch = Orchestrator(db_path=db_path)
 
         conn = get_connection(db_path)
         ensure_status_columns(conn)
         close_connection(db_path)
 
-        result = orch.run_pipeline(topic="test topic", niche="test_niche",
-                                    output_dir=str(tmp_path / "out"))
+        result = orch.run_pipeline(
+            topic="test topic", niche="test_niche", output_dir=str(tmp_path / "out")
+        )
 
         # Pipeline should complete (reviewer fail doesn't crash pipeline)
         job_id = result.get("job_id", 0)
@@ -282,7 +293,10 @@ class TestFailedReviewer:
             # but if quality_status was set, verify pattern
 
     def test_rejected_artifact_is_not_promoted_to_final_output(
-        self, tmp_path, mocker, mock_niche_config,
+        self,
+        tmp_path,
+        mocker,
+        mock_niche_config,
     ):
         """Verify rejected artifacts don't create final/ directory."""
         db_path = str(tmp_path / "test.db")
@@ -308,14 +322,16 @@ class TestFailedReviewer:
         )
 
         from clipper_agency.orchestrator.engine import Orchestrator
+
         orch = Orchestrator(db_path=db_path)
 
         conn = get_connection(db_path)
         ensure_status_columns(conn)
         close_connection(db_path)
 
-        result = orch.run_pipeline(topic="test topic", niche="test_niche",
-                                    output_dir=str(tmp_path / "out"))
+        result = orch.run_pipeline(
+            topic="test topic", niche="test_niche", output_dir=str(tmp_path / "out")
+        )
         # The key assertion: rejected status means no final promotion path
         job_id = result.get("job_id", 0)
         if job_id:
@@ -331,7 +347,10 @@ class TestRepairableFailure:
     """Test status when reviewer fails with repair plan."""
 
     def test_repairable_failure_sets_repair_pending_without_deleting_candidate(
-        self, tmp_path, mocker, mock_niche_config,
+        self,
+        tmp_path,
+        mocker,
+        mock_niche_config,
     ):
         """When reviewer fails with repair plan and repair loop exhausts, repair_status=exhausted."""
         db_path = str(tmp_path / "test.db")
@@ -345,15 +364,17 @@ class TestRepairableFailure:
                 "repair_plan": {
                     "decision": "revise",
                     "max_repair_cycles": 2,
-                    "patches": [{
-                        "beat_id": "beat_1",
-                        "action": "replace_visual",
-                        "reason": "black_frame",
-                        "rerun_from": "composer",
-                        "timestamp_start_sec": 0.0,
-                        "timestamp_end_sec": 5.0,
-                        "required_visual": "better image",
-                    }],
+                    "patches": [
+                        {
+                            "beat_id": "beat_1",
+                            "action": "replace_visual",
+                            "reason": "black_frame",
+                            "rerun_from": "composer",
+                            "timestamp_start_sec": 0.0,
+                            "timestamp_end_sec": 5.0,
+                            "required_visual": "better image",
+                        }
+                    ],
                 },
             },
         )
@@ -376,10 +397,19 @@ class TestRepairableFailure:
         )
 
         from clipper_agency.orchestrator.engine import Orchestrator
+
         mocker.patch.object(
-            Orchestrator, "_retry_composer_stage",
-            return_value=({"status": "completed", "video_path": "v.mp4",
-                           "thumbnail_path": "", "duration_sec": 5.0}, None),
+            Orchestrator,
+            "_retry_composer_stage",
+            return_value=(
+                {
+                    "status": "completed",
+                    "video_path": "v.mp4",
+                    "thumbnail_path": "",
+                    "duration_sec": 5.0,
+                },
+                None,
+            ),
         )
 
         orch = Orchestrator(db_path=db_path)
@@ -388,8 +418,9 @@ class TestRepairableFailure:
         ensure_status_columns(conn)
         close_connection(db_path)
 
-        result = orch.run_pipeline(topic="test topic", niche="test_niche",
-                                    output_dir=str(tmp_path / "out"))
+        result = orch.run_pipeline(
+            topic="test topic", niche="test_niche", output_dir=str(tmp_path / "out")
+        )
 
         # Repair loop runs but exhausts due to repeated patches
         assert result.get("status") in ("exhausted", "failed")
@@ -409,7 +440,8 @@ class TestExhaustedRepairs:
     """Test status when repair cycles are exhausted."""
 
     def test_exhausted_repairs_keep_latest_artifact_for_manual_review(
-        self, temp_db,
+        self,
+        temp_db,
     ):
         """When repairs are exhausted, artifact=manual_review_required, repair=exhausted."""
         conn, db_path = temp_db
@@ -417,8 +449,8 @@ class TestExhaustedRepairs:
 
         from clipper_agency.db.queries import (
             update_job_artifact_status,
-            update_job_quality_status,
             update_job_publication_status,
+            update_job_quality_status,
             update_job_repair_status,
         )
 
@@ -493,7 +525,8 @@ class TestPipelineStatusInitialization:
         mocker.patch(
             "clipper_agency.orchestrator.engine.SafetyAgent",
         ).return_value.execute.return_value = {
-            "status": "pass", "reason": "safe",
+            "status": "pass",
+            "reason": "safe",
         }
         mocker.patch(
             "clipper_agency.orchestrator.engine.SegmentProducerAgent",
@@ -538,7 +571,8 @@ class TestPipelineStatusInitialization:
         mocker.patch(
             "clipper_agency.orchestrator.engine.ReviewerAgent",
         ).return_value.execute.return_value = {
-            "status": "pass", "score": 80,
+            "status": "pass",
+            "score": 80,
         }
         mocker.patch(
             "clipper_agency.orchestrator.engine.OutputPackager",
@@ -551,8 +585,9 @@ class TestPipelineStatusInitialization:
         }
         mocker.patch(
             "clipper_agency.orchestrator.engine.validate_content_direction",
-            return_value=MagicMock(format="single_story", story_count=1,
-                                   stories=[], fallback=False),
+            return_value=MagicMock(
+                format="single_story", story_count=1, stories=[], fallback=False
+            ),
         )
         mock_settings = MagicMock()
         mock_settings.assets_cache = str(tmp_path / "cache")
@@ -580,16 +615,21 @@ class TestPipelineStatusInitialization:
         mocker.patch(
             "clipper_agency.orchestrator.engine.GateVideoValidation",
         ).return_value.evaluate.return_value = _pass
+        mocker.patch(
+            "clipper_agency.orchestrator.engine.GateNarrativeCoverage",
+        ).return_value.evaluate.return_value = _pass
 
         from clipper_agency.orchestrator.engine import Orchestrator
+
         orch = Orchestrator(db_path=db_path)
 
         conn = get_connection(db_path)
         ensure_status_columns(conn)
         close_connection(db_path)
 
-        result = orch.run_pipeline(topic="test", niche="test_niche",
-                                    output_dir=str(tmp_path / "out"))
+        result = orch.run_pipeline(
+            topic="test", niche="test_niche", output_dir=str(tmp_path / "out")
+        )
         assert result["status"] == "completed"
 
         conn = get_connection(db_path)
@@ -684,8 +724,7 @@ def _pipeline_mocks_pass(mocker, review_output, packager_output=None):
 
     mocker.patch(
         "clipper_agency.orchestrator.engine.validate_content_direction",
-        return_value=MagicMock(format="single_story", story_count=1,
-                               stories=[], fallback=False),
+        return_value=MagicMock(format="single_story", story_count=1, stories=[], fallback=False),
     )
     mocker.patch("clipper_agency.orchestrator.engine.load_settings")
     mocker.patch(
@@ -701,6 +740,9 @@ def _pipeline_mocks_pass(mocker, review_output, packager_output=None):
     ).return_value.evaluate.return_value = _pass
     mocker.patch(
         "clipper_agency.orchestrator.engine.GateVideoValidation",
+    ).return_value.evaluate.return_value = _pass
+    mocker.patch(
+        "clipper_agency.orchestrator.engine.GateNarrativeCoverage",
     ).return_value.evaluate.return_value = _pass
 
 
@@ -724,7 +766,10 @@ class TestPublicationBlock:
     """Task 6.4: Quality failure keeps rejected artifacts but blocks publication."""
 
     def test_quality_failure_keeps_rejected_artifacts_but_blocks_publication(
-        self, tmp_path, mocker, mock_niche_config,
+        self,
+        tmp_path,
+        mocker,
+        mock_niche_config,
     ):
         """When reviewer fails (no repair plan), artifact=rejected, publication=blocked,
         video exists on disk, no final/ directory."""
@@ -756,6 +801,7 @@ class TestPublicationBlock:
         _mock_settings(tmp_path, mocker)
 
         from clipper_agency.orchestrator.engine import Orchestrator
+
         orch = Orchestrator(db_path=db_path)
 
         conn = get_connection(db_path)
@@ -763,7 +809,8 @@ class TestPublicationBlock:
         close_connection(db_path)
 
         result = orch.run_pipeline(
-            topic="test topic", niche="test_niche",
+            topic="test topic",
+            niche="test_niche",
             output_dir=str(output_dir),
         )
 
@@ -788,7 +835,10 @@ class TestPublicationBlock:
         assert not final_dir.exists()
 
     def test_final_directory_is_created_only_after_quality_passes(
-        self, tmp_path, mocker, mock_niche_config,
+        self,
+        tmp_path,
+        mocker,
+        mock_niche_config,
     ):
         """outputs/final/ only exists after quality passes and promotion succeeds."""
         db_path = str(tmp_path / "test.db")
@@ -814,6 +864,7 @@ class TestPublicationBlock:
         _mock_settings(tmp_path, mocker)
 
         from clipper_agency.orchestrator.engine import Orchestrator
+
         orch = Orchestrator(db_path=db_path)
 
         conn = get_connection(db_path)
@@ -821,7 +872,8 @@ class TestPublicationBlock:
         close_connection(db_path)
 
         result = orch.run_pipeline(
-            topic="test topic", niche="test_niche",
+            topic="test topic",
+            niche="test_niche",
             output_dir=str(output_dir),
         )
 
@@ -860,7 +912,8 @@ class TestPromotionAtomicity:
         orch.db_path = str(tmp_path / "test.db")
 
         result = orch._promote_to_final(
-            output_dir=str(tmp_path / "out"), job_id=1,
+            output_dir=str(tmp_path / "out"),
+            job_id=1,
         )
 
         assert result["status"] == "completed"
@@ -889,7 +942,8 @@ class TestPromotionAtomicity:
 
         try:
             result = orch._promote_to_final(
-                output_dir=str(tmp_path / "out"), job_id=1,
+                output_dir=str(tmp_path / "out"),
+                job_id=1,
             )
             # Promotion should fail
             assert result["status"] == "failed"
@@ -914,7 +968,9 @@ class TestPromotionAtomicity:
         orch.db_path = str(tmp_path / "test.db")
 
         result = orch._promote_to_final(
-            output_dir=str(tmp_path / "out"), job_id=1, cycle=1,
+            output_dir=str(tmp_path / "out"),
+            job_id=1,
+            cycle=1,
         )
 
         assert result["status"] == "completed"
@@ -927,7 +983,10 @@ class TestRepairCycleRetention:
     """Task 6.4: Repair cycle does not overwrite rejected output."""
 
     def test_repair_cycle_does_not_overwrite_rejected_output(
-        self, tmp_path, mocker, mock_niche_config,
+        self,
+        tmp_path,
+        mocker,
+        mock_niche_config,
     ):
         """Cycle 0 and cycle 1 outputs both exist on disk after repair."""
         db_path = str(tmp_path / "test.db")
@@ -950,15 +1009,17 @@ class TestRepairCycleRetention:
                 "repair_plan": {
                     "decision": "revise",
                     "max_repair_cycles": 2,
-                    "patches": [{
-                        "beat_id": "beat_1",
-                        "action": "replace_visual",
-                        "reason": "black_frame",
-                        "rerun_from": "composer",
-                        "timestamp_start_sec": 0.0,
-                        "timestamp_end_sec": 5.0,
-                        "required_visual": "better image",
-                    }],
+                    "patches": [
+                        {
+                            "beat_id": "beat_1",
+                            "action": "replace_visual",
+                            "reason": "black_frame",
+                            "rerun_from": "composer",
+                            "timestamp_start_sec": 0.0,
+                            "timestamp_end_sec": 5.0,
+                            "required_visual": "better image",
+                        }
+                    ],
                 },
             },
         )
@@ -976,16 +1037,21 @@ class TestRepairCycleRetention:
         )
 
         from clipper_agency.orchestrator.engine import Orchestrator
+
         mocker.patch.object(
-            Orchestrator, "_retry_composer_stage",
-            return_value=({
-                "status": "completed",
-                "video_path": str(cycle_1_video),
-                "thumbnail_path": "",
-                "duration_sec": 5.0,
-                "cycle": 1,
-                "cycle_video_path": str(cycle_1_video),
-            }, None),
+            Orchestrator,
+            "_retry_composer_stage",
+            return_value=(
+                {
+                    "status": "completed",
+                    "video_path": str(cycle_1_video),
+                    "thumbnail_path": "",
+                    "duration_sec": 5.0,
+                    "cycle": 1,
+                    "cycle_video_path": str(cycle_1_video),
+                },
+                None,
+            ),
         )
 
         orch = Orchestrator(db_path=db_path)
@@ -995,7 +1061,8 @@ class TestRepairCycleRetention:
         close_connection(db_path)
 
         result = orch.run_pipeline(
-            topic="test topic", niche="test_niche",
+            topic="test topic",
+            niche="test_niche",
             output_dir=str(output_dir),
         )
 

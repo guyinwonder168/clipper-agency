@@ -1,8 +1,8 @@
 # Clipper Agency — Requirements Traceability Matrix
 
-**Version:** 4.3
-**Date:** 2026-06-11
-**Status:** Phase 23 Complete — Reviewer Context + Diagnostics Enforcement Contract
+**Version:** 4.4
+**Date:** 2026-06-29
+**Status:** Phase 23 Complete + ADR 0030 (Inter-Agent Contract Gates — Proposed, investigation complete, implementation pending)
 
 ---
 
@@ -298,6 +298,19 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | 196 | Transcript backend DEFERRED (post-v2.4.0): faster-whisper behind a config flag, yt-dlp auto-caption extraction, and keyframe-precise snapping. Blocked by ADR 0026 (do-not-rebuild), the GPU-forbidden constraint, no existing transcript infra, and the fact that the v2.4.0 release gate does NOT require clip-windowing. The "trimmed segment matches beat's spoken point" verification criterion waits for this backend (the v1 default cannot satisfy it because it never narrows the window) | ADR 0026, Design §18 |
 | 197 | Visual Director LLM JSON-parse robustness (job_17 fix): `_llm_plan_scenes_response` requests OpenRouter JSON mode (`response_format={"type":"json_object"}`) on both traced + untraced paths (forwarded via `chat_traced`'s `**kwargs`), and the parse is centralized in a static `_parse_scenes_json` backed by a `json_repair` salvage net (both passes must fail to raise). MiMo-V2.5 supports `json_object` but NOT native strict `json_schema` (schema enforcement is prompt-based/"transformed"). Schema defense: `_parse_scenes_json` rejects non-list `scenes` AND non-dict scene items → routes to the deterministic fallback (covers ALL beats) so `_normalize_beat_plan` never sees invalid items. Both planning entry points return `None` on an empty recovered plan (routes to legacy fallback, not a 0-scene G9-tripping plan). Eliminates the malformed-JSON → 0-assets → G9 hard-fail class. `json-repair==0.61.0` pinned | SRS §2 FR-73, Design §Visual Director Beat-Driven Planning, ADR 0026 |
 
+### From ADR 0030 — Inter-Agent Contract Gates (job_18 root cause, investigation complete / implementation pending)
+
+| # | Fact | New Location |
+|---|------|-------------|
+| 198 | job_18 root cause: Scriptwriter (`qwen/qwen3-32b`) emitted `narrative_structure` `word_range` covering only words 0–23 of 76; `_validate_output` checks word-count + emoji, never coverage; `_normalize_narrative_structure` only backfills missing fields → 52 words / ~23 s of narration had NO beat → `build_canonical_timeline` stretched the last beat into a 25.17 s mega-beat → Visual Director planned one wrong-artist scene (Jennifer Coppen for Sarwendah) → Composer `-shortest` cut the last ~2.6 s ("…like dan share") → Reviewer total-duration-only `_check_av_sync` PASSED (structurally defeated by `-shortest` equalization) → repair re-derived the timeline from the broken structure → job "completed" unpostable (~60 % static: one image ~8 s, near-black "KOMEN DI BAWAH!" card ~24 s) | PRD §5 PR-38..PR-44, SRS §2 FR-74..FR-80, Design §19, ADR 0030 |
+| 199 | ADR 0030 decision: KEEP the 7-agent chain + audio-first beat-driven architecture; ADD deterministic contract gates at every inter-agent boundary + fix the repair router + remove `-shortest`. NOT a restructure — MoneyPrinterTurbo's opaque-string topology was REJECTED (would discard the richer beat-driven contract, which research shows is AHEAD of per-sentence tools and is NOT the job_18 problem). ADR 0030 amends ADR 0026's no-rebuild default FOR OUTPUT-QUALITY WORK ONLY (product owner lifted the constraint) | ADR 0030, Design §19 |
+| 200 | G7 GateNarrativeCoverage: assert `word_range` union == `[0, word_count-1]`, contiguous, in-bounds, AFTER Scriptwriter BEFORE Voice Producer; in-place repair for tail <5 % of words else hard-fail routing repair to Scriptwriter (NOT Visual Director). THE load-bearing fix | PRD §5 PR-38, SRS §2 FR-74, Design §19 |
+| 201 | Audio-as-master: drop Composer `-shortest` → `-t voiceover_duration`; pre-render pad visual ≥ `voiceover_duration_sec`; G9.5 GateVisualAudioCoverage (VD→Composer); G10 `AUDIO_NOT_TRUNCATED` independent audio-stream re-probe (`>= voiceover_duration_sec - 0.5 s`, immune to `-shortest` equalization). MoneyPrinterTurbo policy adopted without its topology | PRD §5 PR-39, SRS §2 FR-75, Design §19 |
+| 202 | Entity-binding rejection at the shared `candidate_semantic_ranker` chokepoint (`WRONG_ENTITY` rule — `subject_name` must overlap beat `spoken_point` + `main_entities`, fuzzy for aliases), VLM inspector `subject_name` required (missing ⇒ revise), `person_match` 0.8→0.6, `MAX_BEAT_DURATION_SEC`/max-scene cap (~12 s). Cache-key parity ⇒ one rule fixes pre-VD qualification AND Visual Director. CLIP image-text ranking DEFERRED to Phase 27+ | PRD §5 PR-40, SRS §2 FR-76, Design §19 |
+| 203 | Repair-router root-cause routing: `_rerun_upstream_cascade` routes by failure REASON (Scriptwriter=coverage, VD=entity/dwell, Composer=audio); forces `narrative_structure` regen on coverage re-fail; bounded `MAX_REPAIR_CYCLES` + terminal fail-state (a job that cannot satisfy the coverage gate after N regens FAILS, never "completes" garbage); voiceover-text-diff skip optimization | PRD §5 PR-43, SRS §2 FR-78, Design §19 |
+| 204 | Engagement gates (post-worthy bar): VISUAL-CHANGE-DENSITY (min change-events per 1.5–4 s; ~8–15 for 30 s), HOOK (beat 0 real image not title card; first change by 1.5 s), DURATION-BAND (21–42 s), MONOTONY (no same content-hash across consecutive beats without treatment variation). WARN+repair, not pipeline-death; creator-economy guidance not hard TikTok-API data | PRD §5 PR-44, SRS §2 FR-80, Design §20 |
+| 205 | Deferred (Phase 27+): CLIP image-text cosine similarity for final candidate relevance; multimodal "watch the rendered video" Reviewer (claude-auto-tok style). The deterministic gates (FR-74..FR-80) are the primary line; these are higher-fidelity optional upgrades | ADR 0030, Design §19.5 |
+
 ---
 
 ## Requirements Traceability Matrix
@@ -338,6 +351,18 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | PR-13 | — | Stage 2 | — | — | — |
 | PR-14 | — | Stage 2 | — | — | — |
 | PR-16 | — | Stage 2 | — | — | — |
+
+### ADR 0030 Requirements (job_18 output-quality — investigation complete, implementation pending)
+
+| PRD ID | SRS ID | Design Section | Gate | Edge Cases | Validation |
+|--------|--------|---------------|------|------------|------------|
+| PR-38 | FR-74 | §19 Inter-Agent Contract Gates | G7 GateNarrativeCoverage (new) | E53 — `word_range` under-covers script | Tokenize `voiceover_text`; assert union == `[0, word_count-1]`, contiguous, in-bounds; in-place repair for tail <5 % else hard-fail → Scriptwriter. Frozen job_18 fixture (24/76) fails + routes to scriptwriter |
+| PR-39 | FR-75 | §19 Audio-as-Master | G9.5 visual-coverage (new) + G10 `AUDIO_NOT_TRUNCATED` (strengthened) | E55, E56 — visual < audio; `-shortest` truncates CTA | Drop `-shortest` → `-t voiceover_duration`; pre-render pad visual ≥ audio; G10 independently re-probes audio stream |
+| PR-40 | FR-76 | §19 Entity-Binding | Pre-VD qualification + VD chokepoint (no new gate — rejection rule) | E57, E58 — wrong-artist asset; VLM omits subject_name | `WRONG_ENTITY` rule at `candidate_semantic_ranker` (subject_name vs beat entities); `person_match` 0.8→0.6; MAX-scene cap; cache-key parity holds |
+| PR-41 | FR-77 | §19 Reviewer Per-Scene Detection | G10 (extended) | frozen card, wrong face in right window, truncated audio | Per-scene entity-vs-beat + audio-not-truncated + max-dwell/frozen-frame checks extend `_check_av_sync` past the total-duration scalar |
+| PR-42 | FR-79 | §19 Timeline Backstop | Pre-VD (no new gate — builder signal) | E54 — 25 s mega-beat | `build_canonical_timeline` UNCOVERED_TAIL detection + `MAX_BEAT_DURATION_SEC` cap (12 s); defense-in-depth behind PR-38 |
+| PR-43 | FR-78 | §19 Repair-Router Root-Cause Routing | Repair loop | E59 — coverage re-fails on regen | Route by REASON to root agent; force narrative regen; bounded `MAX_REPAIR_CYCLES` + terminal fail (never "complete" garbage) |
+| PR-44 | FR-80 | §20 Engagement Gates | Reviewer programmatic_checks | E60 — frozen card / low visual-change-density | WARN+repair gates: visual-change-density, hook-on-beat-0, duration-band 21–42 s, monotony guard. Not pipeline-death |
 
 ---
 
@@ -473,6 +498,19 @@ Every fact from the archived documents (`docs/old/25may2026/`) is mapped below. 
 | E37 | Config changed while job running | Running jobs use config snapshot at creation time | Design §9 |
 | E38 | Niche config missing required fields | G1 hard-fail, specific error message | Design §3 G1 |
 | E39 | Platform (TikTok) policy changes | Safety rules configurable per niche, no code change | PRD §3 |
+
+### ADR 0030 / job_18 Edge Cases (Inter-Agent Contract Gates)
+
+| # | Edge Case | Handling | Location |
+|---|-----------|----------|----------|
+| E53 | Scriptwriter `word_range` does not cover all `voiceover_text` words (job_18: 24/76) | G7 GateNarrativeCoverage fails; in-place repair if tail <5 % of words, else hard-fail routing repair to **Scriptwriter** (not VD) with "cover ALL words" instruction | SRS §2 FR-74, Design §19 |
+| E54 | `build_canonical_timeline` would manufacture a >12 s mega-beat from an uncovered tail | UNCOVERED_TAIL detection + `MAX_BEAT_DURATION_SEC` cap reject the non-physical entry + surface a structured signal the orchestrator gates on | SRS §2 FR-79, Design §19 |
+| E55 | Visual track sums to less than voiceover duration (xfade shrinkage) | G9.5 GateVisualAudioCoverage fails pre-render; Composer pads (loop/extend) OR repair routes to VD; `-shortest` removed so audio is never the cut stream | SRS §2 FR-75, Design §19 |
+| E56 | Composer `-shortest` would truncate the CTA audio | replaced by `-t voiceover_duration`; G10 `AUDIO_NOT_TRUNCATED` re-probe independently asserts audio ≥ `voiceover_duration_sec - 0.5 s` | SRS §2 FR-75, Design §19 |
+| E57 | Selected asset depicts the wrong entity (job_18: Jennifer Coppen for Sarwendah beat) | `WRONG_ENTITY` rejection at the shared `candidate_semantic_ranker` chokepoint (subject_name vs beat `spoken_point`+`main_entities`); beat falls back / recovers | SRS §2 FR-76, Design §19 |
+| E58 | VLM inspector omits `subject_name` | degrades to `revise` (NOT accept) — entity binding cannot be satisfied | SRS §2 FR-76, Design §19 |
+| E59 | Repair loop keeps re-failing the coverage gate (model regenerates partial coverage) | bounded `MAX_REPAIR_CYCLES`; after N failed regens the job FAILS (terminal state) — never "completes" garbage | SRS §2 FR-78, Design §19 |
+| E60 | A single static card held >4 s, or a 1–2-image plan for a 25 s+ tail | Engagement gates (VISUAL-CHANGE-DENSITY + MAX-DWELL + MONOTONY) flag as a "low-effort tell"; WARN+repair routes to VD/Scriptwriter (not pipeline-death) | SRS §2 FR-80, Design §20 |
 
 ---
 

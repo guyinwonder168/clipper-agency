@@ -50,11 +50,15 @@ def _setup_job(db_path, assets_cache, tmp_path):
             "content_angle": "Test angle",
         },
     }
-    job_id = create_job(
-        conn, "Gate failure test", "test_niche", config_snapshot=snapshot)
+    job_id = create_job(conn, "Gate failure test", "test_niche", config_snapshot=snapshot)
     all_agents = [
-        "safety", "segment_producer", "scriptwriter",
-        "voice_producer", "visual_director", "composer", "reviewer",
+        "safety",
+        "segment_producer",
+        "scriptwriter",
+        "voice_producer",
+        "visual_director",
+        "composer",
+        "reviewer",
     ]
     for name in all_agents:
         create_agent_state(conn, job_id, name)
@@ -97,10 +101,7 @@ def _setup_job(db_path, assets_cache, tmp_path):
         },
     }
     for agent_name, output in agent_outputs.items():
-        out_path = (
-            Path(assets_cache)
-            / f"job_{job_id}" / "agents" / agent_name / "output.json"
-        )
+        out_path = Path(assets_cache) / f"job_{job_id}" / "agents" / agent_name / "output.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(output), encoding="utf-8")
 
@@ -112,7 +113,9 @@ class TestGateFailureRepairRouting:
     """Engine wires deterministic gate failures into the repair loop."""
 
     def test_visual_coverage_gate_failure_routes_to_visual_director(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """VISUAL_COVERAGE_FAILED without repair_plan → repair routing to VD."""
         ac = str(tmp_path / "cache")
@@ -127,14 +130,18 @@ class TestGateFailureRepairRouting:
         }
 
         with patch.object(
-            Orchestrator, "_run_reviewer", return_value=gate_failure_review,
+            Orchestrator,
+            "_run_reviewer",
+            return_value=gate_failure_review,
         ):
             abort, review_output, pkg = orch._retry_review_and_package(
                 conn=get_connection(db_initialized),
                 job_id=job_id,
                 topic="Gate failure test",
                 script_output={
-                    "script": [], "caption": "", "narrative_structure": [],
+                    "script": [],
+                    "caption": "",
+                    "narrative_structure": [],
                     "unverified_claims": [],
                 },
                 compose_output={
@@ -157,7 +164,9 @@ class TestGateFailureRepairRouting:
         assert len(routing["patches"]) == 1
 
     def test_package_consistency_gate_failure_routes_to_segment_producer(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """PACKAGE_CONSISTENCY_FAILED → repair routing to segment_producer."""
         ac = str(tmp_path / "cache")
@@ -172,14 +181,18 @@ class TestGateFailureRepairRouting:
         }
 
         with patch.object(
-            Orchestrator, "_run_reviewer", return_value=gate_failure_review,
+            Orchestrator,
+            "_run_reviewer",
+            return_value=gate_failure_review,
         ):
             _, review_output, _ = orch._retry_review_and_package(
                 conn=get_connection(db_initialized),
                 job_id=job_id,
                 topic="Gate failure test",
                 script_output={
-                    "script": [], "caption": "", "narrative_structure": [],
+                    "script": [],
+                    "caption": "",
+                    "narrative_structure": [],
                     "unverified_claims": [],
                 },
                 compose_output={
@@ -199,7 +212,9 @@ class TestGateFailureRepairRouting:
         assert routing["target_agent"] == "segment_producer"
 
     def test_unmapped_failure_still_blocks_without_repair(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """Unknown failure reason (not in GATE_FAILURE_REPAIR_MAP) → no routing."""
         ac = str(tmp_path / "cache")
@@ -213,14 +228,18 @@ class TestGateFailureRepairRouting:
         }
 
         with patch.object(
-            Orchestrator, "_run_reviewer", return_value=unknown_failure_review,
+            Orchestrator,
+            "_run_reviewer",
+            return_value=unknown_failure_review,
         ):
             _, review_output, _ = orch._retry_review_and_package(
                 conn=get_connection(db_initialized),
                 job_id=job_id,
                 topic="Gate failure test",
                 script_output={
-                    "script": [], "caption": "", "narrative_structure": [],
+                    "script": [],
+                    "caption": "",
+                    "narrative_structure": [],
                     "unverified_claims": [],
                 },
                 compose_output={
@@ -244,7 +263,9 @@ class TestUpstreamCascadeRepair:
     """P2 #1: SP repair triggers full SP→SW→VP→VD→Composer cascade."""
 
     def test_segment_producer_repair_reruns_full_cascade(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """SP target_agent reruns all 5 agents, not just cached outputs."""
         ac = str(tmp_path / "cache")
@@ -258,41 +279,75 @@ class TestUpstreamCascadeRepair:
             def _mock(*args, **kwargs):
                 call_log.append(name)
                 return return_value
+
             return _mock
 
-        with patch.object(orch, "_run_researcher",
-                          side_effect=track("_run_researcher", {
-                              "status": "completed", "story_beats": [],
-                              "research_brief": "x", "sources": [],
-                              "risk_flags": [],
-                          })), \
-             patch.object(orch, "_run_content_scriptwriter",
-                          side_effect=track("_run_content_scriptwriter", {
-                              "status": "completed", "script": [],
-                              "caption": "c", "voiceover_text": "",
-                              "narrative_structure": [], "unverified_claims": [],
-                          })), \
-             patch.object(orch, "_run_voice_producer",
-                          side_effect=track("_run_voice_producer", {
-                              "status": "completed", "timestamps": [],
-                              "voiceover_duration_sec": 5.0,
-                          })), \
-             patch.object(orch, "_run_visual_director_phase",
-                          side_effect=track("_run_visual_director_phase", {
-                              "status": "completed", "assets": [],
-                          })), \
-             patch.object(orch, "_retry_composer_stage",
-                          return_value=({"status": "completed",
-                                          "duration_sec": 5.0}, None)), \
-             patch.object(orch, "_run_reviewer",
-                          return_value={"status": "pass", "score": 85}):
+        with (
+            patch.object(
+                orch,
+                "_run_researcher",
+                side_effect=track(
+                    "_run_researcher",
+                    {
+                        "status": "completed",
+                        "story_beats": [],
+                        "research_brief": "x",
+                        "sources": [],
+                        "risk_flags": [],
+                    },
+                ),
+            ),
+            patch.object(
+                orch,
+                "_run_content_scriptwriter",
+                side_effect=track(
+                    "_run_content_scriptwriter",
+                    {
+                        "status": "completed",
+                        "script": [],
+                        "caption": "c",
+                        "voiceover_text": "Hello!",
+                        "narrative_structure": [{"beat_id": 1, "word_range": [0, 0]}],
+                        "unverified_claims": [],
+                    },
+                ),
+            ),
+            patch.object(
+                orch,
+                "_run_voice_producer",
+                side_effect=track(
+                    "_run_voice_producer",
+                    {
+                        "status": "completed",
+                        "timestamps": [],
+                        "voiceover_duration_sec": 5.0,
+                    },
+                ),
+            ),
+            patch.object(
+                orch,
+                "_run_visual_director_phase",
+                side_effect=track(
+                    "_run_visual_director_phase",
+                    {
+                        "status": "completed",
+                        "assets": [],
+                    },
+                ),
+            ),
+            patch.object(
+                orch,
+                "_retry_composer_stage",
+                return_value=({"status": "completed", "duration_sec": 5.0}, None),
+            ),
+            patch.object(orch, "_run_reviewer", return_value={"status": "pass", "score": 85}),
+        ):
             result = orch._execute_single_repair_cycle(
-                cycle=1, max_cycles=3,
+                cycle=1,
+                max_cycles=3,
                 target_agent="segment_producer",
-                patches=[{"beat_id": "all", "action": "redo_research",
-                          "reason": "wrong_event"}],
-                before_review={"status": "fail",
-                               "reason": "PACKAGE_CONSISTENCY_FAILED"},
+                patches=[{"beat_id": "all", "action": "redo_research", "reason": "wrong_event"}],
+                before_review={"status": "fail", "reason": "PACKAGE_CONSISTENCY_FAILED"},
                 job_id=job_id,
                 assets_cache=ac,
                 output_dir=str(tmp_path / "outputs"),
@@ -302,8 +357,10 @@ class TestUpstreamCascadeRepair:
 
         # All 5 agents rerun in order
         assert call_log == [
-            "_run_researcher", "_run_content_scriptwriter",
-            "_run_voice_producer", "_run_visual_director_phase",
+            "_run_researcher",
+            "_run_content_scriptwriter",
+            "_run_voice_producer",
+            "_run_visual_director_phase",
         ]
         assert result.get("status") == "completed"
         conn.close()
@@ -313,7 +370,9 @@ class TestMultiGateSequentialRepair:
     """P2 #2: After repair, a different gate failure triggers new patches."""
 
     def test_gate_failure_after_repair_continues_with_new_patches(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """Post-repair review fails with different gate → continue."""
         ac = str(tmp_path / "cache")
@@ -328,11 +387,12 @@ class TestMultiGateSequentialRepair:
         }
 
         result = orch._handle_review_outcome(
-            cycle=1, job_id=job_id,
-            before_review={"status": "fail",
-                           "reason": "VISUAL_COVERAGE_FAILED"},
+            cycle=1,
+            job_id=job_id,
+            before_review={"status": "fail", "reason": "VISUAL_COVERAGE_FAILED"},
             after_review=after_review,
-            conn=conn, assets_cache=ac,
+            conn=conn,
+            assets_cache=ac,
         )
 
         assert result["_action"] == "continue"
@@ -341,7 +401,9 @@ class TestMultiGateSequentialRepair:
         conn.close()
 
     def test_no_repair_plan_and_no_gate_failure_goes_manual(
-        self, db_initialized, tmp_path,
+        self,
+        db_initialized,
+        tmp_path,
     ):
         """Neither repair_plan nor gate failure → manual review."""
         ac = str(tmp_path / "cache")
@@ -356,10 +418,12 @@ class TestMultiGateSequentialRepair:
         }
 
         result = orch._handle_review_outcome(
-            cycle=1, job_id=job_id,
+            cycle=1,
+            job_id=job_id,
             before_review={"status": "fail"},
             after_review=after_review,
-            conn=conn, assets_cache=ac,
+            conn=conn,
+            assets_cache=ac,
         )
 
         assert result["_action"] == "return"

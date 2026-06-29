@@ -35,7 +35,7 @@
 ## Pipeline
 
 ```
-Topic → G1 → Safety → G2 → Segment Producer (story_beats + edit blueprint) → G3-G5 → Scriptwriter (continuous voiceover) → Script Gate → Voice Producer (single audio + word timestamps) → G8 → Visual Director (beat-driven, audio-aware) → G9 → Composer (rendered_scene_manifest + diagnostics) → G10 → Reviewer (quality gates + timestamp semantic) → Output
+Topic → G1 → Safety → G2 → Segment Producer (story_beats + edit blueprint) → G3-G5 → Scriptwriter (continuous voiceover) → **G7 Narrative-Coverage Gate** *(planned, ADR 0030)* → Voice Producer (single audio + word timestamps) → G8 → Visual Director (beat-driven, audio-aware) → G9 → Composer (rendered_scene_manifest + diagnostics) → G10 → Reviewer (quality gates + timestamp semantic) → Output
 ```
 
 Each step is **gated** (pass/soft-fail/hard-fail). Agents communicate through **database state** — no direct agent-to-agent calls. Audio-first architecture: voiceover generated first, visuals fitted to audio timeline.
@@ -279,6 +279,8 @@ Tests live in `tests/` mirroring the package structure. Currently **1837 tests**
 | [SRS](docs/SRS.md) | Software requirements specification |
 | [Technical Design](docs/technical_design.md) | Architecture, gates, agents |
 | [Requirements Traceability](docs/requirements_traceability.md) | End-to-end requirement mapping |
+| [ADR 0030 — Inter-Agent Contract Gates](docs/adr/0030-inter-agent-contract-gates.md) | job_18 root-cause + TikTok-quality gate decision (Proposed) |
+| [Contract-Gate Implementation Plan](docs/plans/2026-06-29-inter-agent-contract-gates-tiktok-quality.md) | FIX-1..7 execution plan (resume target) |
 | [Evolution Plan](docs/design/evolution_plan.md) | Future stages roadmap |
 | [Implementation Plan](docs/plans/2026-05-26-mvp-implementation.md) | Phase-by-phase build log |
 
@@ -286,6 +288,8 @@ Tests live in `tests/` mirroring the package structure. Currently **1837 tests**
 
 ## Status
 
-**✅ Post-MVP (Stage 2)** — Core pipeline hardened with runtime quality gates, multi-provider asset sourcing (YouTube/Tavily/Brave), story-mode reconciliation, multimodal candidate inspection, bounded automated repair loop, dashboard retry/resume, and Reviewer enforcement from Composer diagnostics + rendered scene manifest. Single-tenant, manual topic input. Next: multi-account, scheduling, API publishing.
+**✅ Post-MVP (Stage 2)** — Core pipeline hardened with runtime quality gates, multi-provider asset sourcing (YouTube/Tavily/Brave), story-mode reconciliation, multimodal candidate inspection, bounded automated repair loop, dashboard retry/resume, and Reviewer enforcement from Composer diagnostics + rendered scene manifest. Single-tenant, manual topic input.
+
+**🔧 In progress (ADR 0030):** job_18 root-cause traced — the first fully-completed ElevenLabs job produced an *unpostable* video (Scriptwriter `word_range` covered only 24/76 words → one 25 s frozen closing card + wrong-artist image + 2.6 s audio cut; Reviewer's total-duration-only gate passed it). Decision: keep the 7-agent chain, add deterministic **inter-agent contract gates** (narrative-coverage, audio-as-master/no `-shortest` cut, entity-binding, per-scene Reviewer, root-cause repair routing, engagement gates) so produced videos are TikTok-post-worthy. Plan: `docs/plans/2026-06-29-inter-agent-contract-gates-tiktok-quality.md` (FIX-1..7, no code shipped yet). Next after that: multi-account, scheduling, API publishing.
 
 1837 tests passing · 93%+ line coverage · Docker-ready · SonarCloud quality gate passing
