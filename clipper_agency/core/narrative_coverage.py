@@ -42,6 +42,24 @@ def _is_real_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _word_range_violation(wr: Any, last_idx: int) -> bool:
+    """True if ``wr`` is not a valid ``[start, end]`` word_range in [0, last_idx].
+
+    Extracted from the bounds loop so validate_narrative_coverage's cognitive
+    complexity stays under SonarCloud S3776 (15) — the 7-clause ``or`` chain
+    is the dominant complexity driver.
+    """
+    return (
+        not isinstance(wr, (list, tuple))
+        or len(wr) != 2
+        or not _is_real_int(wr[0])
+        or not _is_real_int(wr[1])
+        or wr[0] > wr[1]
+        or wr[0] < 0
+        or wr[1] > last_idx
+    )
+
+
 def _coverage_outcome(
     ordered: list[dict[str, Any]],
     word_count: int,
@@ -149,15 +167,7 @@ def validate_narrative_coverage(
     # 2. EXTRACT + BOUNDS
     for i, beat in enumerate(narrative_structure):
         wr = beat.get("word_range")
-        if (
-            not isinstance(wr, (list, tuple))
-            or len(wr) != 2
-            or not _is_real_int(wr[0])
-            or not _is_real_int(wr[1])
-            or wr[0] > wr[1]
-            or wr[0] < 0
-            or wr[1] > last_idx
-        ):
+        if _word_range_violation(wr, last_idx):
             return NarrativeCoverageResult(
                 False,
                 "narrative_not_covered",
