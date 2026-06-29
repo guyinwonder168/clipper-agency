@@ -262,3 +262,46 @@ def test_enforce_narrative_coverage_helper_repairs_and_passes(tmp_path, monkeypa
     assert script_output["narrative_structure"][-1]["word_range"] == [50, 99]
     g7 = [r for name, r in recorded if name == "G7_narrative_coverage"]
     assert len(g7) == 1 and g7[0].passed and g7[0].severity == "pass"
+
+
+def test_enforce_narrative_coverage_persists_repaired_to_disk(tmp_path, monkeypatch):
+    """When the gate repairs/reorders, the repaired structure is re-written to
+    the Scriptwriter's on-disk artifacts, so reload paths (e.g.
+    _retry_composer_stage) don't resurrect the stale pre-gate version (Codex P2)."""
+    import json
+    from pathlib import Path
+
+    from clipper_agency.core.paths import agent_dir
+
+    orch = _helper_orchestrator(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch, "_record_gate", lambda *a, **k: None)
+
+    assets_cache = str(tmp_path / "cache")
+    base = Path(agent_dir(assets_cache, 1, "scriptwriter"))
+    base.mkdir(parents=True, exist_ok=True)
+    # Stale pre-gate on-disk structure (last beat ends at 97, not 99).
+    (base / "narrative_structure.json").write_text(
+        json.dumps([{"beat_id": 1, "word_range": [0, 49]}, {"beat_id": 2, "word_range": [50, 97]}])
+    )
+
+    script_output = {
+        "voiceover_text": "word " * 100,  # 100 words; tail=2 < 5% -> repaired
+        "narrative_structure": [
+            {"beat_id": 1, "word_range": [0, 49]},
+            {"beat_id": 2, "word_range": [50, 97]},
+        ],
+    }
+
+    abort = orch._enforce_narrative_coverage(
+        MagicMock(), job_id=1, script_output=script_output, assets_cache=assets_cache
+    )
+
+    assert abort is None  # repaired + passed
+    # The on-disk artifact now reflects the repaired [50, 99].
+    on_disk = json.loads((base / "narrative_structure.json").read_text())
+    assert on_disk[-1]["word_range"] == [50, 99]
+    # And the full output.json was re-persisted with the repaired structure.
+    from clipper_agency.core.paths import agent_output_file
+
+    out = json.loads(Path(agent_output_file(assets_cache, 1, "scriptwriter")).read_text())
+    assert out["narrative_structure"][-1]["word_range"] == [50, 99]

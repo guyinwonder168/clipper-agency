@@ -860,6 +860,7 @@ class Orchestrator:
         coverage = validate_narrative_coverage(narrative, _word_count_for_coverage(voiceover_text))
         if coverage.repaired_structure is not None:
             script_output["narrative_structure"] = coverage.repaired_structure
+            self._persist_repaired_narrative(assets_cache, job_id, script_output)
             logger.info(
                 "G7 narrative coverage: %s (tail_words=%s, reordered=%s)",
                 coverage.reason,
@@ -871,6 +872,23 @@ class Orchestrator:
         return self._enforce_gate(
             conn, job_id, "G7_narrative_coverage", g7_result, failed_at="narrative_coverage"
         )
+
+    def _persist_repaired_narrative(
+        self, assets_cache: str, job_id: int, script_output: dict[str, Any]
+    ) -> None:
+        """Re-write the Scriptwriter's on-disk narrative artifacts with the
+        G7-repaired structure, so retry/resume paths that reload Scriptwriter
+        output from disk (e.g. ``_retry_composer_stage``) see the repaired
+        version instead of the stale pre-gate one (Codex P2)."""
+        if not assets_cache:
+            return
+        from clipper_agency.core.paths import agent_dir, agent_output_file
+
+        base = agent_dir(assets_cache, job_id, "scriptwriter")
+        repaired = script_output["narrative_structure"]
+        write_json(f"{base}/narrative_structure.json", repaired)
+        write_json(f"{base}/script.json", {"scenes": repaired})
+        write_json(agent_output_file(assets_cache, job_id, "scriptwriter"), script_output)
 
     def _evaluate_and_enforce_gate(
         self,
