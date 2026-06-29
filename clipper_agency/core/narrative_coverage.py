@@ -94,6 +94,14 @@ def validate_narrative_coverage(
 
     # 3. SORT + CONTIGUITY (and 4. head coverage)
     ordered = sorted(narrative_structure, key=lambda b: b["word_range"][0])
+    # Detect out-of-order input. The canonical timeline sorts by word_range[0]
+    # anyway, but the Composer iterates narrative_structure in its GIVEN order
+    # (_align_assets_to_narrative_beats), so an out-of-order structure would
+    # align visuals against the wrong narration. Persist the sorted order when
+    # the input wasn't already chronological (Codex P2).
+    reordered = [b["word_range"][0] for b in ordered] != [
+        b["word_range"][0] for b in narrative_structure
+    ]
     for i in range(len(ordered) - 1):
         end_a = ordered[i]["word_range"][1]
         start_b = ordered[i + 1]["word_range"][0]
@@ -130,6 +138,20 @@ def validate_narrative_coverage(
     tail_words = last_idx - last_end
 
     if tail_words == 0:
+        if reordered:
+            # Full coverage but beats were out of order — persist the sorted
+            # order so the Composer (which iterates narrative_structure as
+            # given) and the canonical timeline agree (Codex P2).
+            return NarrativeCoverageResult(
+                True,
+                "covered_after_reorder",
+                [dict(b) for b in ordered],
+                {
+                    "word_count": word_count,
+                    "beat_count": len(ordered),
+                    "reordered": True,
+                },
+            )
         return NarrativeCoverageResult(
             True,
             "covered",
@@ -159,6 +181,7 @@ def validate_narrative_coverage(
             {
                 "word_count": word_count,
                 "beat_count": len(ordered),
+                "reordered": reordered,
                 "tail_words": tail_words,
                 "tail_tolerance": tail_tolerance,
                 "tail_fraction": round(tail_fraction, 4),

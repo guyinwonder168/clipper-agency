@@ -112,6 +112,24 @@ def test_exactly_5_percent_tail_hard_fails():
     assert res.details["tail_fraction"] == 0.05
 
 
+def test_out_of_order_beats_normalized_to_sorted_order():
+    """A fully-covered but out-of-order structure is normalized to sorted
+    order and persisted (repaired_structure), so the Composer (which iterates
+    narrative_structure as given) and the canonical timeline agree. (Codex P2:
+    sorting made the contiguity check pass but the original order continued
+    downstream, swapping visuals against the narration.)"""
+    res = validate_narrative_coverage(
+        [{"beat_id": 2, "word_range": [5, 9]}, {"beat_id": 1, "word_range": [0, 4]}],
+        word_count=10,
+    )
+    assert res.ok is True
+    assert res.reason == "covered_after_reorder"
+    assert res.repaired_structure is not None
+    # Persisted in sorted (chronological) order; input list is not mutated.
+    assert [b["word_range"][0] for b in res.repaired_structure] == [0, 5]
+    assert res.details["reordered"] is True
+
+
 def test_input_not_mutated_by_repair():
     orig = [{"word_range": [0, 49]}, {"word_range": [50, 97]}]
     validate_narrative_coverage(orig, word_count=100)
