@@ -29,6 +29,10 @@ from clipper_agency.config.loader import (
 from clipper_agency.config.preflight import preflight_agent_models
 from clipper_agency.config.schema import RepairPatch, RepairPlan
 from clipper_agency.core.artifacts import write_json
+from clipper_agency.core.beat_timeline import (
+    TimelineContractError,
+    build_canonical_timeline,
+)
 from clipper_agency.core.logging import add_job_file_handler, remove_job_file_handler
 from clipper_agency.core.manifest import (
     create_manifest,
@@ -639,13 +643,17 @@ class Orchestrator:
             )
         self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "voice_producer")
 
-        # Rebuild canonical timeline from fresh outputs (ADR 0020)
-        from clipper_agency.core.beat_timeline import build_canonical_timeline
-
-        beat_timeline = build_canonical_timeline(
+        # Rebuild canonical timeline from fresh outputs (ADR 0020).
+        # FIX-6: enforce the physical-timeline contract (backstop for G7).
+        beat_timeline, abort = self._enforce_timeline_contract(
+            ctx.conn,
+            ctx.job_id,
+            ctx.assets_cache,
             script_output.get("narrative_structure", []),
             voice_output.get("timestamps", []),
         )
+        if abort:
+            return abort
 
         # Rerun Visual Director
         visual_output = self._run_visual_director_phase(
@@ -706,13 +714,17 @@ class Orchestrator:
         if g7_abort:
             return (research_output, script_output, voice_output, {}, [], g7_abort)
 
-        # Build canonical timeline for repair cycle (ADR 0020)
-        from clipper_agency.core.beat_timeline import build_canonical_timeline
-
-        beat_timeline = build_canonical_timeline(
+        # Build canonical timeline for repair cycle (ADR 0020).
+        # FIX-6: enforce the physical-timeline contract (backstop for G7).
+        beat_timeline, tlc_abort = self._enforce_timeline_contract(
+            ctx.conn,
+            ctx.job_id,
+            ctx.assets_cache,
             script_output.get("narrative_structure", []),
             voice_output.get("timestamps", []),
         )
+        if tlc_abort:
+            return (research_output, script_output, voice_output, {}, [], tlc_abort)
 
         compose_output: dict[str, Any] = {}
         abort = None
@@ -946,6 +958,87 @@ class Orchestrator:
         write_json(f"{base}/narrative_structure.json", repaired)
         write_json(f"{base}/script.json", {"scenes": repaired})
         write_json(agent_output_file(assets_cache, job_id, "scriptwriter"), script_output)
+
+    def _enforce_timeline_contract(
+        self,
+        conn,
+        job_id: int,
+        assets_cache: str,
+        narrative_structure: list[dict],
+        timestamps: list[dict],
+    ) -> tuple[list, dict[str, Any] | None]:
+        """FIX-6 (ADR 0030 / SRS FR-79): wrap
+        :func:`build_canonical_timeline` and abort the pipeline on a
+        physically-impossible timeline (a non-physical beat that G7/FIX-1
+        word_range coverage cannot catch — e.g. a manufactured 25s mega-beat).
+
+        Backstop for G7: G7 validates ``word_range`` coverage on the script
+        dict; FIX-6 catches a non-physical beat at canonical-timeline build
+        time. SUCCESS → ``(timeline, None)`` (caller proceeds as today).
+        FAILURE → ``([], abort)`` mirroring the G7 / PR#86 atomic DB pattern:
+        under :func:`db_write_lock`, ``_enforce_gate(commit=False)`` runs the
+        jobs UPDATE (job=FAILED) as the first DML, then
+        ``_update_agent_state_inner(scriptwriter=failed)`` + single
+        ``conn.commit()``; any raise → ``conn.rollback()`` + re-raise (no
+        half-committed job=FAILED + scriptwriter=completed — Codex P2 lesson
+        from G7).
+
+        Deviation from ``_enforce_narrative_coverage``: this helper does NOT
+        call ``_gate_relaxed`` — there is no ``DEV_RELAX_GATES`` bypass for
+        FIX-6. A physically-impossible beat is never safe to ship; operators
+        who need to force-ship relax G7 upstream (the contract gate), which
+        prevents the bad ``word_range`` from reaching the timeline (RISK-5).
+
+        Recovery TODAY = terminal hard-fail. FIX-5 (ships later) will consume
+        the stable ``"timeline_not_covered"`` reason token to automate
+        scriptwriter regen (YAGNI for FIX-6).
+        """
+        try:
+            timeline = build_canonical_timeline(narrative_structure, timestamps)
+        except TimelineContractError as exc:
+            msg = (
+                f"timeline contract violated ({exc.kind}): "
+                f"beat_id={exc.beat_id} tail_seconds={exc.tail_seconds:.2f}"
+            )
+            gate_result = GateResult(
+                passed=False,
+                severity="hard_fail",
+                message=msg,
+                data={
+                    "reason": exc.reason,
+                    "kind": exc.kind,
+                    "beat_id": exc.beat_id,
+                    "tail_seconds": exc.tail_seconds,
+                },
+            )
+            self._record_gate(assets_cache, job_id, "FIX6_timeline_contract", gate_result)
+            abort: dict[str, Any] | None = None
+            with db_write_lock():
+                abort = self._enforce_gate(
+                    conn,
+                    job_id,
+                    "FIX6_timeline_contract",
+                    gate_result,
+                    failed_at="timeline_contract",
+                    commit=False,
+                )
+                if abort is not None:
+                    try:
+                        if not conn.in_transaction:
+                            conn.execute("BEGIN")
+                        _update_agent_state_inner(
+                            conn,
+                            job_id,
+                            "scriptwriter",
+                            "failed",
+                            error_message=msg,
+                        )
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                        raise
+            return [], abort
+        return timeline, None
 
     def _evaluate_and_enforce_gate(
         self,
@@ -1217,12 +1310,17 @@ class Orchestrator:
         """
         # Build canonical beat timeline once (ADR 0020) — single source of
         # truth for beat durations consumed by VD, Composer, and Reviewer.
-        from clipper_agency.core.beat_timeline import build_canonical_timeline
-
-        beat_timeline = build_canonical_timeline(
+        # FIX-6 (ADR 0030): enforce the physical-timeline contract (backstop
+        # for G7) — the job_18 mega-beat was manufactured at this site.
+        beat_timeline, abort = self._enforce_timeline_contract(
+            conn,
+            job_id,
+            assets_cache,
             script_output.get("narrative_structure", []),
             voice_output.get("timestamps", []),
         )
+        if abort:
+            return abort
 
         logger.info("G8: running Visual Director agent")
         visual_output = self._run_visual_director_phase(
@@ -1868,13 +1966,17 @@ class Orchestrator:
         vo = voice_output or {}
         mark_agent_running(conn, job_id, "reviewer")
         rp = research_output or {}
-        # Build canonical timeline for reviewer (ADR 0020)
-        from clipper_agency.core.beat_timeline import build_canonical_timeline
-
-        beat_timeline = build_canonical_timeline(
+        # Build canonical timeline for reviewer (ADR 0020).
+        # FIX-6: enforce the physical-timeline contract (backstop for G7).
+        beat_timeline, tlc_abort = self._enforce_timeline_contract(
+            conn,
+            job_id,
+            assets_cache,
             script_output.get("narrative_structure", []),
             vo.get("timestamps", []),
         )
+        if tlc_abort:
+            return (tlc_abort, None, None)
         review_output = self._run_reviewer(
             job_id=job_id,
             topic=topic,
@@ -2175,13 +2277,17 @@ class Orchestrator:
                 ),
             )
 
-        # Build canonical timeline for retry (ADR 0020)
-        from clipper_agency.core.beat_timeline import build_canonical_timeline
-
-        beat_timeline = build_canonical_timeline(
+        # Build canonical timeline for retry (ADR 0020).
+        # FIX-6: enforce the physical-timeline contract (backstop for G7).
+        beat_timeline, abort = self._enforce_timeline_contract(
+            conn,
+            job_id,
+            assets_cache,
             script_output.get("narrative_structure", []),
             voice_output.get("timestamps", []),
         )
+        if abort:
+            return abort
 
         if from_idx <= PIPELINE_ORDER.index("visual_director"):
             visual_output = self._run_visual_director_phase(

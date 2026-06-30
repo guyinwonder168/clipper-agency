@@ -34,7 +34,14 @@ def derive_planned_boundaries(
     Returns ``[]`` when either input is empty (``build_canonical_timeline``
     returns ``[]``).
     """
-    durations = timeline_to_duration_list(build_canonical_timeline(narrative_structure, timestamps))
+    # enforce_contract=False: this is a read-only AV-drift diagnostic that
+    # runs on already-produced (possibly job_18-style) historical timelines.
+    # It must REPORT what the timeline was, never enforce a contract — raising
+    # here would crash the diagnostic on the exact jobs it exists to diagnose
+    # (FIX-6 / ADR 0030 RISK-2).
+    durations = timeline_to_duration_list(
+        build_canonical_timeline(narrative_structure, timestamps, enforce_contract=False)
+    )
     out: list[tuple[float, float]] = []
     cursor = 0.0
     for duration in durations:
