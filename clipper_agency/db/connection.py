@@ -2,10 +2,31 @@
 
 import sqlite3
 from pathlib import Path
-from threading import Lock
+from threading import Lock, RLock
 
 _connections: dict[str, sqlite3.Connection] = {}
 _conn_lock = Lock()
+# Process-wide REENTRANT write lock serializing all DB writes on the shared
+# singleton connection. SQLite legacy-mode transactions are connection-scoped,
+# not thread-scoped, so with a shared check_same_thread=False connection a
+# concurrent thread's conn.commit() would commit ANOTHER thread's half-open
+# transaction. Every public committing helper in queries.py acquires this, and
+# the G7 atomic-transaction path holds it across both writes + commit (PR #86,
+# Codex P2 r3496171628). RLock so a code path that already holds it may call a
+# public helper without deadlock.
+_write_lock = RLock()
+
+
+def db_write_lock() -> RLock:
+    """Return the process-wide reentrant DB write lock.
+
+    Used as ``with db_write_lock():`` around every committing write in
+    ``queries.py`` and around the G7 hard-fail atomic transaction in the
+    orchestrator engine. Guarantees no concurrent thread can interleave a
+    ``conn.commit()`` into this thread's open transaction on the shared
+    singleton connection.
+    """
+    return _write_lock
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:

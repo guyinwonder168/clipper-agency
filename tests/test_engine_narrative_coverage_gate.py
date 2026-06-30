@@ -405,3 +405,56 @@ def test_enforce_narrative_coverage_atomic_rollback_on_agent_write_failure(tmp_p
     assert get_job(conn, job_id)["status"] != "FAILED"
     assert get_agent_state(conn, job_id, "scriptwriter")["state"] == "completed"
     close_connection()
+
+
+def test_enforce_narrative_coverage_g7_hard_fail_holds_write_lock(tmp_path, monkeypatch):
+    """The G7 atomic block holds the process-wide write lock across BOTH the
+    jobs write AND the agent write + commit, so a concurrent Flask thread
+    cannot interleave a public-helper commit into the half-open transaction
+    (Codex P2 r3496171628).
+
+    Asserts the load-bearing invariant directly: each of the two no-commit
+    ``_inner`` writes must observe the lock as HELD at the moment it runs.
+    A regression that moves the ``with`` block to wrap only one write would
+    fail here (the other write would see the lock released)."""
+    import clipper_agency.orchestrator.engine as engine_mod
+
+    orch, conn, job_id = _seeded_real_db(tmp_path)
+    monkeypatch.setattr(orch, "_record_gate", lambda *a, **k: None)
+
+    held = {"now": False}
+
+    class _Recorder:
+        def __enter__(self):
+            held["now"] = True
+            return self
+
+        def __exit__(self, *exc):
+            held["now"] = False
+
+    monkeypatch.setattr(engine_mod, "db_write_lock", lambda: _Recorder())
+
+    write_observed: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        engine_mod,
+        "_update_job_status_inner",
+        lambda *a, **k: write_observed.append(("job", held["now"])),
+    )
+    monkeypatch.setattr(
+        engine_mod,
+        "_update_agent_state_inner",
+        lambda *a, **k: write_observed.append(("agent", held["now"])),
+    )
+
+    abort = orch._enforce_narrative_coverage(
+        conn,
+        job_id=job_id,
+        script_output=_job18_uncovered_script_output(),
+        assets_cache="",
+    )
+
+    assert abort is not None
+    assert abort["failed_at"] == "narrative_coverage"
+    # BOTH writes fired while the lock was held.
+    assert write_observed == [("job", True), ("agent", True)]
+    close_connection()

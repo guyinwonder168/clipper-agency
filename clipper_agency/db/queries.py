@@ -4,6 +4,8 @@ import json
 import sqlite3
 from typing import Any
 
+from clipper_agency.db.connection import db_write_lock
+
 # Pipeline agent order — used for retry/resume reset logic.
 PIPELINE_ORDER = [
     "safety",
@@ -25,18 +27,19 @@ def create_job(
     config_snapshot: dict | None = None,
 ) -> int:
     """Insert a new job and return its ID."""
-    cursor = conn.execute(
-        """INSERT INTO jobs (topic, niche, account_id, template, config_snapshot)
-           VALUES (?, ?, ?, ?, ?)""",
-        (
-            topic,
-            niche,
-            account_id,
-            template,
-            json.dumps(config_snapshot) if config_snapshot is not None else None,
-        ),
-    )
-    conn.commit()
+    with db_write_lock():
+        cursor = conn.execute(
+            """INSERT INTO jobs (topic, niche, account_id, template, config_snapshot)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                topic,
+                niche,
+                account_id,
+                template,
+                json.dumps(config_snapshot) if config_snapshot is not None else None,
+            ),
+        )
+        conn.commit()
     return cursor.lastrowid
 
 
@@ -52,10 +55,12 @@ def _update_job_status_inner(
 ) -> None:
     """Execute the jobs status UPDATE WITHOUT committing.
 
-    The caller owns the transaction (BEGIN/commit/rollback). Used by the G7
-    atomic-transaction path (PR #86) so the job=FAILED and scriptwriter=failed
-    writes commit together — or roll back together — never leaving the
-    job_18-residual job=FAILED + agent=completed state.
+    The caller owns the transaction (BEGIN/commit/rollback) AND the write lock
+    (``db_write_lock``). Used by the G7 atomic-transaction path (PR #86) so the
+    job=FAILED and scriptwriter=failed writes commit together — or roll back
+    together — never leaving the job_18-residual job=FAILED + agent=completed
+    state. Lock-free because it is only ever called inside a locked context
+    (the public ``update_job_status`` or the G7 atomic block).
     """
     conn.execute(
         """UPDATE jobs
@@ -70,8 +75,9 @@ def update_job_status(
     conn: sqlite3.Connection, job_id: int, status: str, error_message: str | None = None
 ) -> None:
     """Update a job's status."""
-    _update_job_status_inner(conn, job_id, status, error_message)
-    conn.commit()
+    with db_write_lock():
+        _update_job_status_inner(conn, job_id, status, error_message)
+        conn.commit()
 
 
 def list_jobs(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
@@ -82,11 +88,12 @@ def list_jobs(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]
 
 def create_agent_state(conn: sqlite3.Connection, job_id: int, agent_name: str) -> int:
     """Insert a new agent state and return its ID."""
-    cursor = conn.execute(
-        "INSERT INTO agent_states (job_id, agent_name) VALUES (?, ?)",
-        (job_id, agent_name),
-    )
-    conn.commit()
+    with db_write_lock():
+        cursor = conn.execute(
+            "INSERT INTO agent_states (job_id, agent_name) VALUES (?, ?)",
+            (job_id, agent_name),
+        )
+        conn.commit()
     return cursor.lastrowid
 
 
@@ -112,8 +119,9 @@ def _update_agent_state_inner(
 ) -> None:
     """Execute the agent_states UPDATE WITHOUT committing.
 
-    Caller owns the transaction — used by the G7 atomic-transaction path
-    (PR #86). ``update_agent_state`` delegates here then commits.
+    Caller owns the transaction AND the write lock — used by the G7
+    atomic-transaction path (PR #86). ``update_agent_state`` delegates here
+    then commits. Lock-free (only called inside a locked context).
     """
     if state == "running":
         started_sql = "COALESCE(started_at, datetime('now'))"
@@ -144,8 +152,9 @@ def update_agent_state(
     error_message: str | None = None,
 ) -> None:
     """Update an agent state's status and optional output."""
-    _update_agent_state_inner(conn, job_id, agent_name, state, output_data, error_message)
-    conn.commit()
+    with db_write_lock():
+        _update_agent_state_inner(conn, job_id, agent_name, state, output_data, error_message)
+        conn.commit()
 
 
 def mark_agent_running(
@@ -184,50 +193,55 @@ def append_audit_log(
     details: str | None = None,
 ) -> None:
     """Insert a row into the audit_log table."""
-    conn.execute(
-        """INSERT INTO audit_log (action, actor, resource_type, resource_id, details)
-           VALUES (?, ?, ?, ?, ?)""",
-        (action, actor, resource_type, resource_id, details),
-    )
-    conn.commit()
+    with db_write_lock():
+        conn.execute(
+            """INSERT INTO audit_log (action, actor, resource_type, resource_id, details)
+               VALUES (?, ?, ?, ?, ?)""",
+            (action, actor, resource_type, resource_id, details),
+        )
+        conn.commit()
 
 
 def update_job_quality_status(conn: sqlite3.Connection, job_id: int, quality_status: str) -> None:
     """Update the quality_status column on a job."""
-    conn.execute(
-        "UPDATE jobs SET quality_status = ?, updated_at = datetime('now') WHERE id = ?",
-        (quality_status, job_id),
-    )
-    conn.commit()
+    with db_write_lock():
+        conn.execute(
+            "UPDATE jobs SET quality_status = ?, updated_at = datetime('now') WHERE id = ?",
+            (quality_status, job_id),
+        )
+        conn.commit()
 
 
 def update_job_publication_status(
     conn: sqlite3.Connection, job_id: int, publication_status: str
 ) -> None:
     """Update the publication_status column on a job."""
-    conn.execute(
-        "UPDATE jobs SET publication_status = ?, updated_at = datetime('now') WHERE id = ?",
-        (publication_status, job_id),
-    )
-    conn.commit()
+    with db_write_lock():
+        conn.execute(
+            "UPDATE jobs SET publication_status = ?, updated_at = datetime('now') WHERE id = ?",
+            (publication_status, job_id),
+        )
+        conn.commit()
 
 
 def update_job_artifact_status(conn: sqlite3.Connection, job_id: int, artifact_status: str) -> None:
     """Update the artifact_status column on a job."""
-    conn.execute(
-        "UPDATE jobs SET artifact_status = ?, updated_at = datetime('now') WHERE id = ?",
-        (artifact_status, job_id),
-    )
-    conn.commit()
+    with db_write_lock():
+        conn.execute(
+            "UPDATE jobs SET artifact_status = ?, updated_at = datetime('now') WHERE id = ?",
+            (artifact_status, job_id),
+        )
+        conn.commit()
 
 
 def update_job_repair_status(conn: sqlite3.Connection, job_id: int, repair_status: str) -> None:
     """Update the repair_status column on a job."""
-    conn.execute(
-        "UPDATE jobs SET repair_status = ?, updated_at = datetime('now') WHERE id = ?",
-        (repair_status, job_id),
-    )
-    conn.commit()
+    with db_write_lock():
+        conn.execute(
+            "UPDATE jobs SET repair_status = ?, updated_at = datetime('now') WHERE id = ?",
+            (repair_status, job_id),
+        )
+        conn.commit()
 
 
 def reset_agents_from(conn: sqlite3.Connection, job_id: int, from_agent: str) -> list[str]:
@@ -244,14 +258,15 @@ def reset_agents_from(conn: sqlite3.Connection, job_id: int, from_agent: str) ->
     start_idx = PIPELINE_ORDER.index(from_agent)
     reset_names = PIPELINE_ORDER[start_idx:]
 
-    for name in reset_names:
-        conn.execute(
-            """UPDATE agent_states
-               SET state = 'pending',
-                   error_message = NULL,
-                   completed_at = NULL
-               WHERE job_id = ? AND agent_name = ?""",
-            (job_id, name),
-        )
-    conn.commit()
+    with db_write_lock():
+        for name in reset_names:
+            conn.execute(
+                """UPDATE agent_states
+                   SET state = 'pending',
+                       error_message = NULL,
+                       completed_at = NULL
+                   WHERE job_id = ? AND agent_name = ?""",
+                (job_id, name),
+            )
+        conn.commit()
     return reset_names
