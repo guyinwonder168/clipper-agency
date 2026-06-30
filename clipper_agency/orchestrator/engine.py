@@ -354,7 +354,22 @@ class Orchestrator:
         if prev_path.exists():
             from clipper_agency.core.artifacts import read_json
 
-            return read_json(str(prev_path))
+            # FIX-5 (silent-failure P2): previous_patches.json is internal
+            # bookkeeping for the duplicate-guard. A corrupt/partial file
+            # (kill mid-write, fs issue) would raise JSONDecodeError and
+            # mask the root cause as a generic pipeline exception, AND it
+            # would pre-empt the single coverage regen attempt. Treat a
+            # corrupt file as "no previous patches" — the guard simply
+            # won't fire and the regen proceeds normally.
+            try:
+                return read_json(str(prev_path))
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning(
+                    "Corrupt repair patch state at %s, treating as empty (%s)",
+                    prev_path,
+                    exc,
+                )
+                return []
         return []
 
     def _save_previous_patches(
@@ -715,23 +730,65 @@ class Orchestrator:
         Returns a 5-tuple (research, script, voice, compose,
         beat_timeline) on success, or an abort dict on failure.
         """
-        # Rerun Segment Producer
-        research_output = self._run_researcher(
-            job_id=ctx.job_id,
-            topic=ctx.topic,
-            safety_rules=ctx.niche_ctx.get("safety_rules", []),
-            channel_description=ctx.niche_ctx.get("channel_description", ""),
-            language=ctx.niche_ctx.get("language", "id"),
-            tone=ctx.niche_ctx.get("tone", "informative"),
-            content_angle=ctx.niche_ctx.get("content_angle", ""),
-            output_dir=ctx.output_dir,
-            assets_cache=ctx.assets_cache,
-        )
-        if research_output.get("status") == "failed":
-            return self._fail_agent(
-                ctx.conn, ctx.job_id, "segment_producer", research_output, _RESEARCH_FAILED
+        # Rerun Segment Producer — UNLESS this is a Scriptwriter-only
+        # coverage repair (FIX-5 / codex P1). reset_agents_from(...,'scriptwriter')
+        # left SP's DB state + disk artifacts intact, so re-running paid
+        # external research (ScrapeCreators/Firecrawl/Tavily/Brave) is pure
+        # waste AND a spurious failure surface (a transient research-provider
+        # error would abort before Scriptwriter regen is even attempted). SP
+        # output is the master input to Scriptwriter and is already on disk;
+        # reuse it. Only a segment_producer-targeted repair needs fresh research.
+        if ctx.target_agent == "segment_producer":
+            research_output = self._run_researcher(
+                job_id=ctx.job_id,
+                topic=ctx.topic,
+                safety_rules=ctx.niche_ctx.get("safety_rules", []),
+                channel_description=ctx.niche_ctx.get("channel_description", ""),
+                language=ctx.niche_ctx.get("language", "id"),
+                tone=ctx.niche_ctx.get("tone", "informative"),
+                content_angle=ctx.niche_ctx.get("content_angle", ""),
+                output_dir=ctx.output_dir,
+                assets_cache=ctx.assets_cache,
             )
-        self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "segment_producer")
+            if research_output.get("status") == "failed":
+                return self._fail_agent(
+                    ctx.conn, ctx.job_id, "segment_producer", research_output, _RESEARCH_FAILED
+                )
+            self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "segment_producer")
+        else:
+            # Scriptwriter-targeted coverage repair: reuse persisted SP output.
+            # If the cached output is missing/empty (partial fs / pre-SP job),
+            # fall back to a fresh research run rather than feed Scriptwriter
+            # nothing (safe default; preserves the original behavior).
+            research_output = self._load_agent_output(
+                ctx.assets_cache, ctx.job_id, "segment_producer"
+            )
+            if not research_output:
+                logger.warning(
+                    "Coverage SW-regen for job %d: no cached SP output, "
+                    "running Segment Producer fresh",
+                    ctx.job_id,
+                )
+                research_output = self._run_researcher(
+                    job_id=ctx.job_id,
+                    topic=ctx.topic,
+                    safety_rules=ctx.niche_ctx.get("safety_rules", []),
+                    channel_description=ctx.niche_ctx.get("channel_description", ""),
+                    language=ctx.niche_ctx.get("language", "id"),
+                    tone=ctx.niche_ctx.get("tone", "informative"),
+                    content_angle=ctx.niche_ctx.get("content_angle", ""),
+                    output_dir=ctx.output_dir,
+                    assets_cache=ctx.assets_cache,
+                )
+                if research_output.get("status") == "failed":
+                    return self._fail_agent(
+                        ctx.conn,
+                        ctx.job_id,
+                        "segment_producer",
+                        research_output,
+                        _RESEARCH_FAILED,
+                    )
+                self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "segment_producer")
 
         # Rerun Scriptwriter
         script_output = self._run_content_scriptwriter(
@@ -1631,6 +1688,17 @@ class Orchestrator:
                 conn, job_id, topic, niche, output_dir, assets_cache, repair_result
             )
         # Exhausted / manual review — terminal FAIL (never COMPLETED).
+        # FIX-5 (silent-failure P2): the entry announcement (L1604) logs the
+        # regen ATTEMPT; this logs the OUTCOME so operators scanning logs see
+        # the single most load-bearing failure (job_18's class recurs after
+        # regen). Mirrors _execute_repair_cycle's 'EXHAUSTED' log (L983).
+        logger.error(
+            "Coverage regen FAILED terminally for job %d: token=%s status=%s reason=%s",
+            job_id,
+            token,
+            repair_result.get("status"),
+            repair_result.get("reason", _REPAIR_EXHAUSTED),
+        )
         update_job_status(conn, job_id, "FAILED", repair_result.get("reason", _REPAIR_EXHAUSTED))
         remove_job_file_handler()
         return {
@@ -1706,10 +1774,18 @@ class Orchestrator:
         # succeeding. _promote_to_final returns {status:failed} on a missing
         # cycle_{n} source dir or an atomic-rename/copytree exception; without
         # this gate the DB would report COMPLETED with NO final/job_* produced.
+        #
+        # Promote the PACKAGED dir (output/job_{id}/, written by
+        # _package_output above — contains metadata.json + caption.txt +
+        # package-time artifacts), NOT the cycle_{n} snapshot. The cycle_{n}
+        # dir is an interim copy of only video/thumbnail/caption made by
+        # _retry_composer_stage BEFORE packaging, so it lacks metadata.json;
+        # promoting it would mark the job COMPLETED with a broken output
+        # package contract (anti-job_18, ADR 0030). Mirrors the non-repair
+        # promotion path (L2536) which promotes output/job_{id}/ directly.
         promotion = self._promote_to_final(
             output_dir=output_dir,
             job_id=job_id,
-            cycle=repair_cycle,
         )
         if promotion.get("status") == "failed":
             reason = promotion.get("error", _PACKAGING_FAILED)
@@ -1975,6 +2051,19 @@ class Orchestrator:
                 research_output=research_output,
             )
             if abort:
+                # FIX-5 (ADR 0030, blast-radius P1): the reviewer-stage
+                # timeline rebuild (in _retry_review_and_package) can re-derive
+                # a FIX-6 timeline_not_covered abort — the SECOND hop for that
+                # token (the first is _stage_composition L1968). Mirror that
+                # site: route the same token into the bounded regen loop
+                # instead of returning it as a bare terminal fail. The job
+                # still terminally FAILs on regen-exhaustion (anti-job_18
+                # invariant holds); this only ensures the automatic regen
+                # attempt fires consistently on both coverage-abort sites.
+                if self._is_coverage_repairable_abort(abort):
+                    return self._route_coverage_abort_to_repair(
+                        abort, conn, job_id, topic, niche, assets_cache, output_dir
+                    )
                 return abort
 
             # Handle repair routing from reviewer

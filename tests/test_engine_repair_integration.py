@@ -635,6 +635,7 @@ class TestCoverageRegenScriptwriter:
         from clipper_agency.db.queries import get_job
 
         job = get_job(conn, job_id)
+        assert job is not None
         # Job must NEVER be COMPLETED with an uncovered narrative.
         assert job["status"] != "COMPLETED"
         conn.close()
@@ -832,7 +833,82 @@ class TestCoverageAbortEntryPath:
         promote.assert_called_once()
         from clipper_agency.db.queries import get_job
 
-        assert get_job(conn, job_id)["status"] == "COMPLETED"
+        assert (gj := get_job(conn, job_id)) is not None and gj["status"] == "COMPLETED"
+        conn.close()
+
+    def test_coverage_repair_promotes_packaged_dir_with_metadata(self, db_initialized, tmp_path):
+        """FIX-5 (Codex P2 r2): after a successful coverage repair the promoted
+        final/job_{id}/ dir MUST be the packaged one (contains metadata.json),
+        NOT the cycle_{n} snapshot (which only has video/thumbnail/caption).
+
+        Drives _finalize_coverage_repair → _promote_repaired_job with the REAL
+        _package_output + REAL _promote_to_final (only probe_video mocked) so
+        the on-disk contract is exercised end-to-end. Regression for the bug
+        where _promote_to_final was called with cycle=repair_cycle and copied
+        the unpackaged cycle_{n} dir, breaking the output package contract."""
+        from unittest.mock import Mock
+
+        ac = str(tmp_path / "cache")
+        job_id = _setup_job(db_initialized, ac, tmp_path)
+        orch = Orchestrator(db_path=db_initialized)
+        conn = get_connection(db_initialized)
+        out_dir = str(tmp_path / "outputs")
+
+        # Seed a job-owned video.mp4 at the fixed contract path so the REAL
+        # OutputPackager.package succeeds and writes metadata.json.
+        job_dir = Path(out_dir) / f"job_{job_id}"
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "video.mp4").write_bytes(b"fake-mp4")
+        # Seed upstream agent outputs so _promote_repaired_job's non-empty
+        # guards pass.
+        compose_out = {
+            "status": "completed",
+            "video_path": str(job_dir / "video.mp4"),
+            "duration_sec": 30.0,
+            "template_name": None,
+        }
+        for agent, payload in (
+            ("composer", compose_out),
+            ("scriptwriter", {"caption": "c"}),
+        ):
+            p = Path(ac, f"job_{job_id}", "agents", agent, "output.json")
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(payload), encoding="utf-8")
+
+        probe_patch = patch(
+            "clipper_agency.output.packager.probe_video",
+            return_value=Mock(width=1080, height=1920, codec="h264", duration=30.0, has_audio=True),
+        )
+        execute_patch = patch.object(
+            orch,
+            "_execute_repair_cycle",
+            return_value={"status": "completed", "cycle": 1},
+        )
+        with probe_patch, execute_patch:
+            result = orch._route_coverage_abort_to_repair(
+                self._g7_abort(job_id),
+                conn,
+                job_id,
+                topic="REAL TOPIC",
+                niche="test_niche",
+                assets_cache=ac,
+                output_dir=out_dir,
+            )
+
+        assert result["status"] == "completed"
+        # The promoted final dir must carry metadata.json — the package-time
+        # artifact the cycle_{n} snapshot lacks.
+        final_meta = Path(out_dir, "final", f"job_{job_id}", "metadata.json")
+        assert final_meta.is_file(), (
+            f"final/job_{job_id}/metadata.json missing after coverage repair; "
+            f"promoted the unpackaged cycle dir instead of the packaged one"
+        )
+        # metadata must carry the REAL topic threaded through packaging.
+        meta = json.loads(final_meta.read_text(encoding="utf-8"))
+        assert meta["topic"] == "REAL TOPIC"
+        from clipper_agency.db.queries import get_job
+
+        assert (gj := get_job(conn, job_id)) is not None and gj["status"] == "COMPLETED"
         conn.close()
 
     def test_g7_abort_terminally_fails_on_coverage_refail(self, db_initialized, tmp_path):
@@ -864,7 +940,7 @@ class TestCoverageAbortEntryPath:
         assert result["repair_status"] == "exhausted"
         from clipper_agency.db.queries import get_job
 
-        assert get_job(conn, job_id)["status"] == "FAILED"
+        assert (gj := get_job(conn, job_id)) is not None and gj["status"] == "FAILED"
         conn.close()
 
     def test_timeline_abort_routes_to_repair_terminally_fails(self, db_initialized, tmp_path):
@@ -893,7 +969,7 @@ class TestCoverageAbortEntryPath:
         assert result["status"] == "failed"
         from clipper_agency.db.queries import get_job
 
-        assert get_job(conn, job_id)["status"] == "FAILED"
+        assert (gj := get_job(conn, job_id)) is not None and gj["status"] == "FAILED"
         conn.close()
 
     def test_finalize_coverage_repair_fails_on_packaging_failure(self, db_initialized, tmp_path):
@@ -923,7 +999,7 @@ class TestCoverageAbortEntryPath:
         assert result["repair_status"] == "packaging_failed"
         from clipper_agency.db.queries import get_job
 
-        assert get_job(conn, job_id)["status"] == "FAILED"
+        assert (gj := get_job(conn, job_id)) is not None and gj["status"] == "FAILED"
         conn.close()
 
     def test_finalize_coverage_repair_fails_on_promotion_failure(self, db_initialized, tmp_path):
@@ -986,7 +1062,7 @@ class TestCoverageAbortEntryPath:
         assert result["repair_status"] == "promotion_failed"
         from clipper_agency.db.queries import get_job
 
-        assert get_job(conn, job_id)["status"] == "FAILED"
+        assert (gj := get_job(conn, job_id)) is not None and gj["status"] == "FAILED"
         conn.close()
 
     def test_coverage_repair_cycle_bound_pinned_end_to_end(self, db_initialized, tmp_path):
@@ -1070,7 +1146,7 @@ class TestCoverageAbortEntryPath:
         assert result["status"] == "failed"
         from clipper_agency.db.queries import get_job
 
-        assert get_job(conn, job_id)["status"] == "FAILED"
+        assert (gj := get_job(conn, job_id)) is not None and gj["status"] == "FAILED"
         conn.close()
 
 

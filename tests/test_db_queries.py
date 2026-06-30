@@ -54,11 +54,13 @@ def test_completed_transition_clears_stale_error_message(temp_db_path):
     # FAIL with a coverage message (mirrors G7/FIX-6 abort).
     update_job_status(conn, job_id, "FAILED", "narrative_not_covered: gap")
     job = get_job(conn, job_id)
+    assert job is not None
     assert job["status"] == "FAILED"
     assert job["error_message"] == "narrative_not_covered: gap"
     # Repair succeeds -> COMPLETED must clear the stale text.
     update_job_status(conn, job_id, "COMPLETED")
     job = get_job(conn, job_id)
+    assert job is not None
     assert job["status"] == "COMPLETED"
     assert job["error_message"] is None
     close_connection()
