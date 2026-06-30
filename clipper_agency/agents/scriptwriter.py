@@ -49,7 +49,7 @@ _EMOJI_RE = re.compile(
     "\U0001fa70-\U0001faff"
     "\U00002600-\U000026ff"  # misc symbols
     "\U0000fe00-\U0000fe0f"  # variation selectors
-    "\U0000200d"             # zero-width joiner
+    "\U0000200d"  # zero-width joiner
     "]+",
     re.UNICODE,
 )
@@ -80,7 +80,10 @@ def _extract_blueprint(blueprint: dict[str, Any] | None, kwargs: dict[str, Any])
 
 
 def _write_input_artifacts(
-    assets_cache: str, job_id: int, agent_name: str, data: dict[str, Any],
+    assets_cache: str,
+    job_id: int,
+    agent_name: str,
+    data: dict[str, Any],
 ) -> None:
     """Persist input artifacts if assets_cache is set."""
     if not assets_cache:
@@ -89,8 +92,13 @@ def _write_input_artifacts(
 
 
 def _format_system_prompt(
-    channel_description: str, language: str, tone: str,
-    content_angle: str, rules: list[str], bp_data: dict[str, Any], topic: str,
+    channel_description: str,
+    language: str,
+    tone: str,
+    content_angle: str,
+    rules: list[str],
+    bp_data: dict[str, Any],
+    topic: str,
 ) -> str:
     """Serialize blueprint data and build the formatted system prompt."""
     safety_rules_text = "\n".join(f"- {r}" for r in rules) if rules else "None"
@@ -128,7 +136,10 @@ def _format_system_prompt(
 
 
 def _write_output_artifacts(
-    assets_cache: str, job_id: int, agent_name: str, result: dict[str, Any],
+    assets_cache: str,
+    job_id: int,
+    agent_name: str,
+    result: dict[str, Any],
 ) -> None:
     """Persist output artifacts if assets_cache is set."""
     if not assets_cache:
@@ -164,27 +175,49 @@ class ScriptwriterAgent(BaseAgent):
         content_angle: str = "",
         assets_cache: str = "",
         blueprint: dict[str, Any] | None = None,
+        coverage_directive: str = "",
         **kwargs: Any,
     ) -> dict[str, Any]:
         bp_data = _extract_blueprint(blueprint, kwargs)
         rules = safety_rules or []
         logger.info("Scriptwriter: job_id=%s, beats=%d", job_id, len(bp_data["story_beats"] or []))
 
-        _write_input_artifacts(assets_cache, job_id, self.agent_name, {
-            "job_id": job_id, "topic": topic, **bp_data, "safety_rules": rules,
-        })
+        _write_input_artifacts(
+            assets_cache,
+            job_id,
+            self.agent_name,
+            {
+                "job_id": job_id,
+                "topic": topic,
+                **bp_data,
+                "safety_rules": rules,
+            },
+        )
 
         system_prompt = _format_system_prompt(
-            channel_description, language, tone, content_angle, rules, bp_data, topic,
+            channel_description,
+            language,
+            tone,
+            content_angle,
+            rules,
+            bp_data,
+            topic,
         )
+        # FIX-5 (ADR 0030, Codex P2): on a coverage-regen attempt the engine
+        # passes a directive instructing the model to make narrative_structure
+        # word_ranges fully cover [0, word_count-1]. Append it to the system
+        # prompt so the regen actually differs from the first-run prompt.
+        if coverage_directive:
+            system_prompt = f"{system_prompt}\n\n{coverage_directive}"
+            logger.info("Scriptwriter: coverage-regen directive applied (job %d)", job_id)
         user_content = f"Topic: {topic}\n\nResearch Brief: {research_brief}"
 
         agent_cfg = get_agent_config("scriptwriter")
         llm = OpenRouterClient(trace_writer=self._trace_writer)
         messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ]
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
         if self._trace_writer:
             response = llm.chat_traced(
                 model=agent_cfg["model"],
@@ -200,8 +233,8 @@ class ScriptwriterAgent(BaseAgent):
             response = llm.chat(
                 model=agent_cfg["model"],
                 messages=messages,
-            temperature=agent_cfg["temperature"],
-            max_completion_tokens=agent_cfg.get("max_completion_tokens"),
+                temperature=agent_cfg["temperature"],
+                max_completion_tokens=agent_cfg.get("max_completion_tokens"),
             )
 
         parsed = self._parse_script_response(response["content"])
@@ -221,7 +254,9 @@ class ScriptwriterAgent(BaseAgent):
 
         logger.info(
             "Scriptwriter: %d words, %.1fs estimated, %d narrative beats",
-            word_count, estimated_duration, len(parsed["narrative_structure"]),
+            word_count,
+            estimated_duration,
+            len(parsed["narrative_structure"]),
         )
 
         result = {

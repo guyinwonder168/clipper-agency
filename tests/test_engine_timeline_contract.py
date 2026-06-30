@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from clipper_agency.core.repair_router import TIMELINE_NOT_COVERED
 from clipper_agency.db.connection import close_connection, get_connection
 from clipper_agency.db.queries import (
     create_agent_state,
@@ -119,6 +120,12 @@ class TestEnforceTimelineContract:
             # data.reason — the field FIX-5 must route on. Locks the surface so
             # FIX-5 cannot accidentally read abort["reason"].
             assert abort["reason"] != "timeline_not_covered"
+            # FIX-5 producer-side contract (pr-test-analyzer P1): the REAL
+            # helper ALSO stamps the stable routing token on the abort
+            # (gate_reason) so _is_coverage_repairable_abort can route into the
+            # bounded Scriptwriter regen. Pinning the producer half the consumer
+            # tests already pin; the gate_message stays on abort["reason"].
+            assert abort["gate_reason"] == TIMELINE_NOT_COVERED
 
             # Atomic DB state: job=FAILED AND scriptwriter=failed, committed
             # together (not half-written).

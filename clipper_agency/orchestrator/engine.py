@@ -48,7 +48,14 @@ from clipper_agency.core.repair_metrics import (
     is_repair_improved,
     persist_repair_cycle,
 )
-from clipper_agency.core.repair_router import route_repair
+from clipper_agency.core.repair_router import (
+    NARRATIVE_NOT_COVERED,
+    REGEN_NARRATIVE_ACTION,
+    TIMELINE_NOT_COVERED,
+    build_gate_failure_repair_plan,
+    route_repair,
+)
+from clipper_agency.core.safe_paths import resolve_existing_file_under
 from clipper_agency.core.validation import validate_agent_cache
 from clipper_agency.db.connection import db_write_lock, get_connection
 from clipper_agency.db.queries import (
@@ -121,8 +128,34 @@ _SCRIPT_BUDGET_FAILED = "Scriptwriter duration budget exceeded"
 _RESEARCH_FAILED = "Research generation failed"
 _REPAIR_EXHAUSTED = "Repair cycles exhausted"
 _MANUAL_REVIEW_REQUIRED = "Manual review required"
+# FIX-5 (SonarCloud S1192): the persisted duplicate-guard filename was
+# duplicated 3x as a string literal. Centralize it (DRY) so a future rename
+# can't desync the load/save/reset sites.
+_PREVIOUS_PATCHES_FILENAME = "previous_patches.json"
 _GATE_RELAX_WARN_MSG = "DEV gate-relax: %s hard_fail RELAXED -> continuing. msg=%s"
 _SAME_PATCH_REPEATED = "Identical repair patch repeated"
+# FIX-5 (ADR 0030): a SINGLE Scriptwriter coverage-regen attempt before the
+# job terminally FAILs (never "completes" a garbage uncovered-narrative video).
+# Intentionally 1, not N: when a regen attempt STILL fails G7 inside
+# ``_rerun_upstream_cascade``, the abort propagates as a coverage failure and
+# the job terminally FAILs immediately. Re-prompting the same model that just
+# failed the identical coverage gate with the identical "cover ALL words"
+# directive is unlikely to fix the gap and burns TTS + LLM credits per retry;
+# a model/prompt failure needs human triage, not blind repetition. This is a
+# deliberate policy choice (KISS): one shot at repair, then surface failure.
+_COVERAGE_MAX_REPAIR_CYCLES = 1
+# FIX-5 (ADR 0030, Codex P2): the coverage directive injected into the
+# Scriptwriter system prompt on a regen_narrative attempt. Without this the
+# regen re-uses the identical first-run prompt and the model can re-emit the
+# same under-covered narrative_structure until MAX_REPAIR_CYCLES exhausts.
+_COVERAGE_REGEN_DIRECTIVE = (
+    "COVERAGE CONTRACT (regeneration): your previous narrative_structure's "
+    "word_range indices did NOT cover the full voiceover. You MUST emit "
+    "narrative_structure whose word_range union is exactly [0, word_count-1] "
+    "- contiguous, in-bounds, no gaps, no overlaps, starting at 0 and ending "
+    "at the last word. Every word of voiceover_text must fall inside exactly "
+    "one beat's word_range. Re-check the union before returning."
+)
 
 
 @dataclass
@@ -138,6 +171,11 @@ class RepairCycleContext:
     niche_ctx: dict[str, Any]
     target_agent: str
     target_idx: int
+    # FIX-5 (ADR 0030): when set to "regen_narrative", signals that the
+    # cascade is a coverage-regen attempt so Scriptwriter gets the "cover
+    # ALL words" prompt hint. Defaults to "" so the 8 existing callers
+    # (non-coverage repairs) are unaffected.
+    repair_hint: str = ""
 
 
 class Orchestrator:
@@ -317,11 +355,26 @@ class Orchestrator:
     ) -> list[dict]:
         """Load the previous cycle's patch list for repetition check."""
         repair_dir = Path(assets_cache) / f"job_{job_id}" / "repair"
-        prev_path = repair_dir / "previous_patches.json"
+        prev_path = repair_dir / _PREVIOUS_PATCHES_FILENAME
         if prev_path.exists():
             from clipper_agency.core.artifacts import read_json
 
-            return read_json(str(prev_path))
+            # FIX-5 (silent-failure P2): previous_patches.json is internal
+            # bookkeeping for the duplicate-guard. A corrupt/partial file
+            # (kill mid-write, fs issue) would raise JSONDecodeError and
+            # mask the root cause as a generic pipeline exception, AND it
+            # would pre-empt the single coverage regen attempt. Treat a
+            # corrupt file as "no previous patches" — the guard simply
+            # won't fire and the regen proceeds normally.
+            try:
+                return read_json(str(prev_path))
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning(
+                    "Corrupt repair patch state at %s, treating as empty (%s)",
+                    prev_path,
+                    exc,
+                )
+                return []
         return []
 
     def _save_previous_patches(
@@ -333,7 +386,27 @@ class Orchestrator:
         """Persist the current patch list for next cycle's repetition check."""
         repair_dir = Path(assets_cache) / f"job_{job_id}" / "repair"
         repair_dir.mkdir(parents=True, exist_ok=True)
-        write_json(str(repair_dir / "previous_patches.json"), patches)
+        write_json(str(repair_dir / _PREVIOUS_PATCHES_FILENAME), patches)
+
+    def _reset_previous_patches(self, assets_cache: str, job_id: int) -> None:
+        """Clear any persisted previous-patch state at the start of a repair run.
+
+        The duplicate-patch guard (``_check_duplicate_patches``) is intended to
+        catch a cycle repeating the SAME patch WITHIN one repair loop. The
+        coverage-regen patch (``build_gate_failure_repair_plan``) is a CONSTANT
+        across every coverage repair, so a stale persisted file from a PRIOR run
+        (a retry/resume of a job that previously went through a coverage repair
+        cycle) would byte-match cycle 1 of the NEW run and falsely exhaust it
+        before any regen is attempted. Clearing here scopes the guard to within
+        a single ``_execute_repair_cycle`` invocation (silent-failure P2)."""
+        if not assets_cache:
+            return
+        prev_path = Path(assets_cache) / f"job_{job_id}" / "repair" / _PREVIOUS_PATCHES_FILENAME
+        if prev_path.exists():
+            try:
+                prev_path.unlink()
+            except OSError:
+                logger.warning("Could not clear stale repair patches at %s", prev_path)
 
     def _handle_review_outcome(
         self,
@@ -377,9 +450,6 @@ class Orchestrator:
 
         # No LLM repair plan — try deterministic gate failure synthesis
         # (Codex P2 #2: enables multi-gate sequential repair within budget)
-        from clipper_agency.core.repair_router import (
-            build_gate_failure_repair_plan,
-        )
 
         gate_plan = build_gate_failure_repair_plan(after_review)
         if gate_plan:
@@ -508,10 +578,19 @@ class Orchestrator:
             niche_ctx=niche_ctx,
             target_agent=target_agent,
             target_idx=target_idx,
+            # FIX-5: thread the coverage-regen sentinel so the cascade adds
+            # the "cover ALL words" prompt hint on the Scriptwriter re-run.
+            repair_hint=patches[0].get("action", "") if patches else "",
         )
 
-        if target_agent == "segment_producer":
-            # Full cascade: SP→SW→VP→VD→Composer (Codex P2 #1)
+        if target_agent in ("segment_producer", "scriptwriter"):
+            # Full cascade: SP→SW→VP→VD→Composer (Codex P2 #1).
+            # FIX-5 (ADR 0030, OQ-1/RISK-5): target="scriptwriter" MUST take
+            # this branch too — the ELSE branch (_run_cached_upstream_repair)
+            # only RECONSTRUCTS Scriptwriter from cached disk state and would
+            # reload the SAME broken narrative_structure (no actual regen).
+            # The cascade re-executes _run_content_scriptwriter, regenerating
+            # the structure fresh, then re-fires G7 on it.
             cascade = self._rerun_upstream_cascade(ctx)
             if isinstance(cascade, dict):
                 cascade["_action"] = "return"
@@ -577,16 +656,91 @@ class Orchestrator:
             assets_cache,
         )
 
-    def _rerun_upstream_cascade(
+    def _maybe_reuse_cached_voiceover(
         self,
         ctx: RepairCycleContext,
-    ) -> dict[str, Any] | tuple:
-        """Rerun SP→SW→VP→VD→Composer cascade for upstream repair.
+        script_output: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """FIX-5 vo-diff skip (claude-auto-tok pattern).
 
-        Returns a 5-tuple (research, script, voice, compose,
-        beat_timeline) on success, or an abort dict on failure.
+        Return the cached voice_producer output to REUSE when a Scriptwriter
+        regen left ``voiceover_text`` byte-identical to the previously
+        persisted voiceover AND the cached audio has a valid
+        ``voiceover_path`` (cache-integrity guard). Return ``None`` to signal
+        the caller must regen via Voice Producer.
+
+        Safe because audio is the master (ADR 0020): if audio is unchanged,
+        the canonical timeline is unchanged, so VD/Composer re-decisions are
+        deterministic. Only the cascade path (target in segment_producer /
+        scriptwriter) re-runs Scriptwriter, so this is the only place the
+        skip applies.
         """
-        # Rerun Segment Producer
+        prev_vo = self._load_agent_output(ctx.assets_cache, ctx.job_id, "voice_producer")
+        if not prev_vo:
+            return None
+        # Cache-integrity backstop (Codex P2): the path string being truthy is
+        # NOT enough — verify the audio file actually exists on disk. A
+        # cross-job cleanup / partial fs / resume-on-different-host can leave
+        # the JSON referencing a deleted file; reusing it would feed a missing
+        # audio master to Composer/Reviewer.
+        vo_path = prev_vo.get("voiceover_path", "")
+        # FIX-5 (SonarCloud S6549): vo_path comes from persisted JSON (tainted).
+        # Validate existence AND containment under the workspace cache dir
+        # before trusting it — an out-of-workspace or missing path aborts to
+        # the safe regen fallback (resolve_existing_file_under returns None).
+        if not vo_path or not resolve_existing_file_under(ctx.assets_cache, vo_path):
+            logger.info(
+                "VO-diff skip aborted: cached audio missing on disk (job %d, cycle %d)",
+                ctx.job_id,
+                ctx.cycle,
+            )
+            return None
+        prev_text = prev_vo.get("voiceover_text", "")
+        new_text = script_output.get("voiceover_text", "")
+        # Only skip when BOTH sides have a real (non-empty) text AND they match
+        # byte-for-byte. An empty new_text (Scriptwriter parse failure ->
+        # _empty_output) must NOT reuse stale audio for an empty voiceover.
+        if new_text and prev_text and new_text == prev_text:
+            # Belt-and-suspenders (silent-failure P2): byte-identical
+            # voiceover_text implies identical _word_count_for_coverage(new)
+            # == _word_count_for_coverage(prev), so the cached timestamps
+            # remain valid BY CONSTRUCTION. If a future change to how word
+            # count is derived desyncs that invariant, the cached
+            # timestamps length would no longer match the new word count —
+            # detect it here and fall through to regen (safe default)
+            # rather than reuse stale timestamps.
+            expected_words = _word_count_for_coverage(new_text)
+            cached_ts = prev_vo.get("timestamps", [])
+            if expected_words and len(cached_ts) != expected_words:
+                logger.warning(
+                    "VO-diff skip aborted: cached timestamps (%d) != word "
+                    "count (%d) for byte-identical text (job %d, cycle %d) "
+                    "— word_count derivation desync suspected, regenerating",
+                    len(cached_ts),
+                    expected_words,
+                    ctx.job_id,
+                    ctx.cycle,
+                )
+                return None
+            logger.info(
+                "VO-diff skip: voiceover_text unchanged, reusing cached audio (job %d, cycle %d)",
+                ctx.job_id,
+                ctx.cycle,
+            )
+            return prev_vo
+        return None
+
+    def _run_research_for_repair(
+        self,
+        ctx: RepairCycleContext,
+    ) -> tuple[dict[str, Any], bool]:
+        """Run Segment Producer fresh for a repair cascade (DRY helper).
+
+        Returns ``(research_output, ok)``. On failure ``_fail_agent`` is
+        invoked (stamping the abort) and ``ok`` is ``False`` so the caller
+        returns the abort immediately; on success ``ok`` is ``True`` and SP
+        is marked completed.
+        """
         research_output = self._run_researcher(
             job_id=ctx.job_id,
             topic=ctx.topic,
@@ -599,49 +753,64 @@ class Orchestrator:
             assets_cache=ctx.assets_cache,
         )
         if research_output.get("status") == "failed":
-            return self._fail_agent(
-                ctx.conn, ctx.job_id, "segment_producer", research_output, _RESEARCH_FAILED
+            return (
+                self._fail_agent(
+                    ctx.conn, ctx.job_id, "segment_producer", research_output, _RESEARCH_FAILED
+                ),
+                False,
             )
         self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "segment_producer")
+        return research_output, True
 
-        # Rerun Scriptwriter
-        script_output = self._run_content_scriptwriter(
-            ctx.conn,
-            ctx.job_id,
-            ctx.topic,
-            ctx.niche_ctx.get("safety_rules", []),
-            ctx.niche_ctx.get("channel_description", ""),
-            ctx.niche_ctx.get("language", "id"),
-            ctx.niche_ctx.get("tone", "informative"),
-            ctx.niche_ctx.get("content_angle", ""),
-            research_output,
-            ctx.assets_cache,
-        )
-        if script_output.get("status") == "failed":
-            return self._fail_agent(
-                ctx.conn, ctx.job_id, "scriptwriter", script_output, _SCRIPT_BUDGET_FAILED
+    def _rerun_upstream_cascade(
+        self,
+        ctx: RepairCycleContext,
+    ) -> dict[str, Any] | tuple:
+        """Rerun SP→SW→VP→VD→Composer cascade for upstream repair.
+
+        Returns a 5-tuple (research, script, voice, compose,
+        beat_timeline) on success, or an abort dict on failure.
+        """
+        # Rerun Segment Producer — UNLESS this is a Scriptwriter-only
+        # coverage repair (FIX-5 / codex P1). reset_agents_from(...,'scriptwriter')
+        # left SP's DB state + disk artifacts intact, so re-running paid
+        # external research (ScrapeCreators/Firecrawl/Tavily/Brave) is pure
+        # waste AND a spurious failure surface (a transient research-provider
+        # error would abort before Scriptwriter regen is even attempted). SP
+        # output is the master input to Scriptwriter and is already on disk;
+        # reuse it. Only a segment_producer-targeted repair needs fresh research.
+        if ctx.target_agent == "segment_producer":
+            research_output, ok = self._run_research_for_repair(ctx)
+            if not ok:
+                return research_output
+        else:
+            # Scriptwriter-targeted coverage repair: reuse persisted SP output.
+            # If the cached output is missing/empty (partial fs / pre-SP job),
+            # fall back to a fresh research run rather than feed Scriptwriter
+            # nothing (safe default; preserves the original behavior).
+            research_output = self._load_agent_output(
+                ctx.assets_cache, ctx.job_id, "segment_producer"
             )
+            if not research_output:
+                logger.warning(
+                    "Coverage SW-regen for job %d: no cached SP output, "
+                    "running Segment Producer fresh",
+                    ctx.job_id,
+                )
+                research_output, ok = self._run_research_for_repair(ctx)
+                if not ok:
+                    return research_output
 
-        # G7 (ADR 0030 / FIX-1): enforce coverage on the repair-rerun path too.
-        if abort := self._enforce_narrative_coverage(
-            ctx.conn, ctx.job_id, script_output, ctx.assets_cache
-        ):
+        # Rerun Scriptwriter + G7 coverage enforce (FIX-5 threads the
+        # coverage-regen sentinel through _run_content_scriptwriter).
+        script_output, abort = self._rerun_scriptwriter(ctx, research_output)
+        if abort:
             return abort
 
-        # Rerun Voice Producer
-        mark_agent_running(ctx.conn, ctx.job_id, "voice_producer")
-        voice_output = self._run_voice_producer(
-            job_id=ctx.job_id,
-            script=script_output.get("script", []),
-            voiceover_text=script_output.get("voiceover_text", ""),
-            output_dir=ctx.output_dir,
-            assets_cache=ctx.assets_cache,
-        )
-        if voice_output.get("status") == "failed":
-            return self._fail_agent(
-                ctx.conn, ctx.job_id, "voice_producer", voice_output, _VOICE_GEN_FAILED
-            )
-        self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "voice_producer")
+        # VO-diff skip (claude-auto-tok pattern) + Voice Producer rerun.
+        voice_output, abort = self._rerun_voice_producer(ctx, script_output)
+        if abort:
+            return abort
 
         # Rebuild canonical timeline from fresh outputs (ADR 0020).
         # FIX-6: enforce the physical-timeline contract (backstop for G7).
@@ -687,6 +856,91 @@ class Orchestrator:
             return abort
 
         return (research_output, script_output, voice_output, compose_output, beat_timeline)
+
+    def _rerun_scriptwriter(
+        self,
+        ctx: RepairCycleContext,
+        research_output: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Rerun Scriptwriter and enforce G7 coverage on the repair path.
+
+        Returns ``(script_output, abort)`` where ``abort`` is ``None`` on
+        success, or a failure dict (failed Scriptwriter or G7 gate) the caller
+        returns immediately. Mirrors the
+        :meth:`_enforce_timeline_contract` / :meth:`_retry_composer_stage`
+        convention. Extracted from :meth:`_rerun_upstream_cascade` to drop its
+        cognitive complexity below 15 (SonarCloud S3776).
+        """
+        # Rerun Scriptwriter
+        script_output = self._run_content_scriptwriter(
+            ctx.conn,
+            ctx.job_id,
+            ctx.topic,
+            ctx.niche_ctx.get("safety_rules", []),
+            ctx.niche_ctx.get("channel_description", ""),
+            ctx.niche_ctx.get("language", "id"),
+            ctx.niche_ctx.get("tone", "informative"),
+            ctx.niche_ctx.get("content_angle", ""),
+            research_output,
+            ctx.assets_cache,
+            # FIX-5: thread the coverage-regen sentinel so Scriptwriter gets
+            # the "cover ALL words" hint on a coverage-regen attempt.
+            repair_hint=ctx.repair_hint,
+        )
+        if script_output.get("status") == "failed":
+            return (
+                {},
+                self._fail_agent(
+                    ctx.conn, ctx.job_id, "scriptwriter", script_output, _SCRIPT_BUDGET_FAILED
+                ),
+            )
+
+        # G7 (ADR 0030 / FIX-1): enforce coverage on the repair-rerun path too.
+        if abort := self._enforce_narrative_coverage(
+            ctx.conn, ctx.job_id, script_output, ctx.assets_cache
+        ):
+            return ({}, abort)
+        return (script_output, None)
+
+    def _rerun_voice_producer(
+        self,
+        ctx: RepairCycleContext,
+        script_output: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Rerun Voice Producer with the claude-auto-tok vo-diff skip.
+
+        Audio is the master (ADR 0020); if a coverage-regen leaves
+        voiceover_text byte-identical to the previously persisted voiceover,
+        reuse the cached audio + timestamps instead of burning a TTS call.
+        Returns ``(voice_output, abort)`` where ``abort`` is ``None`` on
+        success or a failure dict on a failed Voice Producer. Extracted from
+        :meth:`_rerun_upstream_cascade` to drop its cognitive complexity
+        below 15 (SonarCloud S3776).
+        """
+        # Cache integrity guard: only skip when the cached voice has a valid
+        # voiceover_path (else fall through to regen).
+        voice_output = self._maybe_reuse_cached_voiceover(ctx, script_output)
+        if voice_output is None:
+            mark_agent_running(ctx.conn, ctx.job_id, "voice_producer")
+            voice_output = self._run_voice_producer(
+                job_id=ctx.job_id,
+                script=script_output.get("script", []),
+                voiceover_text=script_output.get("voiceover_text", ""),
+                output_dir=ctx.output_dir,
+                assets_cache=ctx.assets_cache,
+            )
+            # _run_voice_producer already stamped + re-persisted voiceover_text
+            # onto the output (the contract has no such field) so a later
+            # regen's VO-diff skip has real data to compare against.
+        if voice_output.get("status") == "failed":
+            return (
+                {},
+                self._fail_agent(
+                    ctx.conn, ctx.job_id, "voice_producer", voice_output, _VOICE_GEN_FAILED
+                ),
+            )
+        self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "voice_producer")
+        return (voice_output, None)
 
     def _run_cached_upstream_repair(
         self,
@@ -779,6 +1033,14 @@ class Orchestrator:
         conn = get_connection(self.db_path)
         max_cycles = repair_plan.get("max_repair_cycles", 2)
         patches = repair_plan.get("patches", [])
+
+        # FIX-5 (silent-failure P2): scope the duplicate-patch guard to THIS
+        # repair run. A stale persisted previous_patches.json from a prior run
+        # (retry/resume of a job that already went through a coverage repair)
+        # would byte-match the constant coverage-regen patch on cycle 1 and
+        # falsely exhaust the loop before any regen is attempted. Clear it so
+        # the guard only fires on a repeat WITHIN this loop.
+        self._reset_previous_patches(assets_cache, job_id)
 
         # Set initial repair status
         update_job_repair_status(conn, job_id, "running")
@@ -941,6 +1203,12 @@ class Orchestrator:
                 except Exception:
                     conn.rollback()
                     raise
+                # FIX-5 (ADR 0030): stamp the stable coverage token so the
+                # abort site can route into the bounded Scriptwriter regen loop
+                # instead of terminal-hard-failing (Codex P1: without this the
+                # GATE_FAILURE_REPAIR_MAP narrative_not_covered entry is
+                # unreachable from a real uncovered-narrative run).
+                abort["gate_reason"] = NARRATIVE_NOT_COVERED
         return abort
 
     def _persist_repaired_narrative(
@@ -1040,6 +1308,10 @@ class Orchestrator:
                     except Exception:
                         conn.rollback()
                         raise
+                    # FIX-5 (ADR 0030): stamp the stable coverage token so the
+                    # abort site can route into the bounded Scriptwriter regen
+                    # loop instead of terminal-hard-failing (Codex P1).
+                    abort["gate_reason"] = TIMELINE_NOT_COVERED
             return [], abort
         return timeline, None
 
@@ -1396,12 +1668,307 @@ class Orchestrator:
 
         return compose_output
 
+    def _is_coverage_repairable_abort(self, abort: dict[str, Any] | None) -> bool:
+        """FIX-5 (ADR 0030): True when an abort carries a stable coverage token.
+
+        The G7 (``_enforce_narrative_coverage``) and FIX-6
+        (``_enforce_timeline_contract``) helpers stamp ``gate_reason`` on the
+        abort dict with the exact token ``GATE_FAILURE_REPAIR_MAP`` keys on.
+        Without this check those aborts hard-fail the job before the Reviewer
+        runs, leaving the narrative_not_covered / timeline_not_covered routing
+        entries unreachable (Codex P1)."""
+        if not abort:
+            return False
+        return abort.get("gate_reason") in (NARRATIVE_NOT_COVERED, TIMELINE_NOT_COVERED)
+
+    def _maybe_route_coverage_abort(
+        self,
+        abort: dict[str, Any] | None,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        niche: str,
+        assets_cache: str,
+        output_dir: str,
+    ) -> dict[str, Any] | None:
+        """Route a coverage-repairable abort into the bounded regen loop.
+
+        Returns the repair result dict when ``abort`` is coverage-repairable
+        (FIX-5 / ADR 0030), or ``None`` when it is not (caller returns the
+        abort as a terminal fail). Encapsulates the repeated
+        ``_is_coverage_repairable_abort`` → ``_route_coverage_abort_to_repair``
+        decision so :meth:`run_pipeline` stays a linear orchestrator below
+        the SonarCloud S3776 cognitive-complexity threshold.
+        """
+        if not abort or not self._is_coverage_repairable_abort(abort):
+            return None
+        return self._route_coverage_abort_to_repair(
+            abort, conn, job_id, topic, niche, assets_cache, output_dir
+        )
+
+    def _route_coverage_abort_to_repair(
+        self,
+        abort: dict[str, Any],
+        conn: Any,
+        job_id: int,
+        topic: str,
+        niche: str,
+        assets_cache: str,
+        output_dir: str,
+    ) -> dict[str, Any]:
+        """Route a G7/FIX-6 coverage abort into a single Scriptwriter regen
+        attempt instead of returning it as a terminal hard-fail.
+
+        FIX-5 (ADR 0030 / SRS FR-78, Codex P1): the coverage abort already
+        committed ``job=FAILED`` + ``scriptwriter=failed`` atomically. The
+        regen attempt needs a runnable job, so this marks ``repair_status=
+        running``, builds the root-agent regen plan from the stable token, and
+        delegates to :meth:`_execute_repair_cycle`. Per
+        ``_COVERAGE_MAX_REPAIR_CYCLES`` the regen is a SINGLE attempt: if the
+        re-run STILL fails G7 the abort propagates and the job terminally
+        FAILs (never "completes" a garbage video — anti-job_18).
+
+        Returns a result dict (``completed`` on a successful regen,
+        ``failed`` on exhaustion / coverage re-fail with ``repair_status``
+        carrying the underlying cycle status)."""
+        token = abort.get("gate_reason", "")
+        logger.warning(
+            "Coverage gate %s failed for job %d — routing to bounded "
+            "Scriptwriter regen (max %d cycles)",
+            token,
+            job_id,
+            _COVERAGE_MAX_REPAIR_CYCLES,
+        )
+        # The abort already wrote job=FAILED atomically. Mark the repair loop
+        # active so operators/dashboard see the regen attempt in progress.
+        update_job_repair_status(conn, job_id, "running")
+        update_job_publication_status(conn, job_id, "blocked")
+        routing = build_gate_failure_repair_plan({"status": "fail", "reason": token})
+        # routing is guaranteed non-None for the two coverage tokens (covered by
+        # test_build_gate_plan_for_{narrative,timeline}_not_covered), but guard
+        # defensively so a future token mis-map degrades to the original abort.
+        if routing is None:
+            return abort
+        repair_plan = {
+            "max_repair_cycles": _COVERAGE_MAX_REPAIR_CYCLES,
+            "patches": routing["patches"],
+        }
+        repair_result = self._execute_repair_cycle(
+            repair_plan=repair_plan,
+            job_id=job_id,
+            assets_cache=assets_cache,
+            output_dir=output_dir,
+            topic=topic,
+        )
+        if repair_result.get("status") == "completed":
+            # Package + promote the regen-repaired output (mirrors
+            # _handle_repair_routing's post-repair packaging). Thread `topic`
+            # explicitly — the repair-cycle result dict does NOT carry it.
+            return self._finalize_coverage_repair(
+                conn, job_id, topic, niche, output_dir, assets_cache, repair_result
+            )
+        # Exhausted / manual review — terminal FAIL (never COMPLETED).
+        # FIX-5 (silent-failure P2): the entry announcement (L1604) logs the
+        # regen ATTEMPT; this logs the OUTCOME so operators scanning logs see
+        # the single most load-bearing failure (job_18's class recurs after
+        # regen). Mirrors _execute_repair_cycle's 'EXHAUSTED' log (L983).
+        # S5145: log job_id ONLY — token/status/reason trace to gate/user
+        # data and are persisted via update_job_status below, so operators
+        # already see them in the DB/dashboard. The log just flags WHICH job.
+        logger.error("Coverage regen FAILED terminally for job %d", job_id)
+        update_job_status(conn, job_id, "FAILED", repair_result.get("reason", _REPAIR_EXHAUSTED))
+        # FIX-5 (Codex P2 @line 1702): reset the repair lifecycle state. The
+        # regen entry set repair_status='running'; without this reset the
+        # job/dashboard stays "repair in-progress" after the API already
+        # returned failure. Mirrors the exhausted/manual-review reset used by
+        # _execute_repair_cycle (L1024) and _handle_review_outcome (L462).
+        update_job_repair_status(conn, job_id, "exhausted")
+        update_job_artifact_status(conn, job_id, "manual_review_required")
+        update_job_quality_status(conn, job_id, "repair_exhausted")
+        remove_job_file_handler()
+        return {
+            "status": "failed",
+            "job_id": job_id,
+            "reason": repair_result.get("reason", _REPAIR_EXHAUSTED),
+            "repair_status": repair_result["status"],
+        }
+
+    def _promote_repaired_job(
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        niche: str,
+        output_dir: str,
+        assets_cache: str,
+        repair_cycle: int,
+        extra_fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Shared package-or-fail-or-promote sequence for repaired jobs.
+
+        Single source of truth (DRY) for the packaging + promotion +
+        COMPLETED/FAILED transition used by both the coverage-regen finalize
+        path (:meth:`_finalize_coverage_repair`) and the reviewer-driven repair
+        path (:meth:`_handle_repair_routing`).
+
+        Anti-job_18 (ADR 0030 / FIX-5): a repaired output that fails packaging
+        OR promotion terminally FAILs the job (``repair_status`` carries the
+        stage) — it must NEVER be marked COMPLETED with a missing/garbage
+        package or no final/ artifacts. Mirrors the non-repair promotion path
+        (L2363) which gates publication on ``_promote_to_final`` succeeding.
+
+        ``extra_fields`` is merged into the success dict so the
+        reviewer-driven caller can attach ``cost_estimate``/``review``
+        without the coverage caller needing them.
+        """
+        # FIX-5 (silent-failure P2): assert upstream outputs are non-empty
+        # BEFORE packaging. A partial fs / failed persist would otherwise feed
+        # empty caption/video strings to _package_output, which may tolerate
+        # them and silently produce a garbage package marked COMPLETED.
+        script_output = self._load_agent_output(assets_cache, job_id, "scriptwriter")
+        compose_output = self._load_agent_output(assets_cache, job_id, "composer")
+        if not script_output or not compose_output.get("video_path"):
+            update_job_status(conn, job_id, "FAILED", _PACKAGING_FAILED)
+            # FIX-5 (Codex P2 @line 1765): reset the lifecycle fields the
+            # reviewer-driven path already stamped (repair_status='completed'/
+            # artifact_status='approved'/publication_status='ready'). Without
+            # this the job stays marked approved/ready despite no valid package.
+            update_job_repair_status(conn, job_id, "packaging_failed")
+            update_job_artifact_status(conn, job_id, "rejected")
+            update_job_publication_status(conn, job_id, "blocked")
+            remove_job_file_handler()
+            return {
+                "status": "failed",
+                "job_id": job_id,
+                "reason": _PACKAGING_FAILED,
+                "repair_status": "packaging_failed",
+            }
+        pkg_output = self._package_output(
+            job_id=job_id,
+            video_path=compose_output.get("video_path", ""),
+            caption=script_output.get("caption", ""),
+            topic=topic,
+            niche=niche,
+            output_dir=output_dir,
+            template_name=compose_output.get("template_name"),
+        )
+        if pkg_output.get("status") == "failed":
+            reason = pkg_output.get("error", _PACKAGING_FAILED)
+            update_job_status(conn, job_id, "FAILED", reason)
+            # FIX-5 (Codex P2 @line 1765): mirror the lifecycle reset so a
+            # packaging failure never leaves the job approved/ready.
+            update_job_repair_status(conn, job_id, "packaging_failed")
+            update_job_artifact_status(conn, job_id, "rejected")
+            update_job_publication_status(conn, job_id, "blocked")
+            remove_job_file_handler()
+            return {
+                "status": "failed",
+                "job_id": job_id,
+                "reason": reason,
+                "repair_status": "packaging_failed",
+            }
+        # FIX-5 (Codex P2): gate the COMPLETED transition on promotion
+        # succeeding. _promote_to_final returns {status:failed} on a missing
+        # cycle_{n} source dir or an atomic-rename/copytree exception; without
+        # this gate the DB would report COMPLETED with NO final/job_* produced.
+        #
+        # Promote the PACKAGED dir (output/job_{id}/, written by
+        # _package_output above — contains metadata.json + caption.txt +
+        # package-time artifacts), NOT the cycle_{n} snapshot. The cycle_{n}
+        # dir is an interim copy of only video/thumbnail/caption made by
+        # _retry_composer_stage BEFORE packaging, so it lacks metadata.json;
+        # promoting it would mark the job COMPLETED with a broken output
+        # package contract (anti-job_18, ADR 0030). Mirrors the non-repair
+        # promotion path (L2536) which promotes output/job_{id}/ directly.
+        promotion = self._promote_to_final(
+            output_dir=output_dir,
+            job_id=job_id,
+        )
+        if promotion.get("status") == "failed":
+            reason = promotion.get("error", _PACKAGING_FAILED)
+            update_job_status(conn, job_id, "FAILED", reason)
+            # FIX-5 (Codex P2 @line 1765): reset lifecycle on promotion
+            # failure too — the packaged artifacts exist but final/ was not
+            # produced, so publication must stay blocked (mirrors the
+            # non-repair promotion-fail at L2548: "publication stays blocked").
+            update_job_repair_status(conn, job_id, "promotion_failed")
+            update_job_publication_status(conn, job_id, "blocked")
+            remove_job_file_handler()
+            return {
+                "status": "failed",
+                "job_id": job_id,
+                "reason": reason,
+                "repair_status": "promotion_failed",
+            }
+        update_job_status(conn, job_id, "COMPLETED")
+        # Codex P2 r3502323050: mirror the normal pass path's manifest update
+        # (engine.py ~L2743) so final_outputs is populated for repaired jobs —
+        # otherwise manifest.json keeps final_outputs empty even though DB says
+        # COMPLETED, and dashboard/manifest consumers can't discover the final
+        # video/caption/thumbnail/metadata.
+        update_manifest_final(
+            assets_cache,
+            job_id,
+            {
+                "video": pkg_output.get("video_path", ""),
+                "caption": pkg_output.get("caption_path", ""),
+                "thumbnail": pkg_output.get("thumbnail_path", ""),
+                "metadata": pkg_output.get("metadata_path", ""),
+            },
+        )
+        # FIX-5 (SonarCloud S5145): cast to int to break the taint chain from
+        # persisted gate data (job_id/repair_cycle trace to tainted source).
+        logger.info(
+            "Pipeline COMPLETED after repair (job #%d, cycle %d)",
+            int(job_id),
+            int(repair_cycle),
+        )
+        remove_job_file_handler()
+        success: dict[str, Any] = {
+            "status": "completed",
+            "job_id": job_id,
+            "output": pkg_output,
+            "repair_cycles": repair_cycle,
+        }
+        if extra_fields:
+            success.update(extra_fields)
+        return success
+
+    def _finalize_coverage_repair(
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        niche: str,
+        output_dir: str,
+        assets_cache: str,
+        repair_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Package + promote the output after a successful coverage regen.
+
+        ``topic`` is threaded explicitly from the caller — the repair-cycle
+        result dict does NOT carry it (anti the empty-metadata.topic bug).
+
+        Delegates to :meth:`_promote_repaired_job` for the package-or-fail-or-
+        promote sequence; on packaging OR promotion failure the job terminally
+        FAILs (never COMPLETED) with the matching ``repair_status`` —
+        anti-job_18."""
+        return self._promote_repaired_job(
+            conn=conn,
+            job_id=job_id,
+            topic=topic,
+            niche=niche,
+            output_dir=output_dir,
+            assets_cache=assets_cache,
+            repair_cycle=repair_result.get("cycle", 0),
+        )
+
     def _handle_repair_routing(
         self,
         conn: Any,
         job_id: int,
         review_output: dict[str, Any] | None,
-        script_output: dict[str, Any],
+        _script_output: dict[str, Any],
         _initial_compose_output: dict[str, Any],
         cost_result: Any,
         assets_cache: str,
@@ -1427,41 +1994,27 @@ class Orchestrator:
             topic=topic,
         )
         if repair_result.get("status") == "completed":
-            # Repair passed — package and promote to final/
-            repair_cycle = repair_result.get("cycle", 0)
-            compose_output = self._load_agent_output(assets_cache, job_id, "composer")
-            pkg_output = self._package_output(
+            # Repair passed — package + promote via the shared helper (DRY:
+            # identical sequence to _finalize_coverage_repair). Carries the
+            # cost_estimate/review fields only this caller surfaces.
+            return self._promote_repaired_job(
+                conn=conn,
                 job_id=job_id,
-                video_path=compose_output.get("video_path", ""),
-                caption=script_output.get("caption", ""),
                 topic=topic,
                 niche=niche,
                 output_dir=output_dir,
-                template_name=compose_output.get("template_name"),
+                assets_cache=assets_cache,
+                repair_cycle=repair_result.get("cycle", 0),
+                extra_fields={
+                    "cost_estimate": {
+                        "estimate_cents": cost_result.data.get("estimate_cents", 0.0),
+                    },
+                    "review": {
+                        "score": review_output.get("score", 0),
+                        "verdict": "pass",
+                    },
+                },
             )
-            # Promote cycle artifacts to final/
-            if pkg_output.get("status") != "failed":
-                self._promote_to_final(
-                    output_dir=output_dir,
-                    job_id=job_id,
-                    cycle=repair_cycle,
-                )
-            update_job_status(conn, job_id, "COMPLETED")
-            logger.info("Pipeline COMPLETED after repair: job #%d", job_id)
-            remove_job_file_handler()
-            return {
-                "status": "completed",
-                "job_id": job_id,
-                "output": pkg_output,
-                "cost_estimate": {
-                    "estimate_cents": cost_result.data.get("estimate_cents", 0.0),
-                },
-                "review": {
-                    "score": review_output.get("score", 0),
-                    "verdict": "pass",
-                },
-                "repair_cycles": repair_result.get("cycle", 0),
-            }
 
         # Repair exhausted or manual review needed
         update_job_status(conn, job_id, "FAILED", repair_result.get("reason", _REPAIR_EXHAUSTED))
@@ -1473,23 +2026,20 @@ class Orchestrator:
             "repair_status": repair_result["status"],
         }
 
-    def run_pipeline(
+    def _prepare_pipeline_run(
         self,
-        topic: str,
-        niche: str = "indonesian_artists",
-        output_dir: str = "outputs",
-        relax_gates: str = "",
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        """Execute the full topic-to-output pipeline.
+        relax_gates: str,
+    ) -> tuple[Any, frozenset[str]] | dict[str, Any]:
+        """Set up the shared connection + DEV gate-relax set + model preflight.
 
-        Gate sequence: G1→G2→Safety→G3→Researcher→G4→G5→G6→
-                       Scriptwriter→G7→Voice→G8→Visual→G9→
-                       Composer→G10→Reviewer→Package
+        Returns ``(conn, relax_set)`` on success, or a failure ``dict`` if
+        model preflight raises (the caller returns that dict immediately).
+        Extracted from :meth:`run_pipeline` to drop its cognitive complexity
+        below 15 (SonarCloud S3776).
         """
         conn = get_connection(self.db_path)
         # Resolve DEV gate-relax set (CLI ∪ env). Empty == today's behavior.
-        self._relax_gates = resolve_relax_gates(
+        relax_set = resolve_relax_gates(
             getattr(load_settings(), "relax_gates", ""), relax_gates or ""
         )
         # Preflight: validate resolved agent models against the OpenRouter catalog
@@ -1505,45 +2055,56 @@ class Orchestrator:
                 "failed_at": "model_preflight",
                 "reason": str(exc),
             }
-        settings = load_settings()
-        assets_cache = str(kwargs.get("assets_cache") or settings.assets_cache)
-        logger.info("Pipeline START: niche='%s'", niche)
+        return conn, relax_set
 
-        # Load niche configuration — single source of truth
+    def _load_niche_context(
+        self, niche: str
+    ) -> dict[str, Any] | tuple[Any, list[str], str, str, str, str]:
+        """Load niche configuration and derive the context fields.
+
+        Returns a failed-status dict when the niche config is missing, or the
+        ``(niche_config, safety_rules, channel_description, language_name,
+        tone_name, angle_name)`` tuple on success. Encapsulates the
+        ``try/except FileNotFoundError`` so :meth:`run_pipeline` stays below
+        the SonarCloud S3776 cognitive-complexity threshold.
+        """
         try:
             niche_config = load_niche(niche)
         except FileNotFoundError:
             logger.error("Niche config not found: %r — aborting pipeline", niche)
             return {"status": "failed", "reason": f"Niche config {niche!r} not found"}
-        safety_rules = niche_config.safety_rules
-        channel_description = build_channel_description(niche_config)
-        language_name = get_language_name(niche_config)
-        tone_name = get_tone_name(niche_config)
-        angle_name = get_angle_name(niche_config)
-
-        # Build config snapshot for retry/resume determinism
-        config_snapshot = {
-            "topic": topic,
-            "niche": niche,
-            "output_dir": output_dir,
-            "assets_cache": assets_cache,
-            "niche_ctx": {
-                "safety_rules": safety_rules,
-                "channel_description": channel_description,
-                "language": language_name,
-                "tone": tone_name,
-                "content_angle": angle_name,
-            },
-        }
-
-        # Stage 1: Preflight + Safety
-        stage1 = self._stage_safety(
-            conn, topic, niche, assets_cache, output_dir, config_snapshot=config_snapshot
+        return (
+            niche_config,
+            niche_config.safety_rules,
+            build_channel_description(niche_config),
+            get_language_name(niche_config),
+            get_tone_name(niche_config),
+            get_angle_name(niche_config),
         )
-        if isinstance(stage1, dict):
-            return stage1
-        job_id, cost_result = stage1
 
+    def _run_pipeline_stages(
+        self,
+        conn: Any,
+        job_id: int,
+        cost_result: Any,
+        topic: str,
+        niche: str,
+        safety_rules: Any,
+        channel_description: str,
+        language_name: str,
+        tone_name: str,
+        angle_name: str,
+        assets_cache: str,
+        output_dir: str,
+    ) -> dict[str, Any]:
+        """Execute Stages 2-5 (Research → Content → Composition → Review).
+
+        Encapsulates the ``try/except Exception`` stage body so
+        :meth:`run_pipeline` stays a linear orchestrator below the
+        SonarCloud S3776 cognitive-complexity threshold. Each coverage-repairable
+        abort is routed through :meth:`_maybe_route_coverage_abort` (FIX-5 /
+        ADR 0030) before terminal-failing.
+        """
         try:
             # Stage 2: Research (G3→G5)
             research_output = self._stage_research(
@@ -1576,6 +2137,14 @@ class Orchestrator:
                 output_dir,
             )
             if isinstance(stage3, dict) and stage3.get("status") == "failed":
+                # FIX-5 (ADR 0030, Codex P1): a G7 narrative_not_covered abort
+                # is repairable — route it into the bounded Scriptwriter regen
+                # loop instead of terminal-hard-failing on first contact.
+                repair = self._maybe_route_coverage_abort(
+                    stage3, conn, job_id, topic, niche, assets_cache, output_dir
+                )
+                if repair is not None:
+                    return repair
                 return stage3
             script_output, voice_output = stage3
 
@@ -1591,6 +2160,13 @@ class Orchestrator:
                 output_dir,
             )
             if isinstance(compose_output, dict) and compose_output.get("status") == "failed":
+                # FIX-5 (ADR 0030, Codex P1): a FIX-6 timeline_not_covered
+                # abort is repairable — route into the bounded regen loop.
+                repair = self._maybe_route_coverage_abort(
+                    compose_output, conn, job_id, topic, niche, assets_cache, output_dir
+                )
+                if repair is not None:
+                    return repair
                 return compose_output
 
             # Stage 5: Review + Package
@@ -1609,6 +2185,20 @@ class Orchestrator:
                 research_output=research_output,
             )
             if abort:
+                # FIX-5 (ADR 0030, blast-radius P1): the reviewer-stage
+                # timeline rebuild (in _retry_review_and_package) can re-derive
+                # a FIX-6 timeline_not_covered abort — the SECOND hop for that
+                # token (the first is _stage_composition L1968). Mirror that
+                # site: route the same token into the bounded regen loop
+                # instead of returning it as a bare terminal fail. The job
+                # still terminally FAILs on regen-exhaustion (anti-job_18
+                # invariant holds); this only ensures the automatic regen
+                # attempt fires consistently on both coverage-abort sites.
+                repair = self._maybe_route_coverage_abort(
+                    abort, conn, job_id, topic, niche, assets_cache, output_dir
+                )
+                if repair is not None:
+                    return repair
                 return abort
 
             # Handle repair routing from reviewer
@@ -1648,6 +2238,73 @@ class Orchestrator:
             update_job_status(conn, job_id, "FAILED", str(e))
             remove_job_file_handler()
             return {"status": "failed", "error": str(e), "job_id": job_id}
+
+    def run_pipeline(
+        self,
+        topic: str,
+        niche: str = "indonesian_artists",
+        output_dir: str = "outputs",
+        relax_gates: str = "",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Execute the full topic-to-output pipeline.
+
+        Gate sequence: G1→G2→Safety→G3→Researcher→G4→G5→G6→
+                       Scriptwriter→G7→Voice→G8→Visual→G9→
+                       Composer→G10→Reviewer→Package
+        """
+        prepared = self._prepare_pipeline_run(relax_gates)
+        if isinstance(prepared, dict):
+            return prepared
+        conn, self._relax_gates = prepared
+        assets_cache = str(kwargs.get("assets_cache") or load_settings().assets_cache)
+        logger.info("Pipeline START: niche='%s'", niche)
+
+        niche_ctx = self._load_niche_context(niche)
+        if isinstance(niche_ctx, dict):
+            return niche_ctx
+        _niche_config, safety_rules, channel_description, language_name, tone_name, angle_name = (
+            niche_ctx
+        )
+
+        # Build config snapshot for retry/resume determinism
+        config_snapshot = {
+            "topic": topic,
+            "niche": niche,
+            "output_dir": output_dir,
+            "assets_cache": assets_cache,
+            "niche_ctx": {
+                "safety_rules": safety_rules,
+                "channel_description": channel_description,
+                "language": language_name,
+                "tone": tone_name,
+                "content_angle": angle_name,
+            },
+        }
+
+        # Stage 1: Preflight + Safety
+        stage1 = self._stage_safety(
+            conn, topic, niche, assets_cache, output_dir, config_snapshot=config_snapshot
+        )
+        if isinstance(stage1, dict):
+            return stage1
+        job_id, cost_result = stage1
+
+        # Stages 2-5: Research → Content → Composition → Review + Package
+        return self._run_pipeline_stages(
+            conn,
+            job_id,
+            cost_result,
+            topic,
+            niche,
+            safety_rules,
+            channel_description,
+            language_name,
+            tone_name,
+            angle_name,
+            assets_cache,
+            output_dir,
+        )
 
     def _load_agent_output(self, assets_cache: str, job_id: int, agent_name: str) -> dict[str, Any]:
         """Load a completed agent's output.json from the artifact workspace."""
@@ -2263,7 +2920,12 @@ class Orchestrator:
                 )
 
         # G7 (ADR 0030 / FIX-1): enforce coverage on the retry path too —
-        # whether Scriptwriter was rerun or reused from cache.
+        # whether Scriptwriter was rerun or reused from cache. NOTE: the
+        # automatic FIX-5 regen routing lives on the run_pipeline stage path
+        # (_stage_content / _stage_composition); this manual resume/retry path
+        # is operator-initiated re-entry and keeps the terminal abort so the
+        # FIX-6 resume contract (failed_at == "timeline_contract") holds and a
+        # subsequent retry re-enters regen naturally.
         if abort := self._enforce_narrative_coverage(conn, job_id, script_output, assets_cache):
             return abort
 
@@ -2292,6 +2954,10 @@ class Orchestrator:
             voice_output.get("timestamps", []),
         )
         if abort:
+            # Manual resume/retry path: keep the terminal FIX-6 abort (the
+            # automatic FIX-5 regen routing is on the run_pipeline stage path;
+            # see _stage_composition). Preserves the failed_at ==
+            # "timeline_contract" resume contract.
             return abort
 
         if from_idx <= PIPELINE_ORDER.index("visual_director"):
@@ -2551,10 +3217,24 @@ class Orchestrator:
         content_angle: str,
         research_output: dict[str, Any],
         assets_cache: str,
+        repair_hint: str = "",
     ) -> dict[str, Any]:
-        """Run scriptwriter stage of content creation."""
+        """Run scriptwriter stage of content creation.
+
+        ``repair_hint`` (FIX-5 / ADR 0030): when ``"regen_narrative"`` this
+        run is a coverage-regen attempt; the sentinel is recorded on the
+        output for observability so the regen attempt is distinguishable
+        from a normal Scriptwriter run (the "cover ALL words" signal).
+        """
         g6 = GateCreativeMemory()
         self._record_gate(assets_cache, job_id, "G6_creative_memory", g6.evaluate())
+
+        if repair_hint == "regen_narrative":
+            logger.info(
+                "Scriptwriter coverage-regen: forcing narrative_structure "
+                "to cover ALL words [0, word_count-1] (job %d)",
+                job_id,
+            )
 
         mark_agent_running(conn, job_id, "scriptwriter")
 
@@ -2593,6 +3273,13 @@ class Orchestrator:
             content_angle=resolved_angle,
             assets_cache=assets_cache,
             blueprint=blueprint if blueprint else None,
+            # FIX-5 (ADR 0030, Codex P2): thread the "cover ALL words"
+            # directive into the LLM call on a regen attempt so the model is
+            # actually instructed to fix the coverage gap (not just re-run with
+            # the same prompt that produced the broken structure).
+            coverage_directive=_COVERAGE_REGEN_DIRECTIVE
+            if repair_hint == REGEN_NARRATIVE_ACTION
+            else "",
         )
         self._complete_agent(conn, assets_cache, job_id, "scriptwriter")
 
@@ -2704,12 +3391,28 @@ class Orchestrator:
         **kwargs: Any,
     ) -> dict[str, Any]:
         agent = VoiceProducerAgent(trace_writer=self._trace_writer)
-        return agent.execute(
+        result = agent.execute(
             job_id=job_id,
             script=script or [],
             output_dir=output_dir,
             **kwargs,
         )
+        # FIX-5 (claude-auto-tok): stamp the input voiceover_text onto the
+        # persisted output so a later regen's VO-diff skip has real data to
+        # compare against. The VoiceoverOutput contract has no such field, so
+        # without this the skip is silently inert in production (Codex P1).
+        text = kwargs.get("voiceover_text", "")
+        assets_cache = kwargs.get("assets_cache", "")
+        if (
+            text
+            and assets_cache
+            and result.get("status") not in ("failed", None)
+            and result.get("voiceover_text") != text
+        ):
+            merged = {**result, "voiceover_text": text}
+            self._persist_agent_output(assets_cache, job_id, "voice_producer", merged)
+            return merged
+        return result
 
     def _run_visual_director(
         self,
