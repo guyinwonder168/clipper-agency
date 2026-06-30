@@ -2321,6 +2321,41 @@ class Orchestrator:
         else:
             compose_output = self._load_agent_output(assets_cache, job_id, "composer")
 
+        return self._retry_reviewer_stage(
+            conn,
+            job_id,
+            topic,
+            script_output,
+            compose_output,
+            niche_ctx,
+            niche,
+            output_dir,
+            assets_cache,
+            voice_output,
+            research_output,
+            from_idx,
+        )
+
+    def _retry_reviewer_stage(
+        self,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        script_output: dict[str, Any],
+        compose_output: dict[str, Any],
+        niche_ctx: dict[str, Any],
+        niche: str,
+        output_dir: str,
+        assets_cache: str,
+        voice_output: dict[str, Any],
+        research_output: dict[str, Any],
+        from_idx: int,
+    ) -> dict | None:
+        """Run the reviewer + packaging retry stage if ``from_idx`` reaches it.
+
+        Extracted from ``_retry_downstream_stages`` to keep that method's
+        cognitive complexity under the Sonar S3776 cap after FIX-6 added the
+        timeline-contract guard. Behavior is byte-identical."""
         if from_idx <= PIPELINE_ORDER.index("reviewer"):
             abort, _, _ = self._retry_review_and_package(
                 conn,
@@ -2328,7 +2363,7 @@ class Orchestrator:
                 topic,
                 script_output,
                 compose_output,
-                safety_rules,
+                niche_ctx["safety_rules"],
                 niche,
                 output_dir,
                 assets_cache,
