@@ -277,6 +277,39 @@ class TestEngineCallSitesWrapped:
         finally:
             close_connection(orch.db_path)
 
+    def test_reviewer_not_left_running_on_timeline_abort(self, tmp_path: Path, monkeypatch) -> None:
+        """The FIX-6 timeline check in _retry_review_and_package runs BEFORE
+        mark_agent_running(reviewer), so a mega-beat abort never leaves a stale
+        reviewer=running state while the job is FAILED + scriptwriter=failed
+        (Codex local-review P2, caught locally ahead of the bot)."""
+        orch = _make_orchestrator(tmp_path)
+        conn = get_connection(orch.db_path)
+        try:
+            job_id = _seed_job(conn, str(tmp_path))
+            create_agent_state(conn, job_id, "reviewer")  # pre-existing row
+            narrative, ts = _mega_beat_narrative_and_ts()
+            script_output = {"narrative_structure": narrative, "script": []}
+            voice_output = {"timestamps": ts}
+
+            abort, _review, _pkg = orch._retry_review_and_package(
+                conn,
+                job_id,
+                "t",
+                script_output=script_output,
+                compose_output={"duration_sec": 35.0},
+                safety_rules=[],
+                niche="n",
+                output_dir=str(tmp_path),
+                assets_cache=str(tmp_path),
+                voice_output=voice_output,
+            )
+            assert abort is not None
+            assert abort["failed_at"] == "timeline_contract"
+            # reviewer is NOT left in a stale "running" state.
+            assert get_agent_state(conn, job_id, "reviewer")["state"] != "running"
+        finally:
+            close_connection(orch.db_path)
+
 
 # ── Blast-radius: the repair + resume RE-DERIVATION paths are gated ──
 # (job_18 root cause = a timeline RE-DERIVED on repair/resume from the same

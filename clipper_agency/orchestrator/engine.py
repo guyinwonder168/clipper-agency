@@ -1967,10 +1967,11 @@ class Orchestrator:
     ) -> tuple[dict | None, dict | None, dict | None]:
         """Run review and packaging stages. Returns (abort, review_output, pkg_output)."""
         vo = voice_output or {}
-        mark_agent_running(conn, job_id, "reviewer")
         rp = research_output or {}
         # Build canonical timeline for reviewer (ADR 0020).
         # FIX-6: enforce the physical-timeline contract (backstop for G7).
+        # Run BEFORE mark_agent_running(reviewer) so a timeline abort never
+        # leaves a stale reviewer=running state (Codex local-review P2).
         beat_timeline, tlc_abort = self._enforce_timeline_contract(
             conn,
             job_id,
@@ -1980,6 +1981,7 @@ class Orchestrator:
         )
         if tlc_abort:
             return (tlc_abort, None, None)
+        mark_agent_running(conn, job_id, "reviewer")
         review_output = self._run_reviewer(
             job_id=job_id,
             topic=topic,
