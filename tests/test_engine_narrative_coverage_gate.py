@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from clipper_agency.agents.scriptwriter import _word_count as _scriptwriter_word_count
+from clipper_agency.core.repair_router import NARRATIVE_NOT_COVERED
 from clipper_agency.db.connection import close_connection, get_connection
 from clipper_agency.db.queries import (
     create_agent_state,
@@ -248,6 +249,11 @@ def test_enforce_narrative_coverage_helper_hard_fails_job18(tmp_path, monkeypatc
     assert abort["status"] == "failed"
     assert abort["failed_at"] == "narrative_coverage"
     assert abort["reason"] == "narrative_not_covered"
+    # FIX-5 producer-side contract (pr-test-analyzer P1): the REAL helper
+    # stamps the stable routing token on the abort so _is_coverage_repairable_abort
+    # can route into the bounded Scriptwriter regen. Pinning the producer half
+    # of the contract the existing consumer tests already pin.
+    assert abort["gate_reason"] == NARRATIVE_NOT_COVERED
     assert script_output["narrative_structure"][-1]["word_range"] == [20, 23]
     # G7 recorded as a hard_fail.
     g7 = [r for name, r in recorded if name == "G7_narrative_coverage"]

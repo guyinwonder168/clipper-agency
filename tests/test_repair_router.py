@@ -1,26 +1,32 @@
 """Tests for repair router (pure module)."""
 
-import pytest
-from clipper_agency.core.repair_router import (
-    route_repair,
-    build_repair_plan,
-    build_gate_failure_repair_plan,
-    GATE_FAILURE_REPAIR_MAP,
-)
 from clipper_agency.config.schema import RepairPlan
+from clipper_agency.core.repair_router import (
+    GATE_FAILURE_REPAIR_MAP,
+    build_gate_failure_repair_plan,
+    build_repair_plan,
+    route_repair,
+)
 
 
 class TestRepairRouting:
     """Repair routing table tests."""
 
     def test_routes_wrong_event_to_visual_director(self):
-        assert route_repair({"reason": "wrong_event", "action": "replace_visual"}) == "visual_director"
+        assert (
+            route_repair({"reason": "wrong_event", "action": "replace_visual"}) == "visual_director"
+        )
 
     def test_routes_wrong_event_redo_to_segment_producer(self):
-        assert route_repair({"reason": "wrong_event", "action": "redo_research"}) == "segment_producer"
+        assert (
+            route_repair({"reason": "wrong_event", "action": "redo_research"}) == "segment_producer"
+        )
 
     def test_routes_broken_source_to_visual_director(self):
-        assert route_repair({"reason": "broken_source", "action": "replace_visual"}) == "visual_director"
+        assert (
+            route_repair({"reason": "broken_source", "action": "replace_visual"})
+            == "visual_director"
+        )
 
     def test_routes_text_collision_to_visual_director(self):
         assert route_repair({"reason": "text_collision", "action": "fix_text"}) == "visual_director"
@@ -35,13 +41,22 @@ class TestRepairRouting:
         assert route_repair({"reason": "duration_mismatch", "action": "adjust"}) == "composer"
 
     def test_routes_package_mismatch_to_segment_producer(self):
-        assert route_repair({"reason": "package_mismatch", "action": "narrow_topic"}) == "segment_producer"
+        assert (
+            route_repair({"reason": "package_mismatch", "action": "narrow_topic"})
+            == "segment_producer"
+        )
 
     def test_routes_script_scope_to_segment_producer_and_scriptwriter(self):
-        assert route_repair({"reason": "script_scope_mismatch", "action": "rewrite"}) == "segment_producer_and_scriptwriter"
+        assert (
+            route_repair({"reason": "script_scope_mismatch", "action": "rewrite"})
+            == "segment_producer_and_scriptwriter"
+        )
 
     def test_routes_unsafe_claim_to_segment_producer_and_scriptwriter(self):
-        assert route_repair({"reason": "unsafe_factual_claim", "action": "fix_claim"}) == "segment_producer_and_scriptwriter"
+        assert (
+            route_repair({"reason": "unsafe_factual_claim", "action": "fix_claim"})
+            == "segment_producer_and_scriptwriter"
+        )
 
     def test_routes_unknown_to_visual_director_default(self):
         assert route_repair({"reason": "unknown_issue", "action": "something"}) == "visual_director"
@@ -54,7 +69,12 @@ class TestBuildRepairPlan:
         plan = build_repair_plan(
             decision="revise",
             patches=[
-                {"beat_id": "B04", "action": "replace_visual", "reason": "wrong_event", "rerun_from": "visual_director"},
+                {
+                    "beat_id": "B04",
+                    "action": "replace_visual",
+                    "reason": "wrong_event",
+                    "rerun_from": "visual_director",
+                },
             ],
         )
         assert isinstance(plan, RepairPlan)
@@ -132,9 +152,63 @@ class TestBuildGateFailureRepairPlan:
     def test_all_gate_failure_reasons_are_mapped(self):
         """Every key in GATE_FAILURE_REPAIR_MAP must produce a valid routing."""
         for reason in GATE_FAILURE_REPAIR_MAP:
-            routing = build_gate_failure_repair_plan(
-                {"status": "fail", "reason": reason})
+            routing = build_gate_failure_repair_plan({"status": "fail", "reason": reason})
             assert routing is not None, f"Reason {reason} returned None"
             assert "target_agent" in routing
             assert "patches" in routing
             assert len(routing["patches"]) >= 1
+
+
+class TestCoverageTokenRouting:
+    """FIX-5 (ADR 0030): the two stable coverage-failure tokens emitted by
+    G7 (_enforce_narrative_coverage -> "narrative_not_covered") and FIX-6
+    (_enforce_timeline_contract -> "timeline_not_covered") must route repair
+    to the ROOT agent (Scriptwriter) so the regen targets the actual defect,
+    not a downstream patch."""
+
+    def test_route_narrative_coverage_gap_targets_scriptwriter(self):
+        assert (
+            route_repair({"reason": "narrative_coverage_gap", "action": "regen_narrative"})
+            == "scriptwriter"
+        )
+
+    def test_route_timeline_coverage_gap_targets_scriptwriter(self):
+        assert (
+            route_repair({"reason": "timeline_coverage_gap", "action": "regen_narrative"})
+            == "scriptwriter"
+        )
+
+    def test_coverage_routing_no_regression_on_existing_reasons(self):
+        """Existing reasons keep their original targets."""
+        assert (
+            route_repair({"reason": "broken_source", "action": "replace_visual"})
+            == "visual_director"
+        )
+        assert (
+            route_repair({"reason": "wrong_event", "action": "redo_research"}) == "segment_producer"
+        )
+        assert route_repair({"reason": "black_frame", "action": "x"}) == "composer"
+
+    def test_build_gate_plan_for_narrative_not_covered(self):
+        routing = build_gate_failure_repair_plan(
+            {"status": "fail", "reason": "narrative_not_covered"}
+        )
+        assert routing is not None
+        assert routing["decision"] == "revise"
+        assert routing["target_agent"] == "scriptwriter"
+        patch = routing["patches"][0]
+        assert patch["action"] == "regen_narrative"
+        assert patch["reason"] == "narrative_coverage_gap"
+        assert patch["rerun_from"] == "scriptwriter"
+        assert patch["beat_id"] == "global"
+
+    def test_build_gate_plan_for_timeline_not_covered(self):
+        routing = build_gate_failure_repair_plan(
+            {"status": "fail", "reason": "timeline_not_covered"}
+        )
+        assert routing is not None
+        assert routing["target_agent"] == "scriptwriter"
+        patch = routing["patches"][0]
+        assert patch["action"] == "regen_narrative"
+        assert patch["reason"] == "timeline_coverage_gap"
+        assert patch["rerun_from"] == "scriptwriter"

@@ -1,12 +1,18 @@
 """Tests for database CRUD queries."""
 
-from clipper_agency.db.connection import get_connection, close_connection
-from clipper_agency.db.schema import initialize_schema
+from clipper_agency.db.connection import close_connection, get_connection
 from clipper_agency.db.queries import (
-    create_job, get_job, update_job_status,
-    create_agent_state, get_agent_state, update_agent_state,
-    list_jobs, append_audit_log, reset_agents_from,
+    append_audit_log,
+    create_agent_state,
+    create_job,
+    get_agent_state,
+    get_job,
+    list_jobs,
+    reset_agents_from,
+    update_agent_state,
+    update_job_status,
 )
+from clipper_agency.db.schema import initialize_schema
 
 
 def test_create_and_get_job(temp_db_path):
@@ -30,6 +36,31 @@ def test_update_job_status(temp_db_path):
     update_job_status(conn, job_id, "SAFETY_CHECKED")
     job = get_job(conn, job_id)
     assert job["status"] == "SAFETY_CHECKED"
+    close_connection()
+
+
+def test_completed_transition_clears_stale_error_message(temp_db_path):
+    """FIX-5 (Codex P2): a repaired job transitioning FAILED -> COMPLETED
+    must NOT retain the stale coverage-failure error_message.
+
+    _update_job_status_inner force-clears error_message=NULL on a COMPLETED
+    transition (COALESCE would otherwise preserve the old value for an empty
+    arg). Anti-job_18: a successfully-repaired COMPLETED job must not surface
+    narrative/timeline coverage-failure text in the DB, dashboard, or any
+    error_message consumer."""
+    conn = get_connection(temp_db_path)
+    initialize_schema(conn)
+    job_id = create_job(conn, topic="Test", niche="indonesian_artists")
+    # FAIL with a coverage message (mirrors G7/FIX-6 abort).
+    update_job_status(conn, job_id, "FAILED", "narrative_not_covered: gap")
+    job = get_job(conn, job_id)
+    assert job["status"] == "FAILED"
+    assert job["error_message"] == "narrative_not_covered: gap"
+    # Repair succeeds -> COMPLETED must clear the stale text.
+    update_job_status(conn, job_id, "COMPLETED")
+    job = get_job(conn, job_id)
+    assert job["status"] == "COMPLETED"
+    assert job["error_message"] is None
     close_connection()
 
 
@@ -125,8 +156,7 @@ def test_mark_agent_completed_sets_state_and_output(temp_db_path):
     job_id = create_job(conn, topic="Test", niche="test")
     create_agent_state(conn, job_id, "segment_producer")
 
-    mark_agent_completed(conn, job_id, "segment_producer",
-                         output_data='{"status":"completed"}')
+    mark_agent_completed(conn, job_id, "segment_producer", output_data='{"status":"completed"}')
 
     state = get_agent_state(conn, job_id, "segment_producer")
     assert state["state"] == "completed"
@@ -144,8 +174,9 @@ def test_mark_agent_failed_sets_state_and_error(temp_db_path):
     job_id = create_job(conn, topic="Test", niche="test")
     create_agent_state(conn, job_id, "composer")
 
-    mark_agent_failed(conn, job_id, "composer", "FFmpeg not found",
-                      output_data='{"status":"failed"}')
+    mark_agent_failed(
+        conn, job_id, "composer", "FFmpeg not found", output_data='{"status":"failed"}'
+    )
 
     state = get_agent_state(conn, job_id, "composer")
     assert state["state"] == "failed"
@@ -157,7 +188,8 @@ def test_mark_agent_failed_sets_state_and_error(temp_db_path):
 def test_agent_state_transitions_in_order(temp_db_path):
     """Agent should go pending → running → completed in sequence."""
     from clipper_agency.db.queries import (
-        mark_agent_running, mark_agent_completed,
+        mark_agent_completed,
+        mark_agent_running,
     )
 
     conn = get_connection(temp_db_path)
@@ -187,8 +219,11 @@ def test_append_audit_log_inserts_row(temp_db_path):
     initialize_schema(conn)
 
     append_audit_log(
-        conn, action="job_retry", actor="cli",
-        resource_type="job", resource_id=42,
+        conn,
+        action="job_retry",
+        actor="cli",
+        resource_type="job",
+        resource_id=42,
         details='{"from_agent": "composer"}',
     )
 
@@ -213,8 +248,15 @@ def test_reset_agents_from_resets_target_and_downstream(temp_db_path):
     job_id = create_job(conn, topic="Test", niche="test")
 
     # Create full pipeline agents
-    for name in ["safety", "segment_producer", "scriptwriter",
-                 "voice_producer", "visual_director", "composer", "reviewer"]:
+    for name in [
+        "safety",
+        "segment_producer",
+        "scriptwriter",
+        "voice_producer",
+        "visual_director",
+        "composer",
+        "reviewer",
+    ]:
         create_agent_state(conn, job_id, name)
 
     # Mark early agents completed, composer failed
@@ -252,6 +294,7 @@ def test_reset_agents_from_invalid_agent_raises(temp_db_path):
     job_id = create_job(conn, topic="Test", niche="test")
 
     import pytest
+
     with pytest.raises(ValueError, match="Unknown agent"):
         reset_agents_from(conn, job_id, "nonexistent_agent")
     close_connection()

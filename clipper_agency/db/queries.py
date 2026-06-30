@@ -61,14 +61,31 @@ def _update_job_status_inner(
     together — never leaving the job_18-residual job=FAILED + agent=completed
     state. Lock-free because it is only ever called inside a locked context
     (the public ``update_job_status`` or the G7 atomic block).
+
+    On a COMPLETED transition the prior failure error_message is CLEARED
+    unconditionally (set to NULL). A repaired-then-COMPLETED job must not
+    retain the stale narrative/timeline coverage-failure text in the DB,
+    dashboard, or any error_message consumer (Codex P2: COALESCE would
+    otherwise preserve the old value for an empty-string arg). FAILED and
+    other transitions keep the COALESCE(preserve) behavior so callers can
+    append without overwriting.
     """
-    conn.execute(
-        """UPDATE jobs
-           SET status = ?, updated_at = datetime('now'),
-               error_message = COALESCE(?, error_message)
-           WHERE id = ?""",
-        (status, error_message, job_id),
-    )
+    if status == "COMPLETED":
+        conn.execute(
+            """UPDATE jobs
+               SET status = ?, updated_at = datetime('now'),
+                   error_message = NULL
+               WHERE id = ?""",
+            (status, job_id),
+        )
+    else:
+        conn.execute(
+            """UPDATE jobs
+               SET status = ?, updated_at = datetime('now'),
+                   error_message = COALESCE(?, error_message)
+               WHERE id = ?""",
+            (status, error_message, job_id),
+        )
 
 
 def update_job_status(
