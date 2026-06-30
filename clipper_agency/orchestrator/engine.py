@@ -2042,63 +2042,54 @@ class Orchestrator:
             }
         return conn, relax_set
 
-    def run_pipeline(
-        self,
-        topic: str,
-        niche: str = "indonesian_artists",
-        output_dir: str = "outputs",
-        relax_gates: str = "",
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        """Execute the full topic-to-output pipeline.
+    def _load_niche_context(
+        self, niche: str
+    ) -> dict[str, Any] | tuple[Any, list[str], str, str, str, str]:
+        """Load niche configuration and derive the context fields.
 
-        Gate sequence: G1→G2→Safety→G3→Researcher→G4→G5→G6→
-                       Scriptwriter→G7→Voice→G8→Visual→G9→
-                       Composer→G10→Reviewer→Package
+        Returns a failed-status dict when the niche config is missing, or the
+        ``(niche_config, safety_rules, channel_description, language_name,
+        tone_name, angle_name)`` tuple on success. Encapsulates the
+        ``try/except FileNotFoundError`` so :meth:`run_pipeline` stays below
+        the SonarCloud S3776 cognitive-complexity threshold.
         """
-        prepared = self._prepare_pipeline_run(relax_gates)
-        if isinstance(prepared, dict):
-            return prepared
-        conn, self._relax_gates = prepared
-        settings = load_settings()
-        assets_cache = str(kwargs.get("assets_cache") or settings.assets_cache)
-        logger.info("Pipeline START: niche='%s'", niche)
-
-        # Load niche configuration — single source of truth
         try:
             niche_config = load_niche(niche)
         except FileNotFoundError:
             logger.error("Niche config not found: %r — aborting pipeline", niche)
             return {"status": "failed", "reason": f"Niche config {niche!r} not found"}
-        safety_rules = niche_config.safety_rules
-        channel_description = build_channel_description(niche_config)
-        language_name = get_language_name(niche_config)
-        tone_name = get_tone_name(niche_config)
-        angle_name = get_angle_name(niche_config)
-
-        # Build config snapshot for retry/resume determinism
-        config_snapshot = {
-            "topic": topic,
-            "niche": niche,
-            "output_dir": output_dir,
-            "assets_cache": assets_cache,
-            "niche_ctx": {
-                "safety_rules": safety_rules,
-                "channel_description": channel_description,
-                "language": language_name,
-                "tone": tone_name,
-                "content_angle": angle_name,
-            },
-        }
-
-        # Stage 1: Preflight + Safety
-        stage1 = self._stage_safety(
-            conn, topic, niche, assets_cache, output_dir, config_snapshot=config_snapshot
+        return (
+            niche_config,
+            niche_config.safety_rules,
+            build_channel_description(niche_config),
+            get_language_name(niche_config),
+            get_tone_name(niche_config),
+            get_angle_name(niche_config),
         )
-        if isinstance(stage1, dict):
-            return stage1
-        job_id, cost_result = stage1
 
+    def _run_pipeline_stages(
+        self,
+        conn: Any,
+        job_id: int,
+        cost_result: Any,
+        topic: str,
+        niche: str,
+        safety_rules: Any,
+        channel_description: str,
+        language_name: str,
+        tone_name: str,
+        angle_name: str,
+        assets_cache: str,
+        output_dir: str,
+    ) -> dict[str, Any]:
+        """Execute Stages 2-5 (Research → Content → Composition → Review).
+
+        Encapsulates the ``try/except Exception`` stage body so
+        :meth:`run_pipeline` stays a linear orchestrator below the
+        SonarCloud S3776 cognitive-complexity threshold. Each coverage-repairable
+        abort is routed through :meth:`_maybe_route_coverage_abort` (FIX-5 /
+        ADR 0030) before terminal-failing.
+        """
         try:
             # Stage 2: Research (G3→G5)
             research_output = self._stage_research(
@@ -2232,6 +2223,73 @@ class Orchestrator:
             update_job_status(conn, job_id, "FAILED", str(e))
             remove_job_file_handler()
             return {"status": "failed", "error": str(e), "job_id": job_id}
+
+    def run_pipeline(
+        self,
+        topic: str,
+        niche: str = "indonesian_artists",
+        output_dir: str = "outputs",
+        relax_gates: str = "",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Execute the full topic-to-output pipeline.
+
+        Gate sequence: G1→G2→Safety→G3→Researcher→G4→G5→G6→
+                       Scriptwriter→G7→Voice→G8→Visual→G9→
+                       Composer→G10→Reviewer→Package
+        """
+        prepared = self._prepare_pipeline_run(relax_gates)
+        if isinstance(prepared, dict):
+            return prepared
+        conn, self._relax_gates = prepared
+        assets_cache = str(kwargs.get("assets_cache") or load_settings().assets_cache)
+        logger.info("Pipeline START: niche='%s'", niche)
+
+        niche_ctx = self._load_niche_context(niche)
+        if isinstance(niche_ctx, dict):
+            return niche_ctx
+        _niche_config, safety_rules, channel_description, language_name, tone_name, angle_name = (
+            niche_ctx
+        )
+
+        # Build config snapshot for retry/resume determinism
+        config_snapshot = {
+            "topic": topic,
+            "niche": niche,
+            "output_dir": output_dir,
+            "assets_cache": assets_cache,
+            "niche_ctx": {
+                "safety_rules": safety_rules,
+                "channel_description": channel_description,
+                "language": language_name,
+                "tone": tone_name,
+                "content_angle": angle_name,
+            },
+        }
+
+        # Stage 1: Preflight + Safety
+        stage1 = self._stage_safety(
+            conn, topic, niche, assets_cache, output_dir, config_snapshot=config_snapshot
+        )
+        if isinstance(stage1, dict):
+            return stage1
+        job_id, cost_result = stage1
+
+        # Stages 2-5: Research → Content → Composition → Review + Package
+        return self._run_pipeline_stages(
+            conn,
+            job_id,
+            cost_result,
+            topic,
+            niche,
+            safety_rules,
+            channel_description,
+            language_name,
+            tone_name,
+            angle_name,
+            assets_cache,
+            output_dir,
+        )
 
     def _load_agent_output(self, assets_cache: str, job_id: int, agent_name: str) -> dict[str, Any]:
         """Load a completed agent's output.json from the artifact workspace."""
