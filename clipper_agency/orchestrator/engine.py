@@ -837,6 +837,7 @@ class Orchestrator:
         result: GateResult,
         failed_at: str = "",
         commit: bool = True,
+        relaxable: bool = True,
     ) -> dict[str, Any] | None:
         """Return a failure response dict if gate hard-failed, or None.
 
@@ -847,7 +848,7 @@ class Orchestrator:
         both together (PR #86).
         """
         if not result.passed and result.severity == "hard_fail":
-            if self._gate_relaxed(gate_name):
+            if relaxable and self._gate_relaxed(gate_name):
                 logger.warning(
                     _GATE_RELAX_WARN_MSG,
                     gate_name,
@@ -983,11 +984,12 @@ class Orchestrator:
         half-committed job=FAILED + scriptwriter=completed — Codex P2 lesson
         from G7).
 
-        Deviation from ``_enforce_narrative_coverage``: this helper does NOT
-        call ``_gate_relaxed`` — there is no ``DEV_RELAX_GATES`` bypass for
-        FIX-6. A physically-impossible beat is never safe to ship; operators
-        who need to force-ship relax G7 upstream (the contract gate), which
-        prevents the bad ``word_range`` from reaching the timeline (RISK-5).
+        Deviation from ``_enforce_narrative_coverage``: this helper passes
+        ``relaxable=False`` to ``_enforce_gate`` so its relax branch is skipped
+        — there is no ``DEV_RELAX_GATES`` bypass for FIX-6. A
+        physically-impossible beat is never safe to ship; operators who need to
+        force-ship relax G7 upstream (the contract gate), which prevents the bad
+        ``word_range`` from reaching the timeline (RISK-5).
 
         Recovery TODAY = terminal hard-fail. FIX-5 (ships later) will consume
         the stable ``"timeline_not_covered"`` reason token to automate
@@ -1021,6 +1023,7 @@ class Orchestrator:
                     gate_result,
                     failed_at="timeline_contract",
                     commit=False,
+                    relaxable=False,
                 )
                 if abort is not None:
                     try:

@@ -168,6 +168,35 @@ class TestEnforceTimelineContract:
         finally:
             close_connection(orch.db_path)
 
+    def test_fix6_not_relaxable_even_when_gate_in_relax_set(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """FIX-6 is non-relaxable (RISK-5): even if FIX6_TIMELINE_CONTRACT is in
+        the DEV relax-set, a mega-beat STILL aborts — it must NOT return
+        ([], None), which every caller would treat as success with an empty
+        timeline (letting reviewer/packaging proceed on an invalid timeline).
+        Codex P2 r3497506157."""
+        orch = _make_orchestrator(tmp_path)
+        conn = get_connection(orch.db_path)
+        try:
+            job_id = _seed_job(conn, str(tmp_path))
+            # Put FIX6 in the relax-set — the helper must still enforce.
+            orch._relax_gates = frozenset({"FIX6_TIMELINE_CONTRACT"})
+            narrative, ts = _mega_beat_narrative_and_ts()
+
+            timeline, abort = orch._enforce_timeline_contract(
+                conn, job_id, str(tmp_path), narrative, ts
+            )
+            # Non-relaxable: the abort is returned even with the gate relaxed.
+            assert timeline == []
+            assert abort is not None
+            assert abort["status"] == "failed"
+            assert abort["failed_at"] == "timeline_contract"
+            # Enforcement was NOT skipped — the job is FAILED.
+            assert get_job(conn, job_id)["status"] == "FAILED"
+        finally:
+            close_connection(orch.db_path)
+
 
 # ── Blast-radius: every engine call site is gated ──
 
