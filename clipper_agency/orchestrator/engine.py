@@ -801,57 +801,16 @@ class Orchestrator:
                 if not ok:
                     return research_output
 
-        # Rerun Scriptwriter
-        script_output = self._run_content_scriptwriter(
-            ctx.conn,
-            ctx.job_id,
-            ctx.topic,
-            ctx.niche_ctx.get("safety_rules", []),
-            ctx.niche_ctx.get("channel_description", ""),
-            ctx.niche_ctx.get("language", "id"),
-            ctx.niche_ctx.get("tone", "informative"),
-            ctx.niche_ctx.get("content_angle", ""),
-            research_output,
-            ctx.assets_cache,
-            # FIX-5: thread the coverage-regen sentinel so Scriptwriter gets
-            # the "cover ALL words" hint on a coverage-regen attempt.
-            repair_hint=ctx.repair_hint,
-        )
-        if script_output.get("status") == "failed":
-            return self._fail_agent(
-                ctx.conn, ctx.job_id, "scriptwriter", script_output, _SCRIPT_BUDGET_FAILED
-            )
-
-        # G7 (ADR 0030 / FIX-1): enforce coverage on the repair-rerun path too.
-        if abort := self._enforce_narrative_coverage(
-            ctx.conn, ctx.job_id, script_output, ctx.assets_cache
-        ):
+        # Rerun Scriptwriter + G7 coverage enforce (FIX-5 threads the
+        # coverage-regen sentinel through _run_content_scriptwriter).
+        script_output, abort = self._rerun_scriptwriter(ctx, research_output)
+        if abort:
             return abort
 
-        # FIX-5 (claude-auto-tok pattern): vo-diff skip. Audio is the master
-        # (ADR 0020); if a coverage-regen leaves voiceover_text byte-identical
-        # to the previously persisted voiceover, reuse the cached audio +
-        # timestamps instead of burning a Voice Producer TTS call. Cache
-        # integrity guard: only skip when the cached voice has a valid
-        # voiceover_path (else fall through to regen).
-        voice_output = self._maybe_reuse_cached_voiceover(ctx, script_output)
-        if voice_output is None:
-            mark_agent_running(ctx.conn, ctx.job_id, "voice_producer")
-            voice_output = self._run_voice_producer(
-                job_id=ctx.job_id,
-                script=script_output.get("script", []),
-                voiceover_text=script_output.get("voiceover_text", ""),
-                output_dir=ctx.output_dir,
-                assets_cache=ctx.assets_cache,
-            )
-            # _run_voice_producer already stamped + re-persisted voiceover_text
-            # onto the output (the contract has no such field) so a later
-            # regen's VO-diff skip has real data to compare against.
-        if voice_output.get("status") == "failed":
-            return self._fail_agent(
-                ctx.conn, ctx.job_id, "voice_producer", voice_output, _VOICE_GEN_FAILED
-            )
-        self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "voice_producer")
+        # VO-diff skip (claude-auto-tok pattern) + Voice Producer rerun.
+        voice_output, abort = self._rerun_voice_producer(ctx, script_output)
+        if abort:
+            return abort
 
         # Rebuild canonical timeline from fresh outputs (ADR 0020).
         # FIX-6: enforce the physical-timeline contract (backstop for G7).
@@ -897,6 +856,91 @@ class Orchestrator:
             return abort
 
         return (research_output, script_output, voice_output, compose_output, beat_timeline)
+
+    def _rerun_scriptwriter(
+        self,
+        ctx: RepairCycleContext,
+        research_output: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Rerun Scriptwriter and enforce G7 coverage on the repair path.
+
+        Returns ``(script_output, abort)`` where ``abort`` is ``None`` on
+        success, or a failure dict (failed Scriptwriter or G7 gate) the caller
+        returns immediately. Mirrors the
+        :meth:`_enforce_timeline_contract` / :meth:`_retry_composer_stage`
+        convention. Extracted from :meth:`_rerun_upstream_cascade` to drop its
+        cognitive complexity below 15 (SonarCloud S3776).
+        """
+        # Rerun Scriptwriter
+        script_output = self._run_content_scriptwriter(
+            ctx.conn,
+            ctx.job_id,
+            ctx.topic,
+            ctx.niche_ctx.get("safety_rules", []),
+            ctx.niche_ctx.get("channel_description", ""),
+            ctx.niche_ctx.get("language", "id"),
+            ctx.niche_ctx.get("tone", "informative"),
+            ctx.niche_ctx.get("content_angle", ""),
+            research_output,
+            ctx.assets_cache,
+            # FIX-5: thread the coverage-regen sentinel so Scriptwriter gets
+            # the "cover ALL words" hint on a coverage-regen attempt.
+            repair_hint=ctx.repair_hint,
+        )
+        if script_output.get("status") == "failed":
+            return (
+                {},
+                self._fail_agent(
+                    ctx.conn, ctx.job_id, "scriptwriter", script_output, _SCRIPT_BUDGET_FAILED
+                ),
+            )
+
+        # G7 (ADR 0030 / FIX-1): enforce coverage on the repair-rerun path too.
+        if abort := self._enforce_narrative_coverage(
+            ctx.conn, ctx.job_id, script_output, ctx.assets_cache
+        ):
+            return ({}, abort)
+        return (script_output, None)
+
+    def _rerun_voice_producer(
+        self,
+        ctx: RepairCycleContext,
+        script_output: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Rerun Voice Producer with the claude-auto-tok vo-diff skip.
+
+        Audio is the master (ADR 0020); if a coverage-regen leaves
+        voiceover_text byte-identical to the previously persisted voiceover,
+        reuse the cached audio + timestamps instead of burning a TTS call.
+        Returns ``(voice_output, abort)`` where ``abort`` is ``None`` on
+        success or a failure dict on a failed Voice Producer. Extracted from
+        :meth:`_rerun_upstream_cascade` to drop its cognitive complexity
+        below 15 (SonarCloud S3776).
+        """
+        # Cache integrity guard: only skip when the cached voice has a valid
+        # voiceover_path (else fall through to regen).
+        voice_output = self._maybe_reuse_cached_voiceover(ctx, script_output)
+        if voice_output is None:
+            mark_agent_running(ctx.conn, ctx.job_id, "voice_producer")
+            voice_output = self._run_voice_producer(
+                job_id=ctx.job_id,
+                script=script_output.get("script", []),
+                voiceover_text=script_output.get("voiceover_text", ""),
+                output_dir=ctx.output_dir,
+                assets_cache=ctx.assets_cache,
+            )
+            # _run_voice_producer already stamped + re-persisted voiceover_text
+            # onto the output (the contract has no such field) so a later
+            # regen's VO-diff skip has real data to compare against.
+        if voice_output.get("status") == "failed":
+            return (
+                {},
+                self._fail_agent(
+                    ctx.conn, ctx.job_id, "voice_producer", voice_output, _VOICE_GEN_FAILED
+                ),
+            )
+        self._complete_agent(ctx.conn, ctx.assets_cache, ctx.job_id, "voice_producer")
+        return (voice_output, None)
 
     def _run_cached_upstream_repair(
         self,
@@ -1637,6 +1681,31 @@ class Orchestrator:
             return False
         return abort.get("gate_reason") in (NARRATIVE_NOT_COVERED, TIMELINE_NOT_COVERED)
 
+    def _maybe_route_coverage_abort(
+        self,
+        abort: dict[str, Any] | None,
+        conn: Any,
+        job_id: int,
+        topic: str,
+        niche: str,
+        assets_cache: str,
+        output_dir: str,
+    ) -> dict[str, Any] | None:
+        """Route a coverage-repairable abort into the bounded regen loop.
+
+        Returns the repair result dict when ``abort`` is coverage-repairable
+        (FIX-5 / ADR 0030), or ``None`` when it is not (caller returns the
+        abort as a terminal fail). Encapsulates the repeated
+        ``_is_coverage_repairable_abort`` → ``_route_coverage_abort_to_repair``
+        decision so :meth:`run_pipeline` stays a linear orchestrator below
+        the SonarCloud S3776 cognitive-complexity threshold.
+        """
+        if not abort or not self._is_coverage_repairable_abort(abort):
+            return None
+        return self._route_coverage_abort_to_repair(
+            abort, conn, job_id, topic, niche, assets_cache, output_dir
+        )
+
     def _route_coverage_abort_to_repair(
         self,
         abort: dict[str, Any],
@@ -1703,12 +1772,10 @@ class Orchestrator:
         # regen ATTEMPT; this logs the OUTCOME so operators scanning logs see
         # the single most load-bearing failure (job_18's class recurs after
         # regen). Mirrors _execute_repair_cycle's 'EXHAUSTED' log (L983).
-        logger.error(
-            "Coverage regen FAILED terminally for job %d: token=%s status=%s",
-            job_id,
-            token,
-            repair_result.get("status"),
-        )
+        # S5145: log job_id ONLY — token/status/reason trace to gate/user
+        # data and are persisted via update_job_status below, so operators
+        # already see them in the DB/dashboard. The log just flags WHICH job.
+        logger.error("Coverage regen FAILED terminally for job %d", job_id)
         update_job_status(conn, job_id, "FAILED", repair_result.get("reason", _REPAIR_EXHAUSTED))
         # FIX-5 (Codex P2 @line 1702): reset the repair lifecycle state. The
         # regen entry set repair_status='running'; without this reset the
@@ -2067,10 +2134,11 @@ class Orchestrator:
                 # FIX-5 (ADR 0030, Codex P1): a G7 narrative_not_covered abort
                 # is repairable — route it into the bounded Scriptwriter regen
                 # loop instead of terminal-hard-failing on first contact.
-                if self._is_coverage_repairable_abort(stage3):
-                    return self._route_coverage_abort_to_repair(
-                        stage3, conn, job_id, topic, niche, assets_cache, output_dir
-                    )
+                repair = self._maybe_route_coverage_abort(
+                    stage3, conn, job_id, topic, niche, assets_cache, output_dir
+                )
+                if repair is not None:
+                    return repair
                 return stage3
             script_output, voice_output = stage3
 
@@ -2088,10 +2156,11 @@ class Orchestrator:
             if isinstance(compose_output, dict) and compose_output.get("status") == "failed":
                 # FIX-5 (ADR 0030, Codex P1): a FIX-6 timeline_not_covered
                 # abort is repairable — route into the bounded regen loop.
-                if self._is_coverage_repairable_abort(compose_output):
-                    return self._route_coverage_abort_to_repair(
-                        compose_output, conn, job_id, topic, niche, assets_cache, output_dir
-                    )
+                repair = self._maybe_route_coverage_abort(
+                    compose_output, conn, job_id, topic, niche, assets_cache, output_dir
+                )
+                if repair is not None:
+                    return repair
                 return compose_output
 
             # Stage 5: Review + Package
@@ -2119,10 +2188,11 @@ class Orchestrator:
                 # still terminally FAILs on regen-exhaustion (anti-job_18
                 # invariant holds); this only ensures the automatic regen
                 # attempt fires consistently on both coverage-abort sites.
-                if self._is_coverage_repairable_abort(abort):
-                    return self._route_coverage_abort_to_repair(
-                        abort, conn, job_id, topic, niche, assets_cache, output_dir
-                    )
+                repair = self._maybe_route_coverage_abort(
+                    abort, conn, job_id, topic, niche, assets_cache, output_dir
+                )
+                if repair is not None:
+                    return repair
                 return abort
 
             # Handle repair routing from reviewer
