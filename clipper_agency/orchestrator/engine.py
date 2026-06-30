@@ -46,9 +46,11 @@ from clipper_agency.core.repair_metrics import (
 )
 from clipper_agency.core.repair_router import route_repair
 from clipper_agency.core.validation import validate_agent_cache
-from clipper_agency.db.connection import get_connection
+from clipper_agency.db.connection import db_write_lock, get_connection
 from clipper_agency.db.queries import (
     PIPELINE_ORDER,
+    _update_agent_state_inner,
+    _update_job_status_inner,
     append_audit_log,
     create_agent_state,
     create_job,
@@ -816,9 +818,22 @@ class Orchestrator:
         }
 
     def _enforce_gate(
-        self, conn, job_id: int, gate_name: str, result: GateResult, failed_at: str = ""
+        self,
+        conn: Any,
+        job_id: int,
+        gate_name: str,
+        result: GateResult,
+        failed_at: str = "",
+        commit: bool = True,
     ) -> dict[str, Any] | None:
-        """Return a failure response dict if gate hard-failed, or None."""
+        """Return a failure response dict if gate hard-failed, or None.
+
+        ``commit`` (default True) writes + commits job=FAILED as a single
+        unit — the behavior every G1-G10 caller relies on. ``commit=False``
+        runs the no-commit inner UPDATE and leaves the transaction open so
+        the caller can batch a second write (the G7 atomic path) and commit
+        both together (PR #86).
+        """
         if not result.passed and result.severity == "hard_fail":
             if self._gate_relaxed(gate_name):
                 logger.warning(
@@ -828,7 +843,10 @@ class Orchestrator:
                 )
                 return None
             logger.error("%s FAILED (hard): %s", gate_name, result.message)
-            update_job_status(conn, job_id, "FAILED", result.message)
+            if commit:
+                update_job_status(conn, job_id, "FAILED", result.message)
+            else:
+                _update_job_status_inner(conn, job_id, "FAILED", result.message)
             return {
                 "status": "failed",
                 "failed_at": failed_at,
@@ -869,9 +887,48 @@ class Orchestrator:
             )
         g7_result = GateNarrativeCoverage().evaluate(coverage=coverage)
         self._record_gate(assets_cache, job_id, "G7_narrative_coverage", g7_result)
-        return self._enforce_gate(
-            conn, job_id, "G7_narrative_coverage", g7_result, failed_at="narrative_coverage"
-        )
+        abort = None
+        # Hold the process-wide write lock across BOTH writes + the single
+        # commit. The singleton connection is shared across Flask threads via
+        # check_same_thread=False, so under a threaded WSGI deploy a concurrent
+        # request's public-helper conn.commit() could otherwise commit this
+        # half-open transaction between the jobs and agent writes — then an
+        # agent-write raise would leave job=FAILED + scriptwriter=completed
+        # (the job_18-residual state) with a rollback that has nothing to undo
+        # (Codex P2 r3496171628). The jobs UPDATE runs (commit=False) inside
+        # the lock; the agent write + commit run inside the same lock.
+        with db_write_lock():
+            abort = self._enforce_gate(
+                conn,
+                job_id,
+                "G7_narrative_coverage",
+                g7_result,
+                failed_at="narrative_coverage",
+                commit=False,
+            )
+            if abort is not None:
+                # One transaction, one commit, so a transient DB error (e.g.
+                # sqlite "database is locked") can never leave job=FAILED +
+                # scriptwriter=completed (Codex P2 r3494109780).
+                # _enforce_gate(commit=False) already ran the jobs UPDATE as
+                # the first DML (auto-opening the txn under legacy
+                # isolation_level), so conn.in_transaction is True here and the
+                # BEGIN guard is belt-and-suspenders for any future reordering.
+                try:
+                    if not conn.in_transaction:
+                        conn.execute("BEGIN")
+                    _update_agent_state_inner(
+                        conn,
+                        job_id,
+                        "scriptwriter",
+                        "failed",
+                        error_message=g7_result.message,
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+        return abort
 
     def _persist_repaired_narrative(
         self, assets_cache: str, job_id: int, script_output: dict[str, Any]

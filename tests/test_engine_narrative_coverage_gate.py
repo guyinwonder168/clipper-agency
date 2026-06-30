@@ -6,9 +6,20 @@ a hard-failing structure aborts the pipeline. Fully offline: no LLM, no real
 agents, no network.
 """
 
+import sqlite3
 from unittest.mock import MagicMock
 
+import pytest
+
 from clipper_agency.agents.scriptwriter import _word_count as _scriptwriter_word_count
+from clipper_agency.db.connection import close_connection, get_connection
+from clipper_agency.db.queries import (
+    create_agent_state,
+    create_job,
+    get_agent_state,
+    get_job,
+    mark_agent_completed,
+)
 from clipper_agency.orchestrator.engine import Orchestrator, _word_count_for_coverage
 
 
@@ -209,6 +220,12 @@ def test_enforce_narrative_coverage_helper_hard_fails_job18(tmp_path, monkeypatc
     monkeypatch.setattr(
         orch, "_record_gate", lambda ac, jid, name, res: recorded.append((name, res))
     )
+    failed_agents: list[tuple] = []
+    monkeypatch.setattr(
+        "clipper_agency.orchestrator.engine._update_agent_state_inner",
+        lambda *a, **k: failed_agents.append(a),
+        raising=False,
+    )
 
     script_output = {
         "voiceover_text": "word " * 76,  # 76 words
@@ -235,6 +252,10 @@ def test_enforce_narrative_coverage_helper_hard_fails_job18(tmp_path, monkeypatc
     # G7 recorded as a hard_fail.
     g7 = [r for name, r in recorded if name == "G7_narrative_coverage"]
     assert len(g7) == 1 and not g7[0].passed and g7[0].severity == "hard_fail"
+    # G7 hard-fail marks the Scriptwriter agent failed so job-resume can
+    # target/regenerate it (Codex P2 r3494109780).
+    assert len(failed_agents) == 1
+    assert failed_agents[0][2] == "scriptwriter"  # mark_agent_failed(conn, job_id, agent_name, ...)
 
 
 def test_enforce_narrative_coverage_helper_repairs_and_passes(tmp_path, monkeypatch):
@@ -305,3 +326,135 @@ def test_enforce_narrative_coverage_persists_repaired_to_disk(tmp_path, monkeypa
 
     out = json.loads(Path(agent_output_file(assets_cache, 1, "scriptwriter")).read_text())
     assert out["narrative_structure"][-1]["word_range"] == [50, 99]
+
+
+# ── Option A: atomic transaction on G7 hard-fail (PR #86) ──
+
+
+def _seeded_real_db(tmp_path):
+    """A real file-based DB + Orchestrator with a job whose scriptwriter agent
+    is already ``completed`` — the job_18-residual state the atomic fix must
+    either commit alongside job=FAILED or roll back together, never leave
+    hanging."""
+    db_path = str(tmp_path / "g7_atomic.db")
+    orch = Orchestrator(db_path=db_path)
+    conn = get_connection(db_path)
+    job_id = create_job(conn, "topic", "niche")
+    create_agent_state(conn, job_id, "scriptwriter")
+    mark_agent_completed(conn, job_id, "scriptwriter")
+    return orch, conn, job_id
+
+
+def _job18_uncovered_script_output() -> dict:
+    """A narrative_structure whose word_range union covers only 0-23 of 76
+    words — the job_18 fixture that hard-fails G7."""
+    return {
+        "voiceover_text": "word " * 76,  # 76 words
+        "narrative_structure": [{"beat_id": 1, "word_range": [0, 23]}],
+    }
+
+
+def test_enforce_narrative_coverage_hard_fail_commits_both_writes(tmp_path, monkeypatch):
+    """Happy path of the atomic fix: on a G7 hard-fail BOTH the job=FAILED and
+    scriptwriter=failed writes commit together in one transaction."""
+    orch, conn, job_id = _seeded_real_db(tmp_path)
+    monkeypatch.setattr(orch, "_record_gate", lambda *a, **k: None)
+
+    abort = orch._enforce_narrative_coverage(
+        conn, job_id=job_id, script_output=_job18_uncovered_script_output(), assets_cache=""
+    )
+
+    assert abort is not None
+    assert abort["failed_at"] == "narrative_coverage"
+    # Both writes committed atomically.
+    assert get_job(conn, job_id)["status"] == "FAILED"
+    assert get_agent_state(conn, job_id, "scriptwriter")["state"] == "failed"
+    close_connection()
+
+
+def test_enforce_narrative_coverage_atomic_rollback_on_agent_write_failure(tmp_path, monkeypatch):
+    """If the agent_states write raises after the jobs write ran (e.g. sqlite
+    ``database is locked`` under concurrent dashboard retry/resume), the whole
+    transaction rolls back — the jobs write is NOT left committed alone. This
+    is the exact job_18-residual state (job=FAILED + scriptwriter=completed)
+    the atomic fix exists to prevent (Codex P2 r3494109780 follow-up)."""
+    orch, conn, job_id = _seeded_real_db(tmp_path)
+    monkeypatch.setattr(orch, "_record_gate", lambda *a, **k: None)
+
+    # Force the no-commit agent_states write to raise AFTER _enforce_gate
+    # (commit=False) already ran the jobs UPDATE.
+    def _raise_on_agent_write(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(
+        "clipper_agency.orchestrator.engine._update_agent_state_inner",
+        _raise_on_agent_write,
+        raising=False,
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        orch._enforce_narrative_coverage(
+            conn,
+            job_id=job_id,
+            script_output=_job18_uncovered_script_output(),
+            assets_cache="",
+        )
+
+    # Atomicity invariant: jobs write rolled back (NOT left FAILED), and the
+    # scriptwriter agent_state is unchanged from its seeded 'completed'.
+    assert get_job(conn, job_id)["status"] != "FAILED"
+    assert get_agent_state(conn, job_id, "scriptwriter")["state"] == "completed"
+    close_connection()
+
+
+def test_enforce_narrative_coverage_g7_hard_fail_holds_write_lock(tmp_path, monkeypatch):
+    """The G7 atomic block holds the process-wide write lock across BOTH the
+    jobs write AND the agent write + commit, so a concurrent Flask thread
+    cannot interleave a public-helper commit into the half-open transaction
+    (Codex P2 r3496171628).
+
+    Asserts the load-bearing invariant directly: each of the two no-commit
+    ``_inner`` writes must observe the lock as HELD at the moment it runs.
+    A regression that moves the ``with`` block to wrap only one write would
+    fail here (the other write would see the lock released)."""
+    import clipper_agency.orchestrator.engine as engine_mod
+
+    orch, conn, job_id = _seeded_real_db(tmp_path)
+    monkeypatch.setattr(orch, "_record_gate", lambda *a, **k: None)
+
+    held = {"now": False}
+
+    class _Recorder:
+        def __enter__(self):
+            held["now"] = True
+            return self
+
+        def __exit__(self, *exc):
+            held["now"] = False
+
+    monkeypatch.setattr(engine_mod, "db_write_lock", lambda: _Recorder())
+
+    write_observed: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        engine_mod,
+        "_update_job_status_inner",
+        lambda *a, **k: write_observed.append(("job", held["now"])),
+    )
+    monkeypatch.setattr(
+        engine_mod,
+        "_update_agent_state_inner",
+        lambda *a, **k: write_observed.append(("agent", held["now"])),
+    )
+
+    abort = orch._enforce_narrative_coverage(
+        conn,
+        job_id=job_id,
+        script_output=_job18_uncovered_script_output(),
+        assets_cache="",
+    )
+
+    assert abort is not None
+    assert abort["failed_at"] == "narrative_coverage"
+    # BOTH writes fired while the lock was held.
+    assert write_observed == [("job", True), ("agent", True)]
+    close_connection()

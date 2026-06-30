@@ -1,5 +1,7 @@
 """Database schema definition and initialization."""
 
+from clipper_agency.db.connection import db_write_lock
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS niches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -165,9 +167,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
 
 def initialize_schema(conn) -> None:
     """Create all database tables if they don't exist."""
-    conn.executescript(SCHEMA_SQL)
-    conn.commit()
-    ensure_status_columns(conn)
+    with db_write_lock():
+        conn.executescript(SCHEMA_SQL)
+        conn.commit()
+        ensure_status_columns(conn)
 
 
 def ensure_status_columns(conn) -> None:
@@ -175,18 +178,19 @@ def ensure_status_columns(conn) -> None:
 
     Idempotent — safe to call multiple times.
     """
-    _STATUS_COLUMNS = [
+    _status_columns = [
         ("quality_status", "TEXT NOT NULL DEFAULT 'not_reviewed'"),
         ("publication_status", "TEXT NOT NULL DEFAULT 'blocked'"),
         ("repair_status", "TEXT NOT NULL DEFAULT 'none'"),
         ("artifact_status", "TEXT NOT NULL DEFAULT 'candidate'"),
     ]
-    for col_name, col_def in _STATUS_COLUMNS:
-        try:
-            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_def}")
-        except Exception:
-            pass  # Column already exists — safe to ignore
-    conn.commit()
+    with db_write_lock():
+        for col_name, col_def in _status_columns:
+            try:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_def}")
+            except Exception:
+                pass  # Column already exists — safe to ignore
+        conn.commit()
 
 
 def table_exists(conn, table_name: str) -> bool:

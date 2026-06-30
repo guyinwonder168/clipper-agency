@@ -1,6 +1,6 @@
 """Tests for database schema initialization."""
 
-from clipper_agency.db.connection import get_connection, close_connection
+from clipper_agency.db.connection import close_connection, get_connection
 from clipper_agency.db.schema import initialize_schema, table_exists
 
 
@@ -38,3 +38,36 @@ def test_jobs_table_columns(temp_db_path):
     assert "status" in columns
     assert "niche" in columns
     close_connection()
+
+
+def test_initialize_schema_holds_write_lock(monkeypatch):
+    """initialize_schema is re-run on every dashboard Orchestrator construction
+    (app.py create/retry/resume routes), and Python sqlite3 executescript does
+    an IMPLICIT COMMIT of any pending transaction before running. It MUST hold
+    db_write_lock around its executescript+commit so that implicit commit can't
+    land inside another thread's open G7 transaction (Codex P2 r3496541901)."""
+    from unittest.mock import MagicMock
+
+    import clipper_agency.db.schema as schema_mod
+
+    held = {"now": False}
+
+    class _Recorder:
+        def __enter__(self):
+            held["now"] = True
+            return self
+
+        def __exit__(self, *exc):
+            held["now"] = False
+
+    monkeypatch.setattr(schema_mod, "db_write_lock", lambda: _Recorder())
+
+    observed: list[tuple[str, bool]] = []
+    conn = MagicMock()
+    conn.executescript = lambda *a, **k: observed.append(("executescript", held["now"]))
+    conn.execute = lambda *a, **k: observed.append(("alter", held["now"]))
+
+    schema_mod.initialize_schema(conn)
+
+    # The DDL executescript ran while the write lock was held.
+    assert ("executescript", True) in observed
