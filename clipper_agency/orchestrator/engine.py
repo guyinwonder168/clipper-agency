@@ -1901,6 +1901,21 @@ class Orchestrator:
                 "repair_status": "promotion_failed",
             }
         update_job_status(conn, job_id, "COMPLETED")
+        # Codex P2 r3502323050: mirror the normal pass path's manifest update
+        # (engine.py ~L2743) so final_outputs is populated for repaired jobs —
+        # otherwise manifest.json keeps final_outputs empty even though DB says
+        # COMPLETED, and dashboard/manifest consumers can't discover the final
+        # video/caption/thumbnail/metadata.
+        update_manifest_final(
+            assets_cache,
+            job_id,
+            {
+                "video": pkg_output.get("video_path", ""),
+                "caption": pkg_output.get("caption_path", ""),
+                "thumbnail": pkg_output.get("thumbnail_path", ""),
+                "metadata": pkg_output.get("metadata_path", ""),
+            },
+        )
         # FIX-5 (SonarCloud S5145): cast to int to break the taint chain from
         # persisted gate data (job_id/repair_cycle trace to tainted source).
         logger.info(
