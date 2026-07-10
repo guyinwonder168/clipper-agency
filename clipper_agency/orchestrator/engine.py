@@ -2082,6 +2082,33 @@ class Orchestrator:
             get_angle_name(niche_config),
         )
 
+    def _route_repairable_abort(
+        self,
+        failed: dict[str, Any],
+        conn: Any,
+        job_id: int,
+        topic: str,
+        niche: str,
+        assets_cache: str,
+        output_dir: str,
+    ) -> dict[str, Any]:
+        """FIX-5 (ADR 0030): route a coverage-repairable stage abort through
+        the bounded Scriptwriter regen loop. Returns the repair result when
+        repairable, else the original ``failed`` dict (caller returns it as a
+        terminal fail; the job still terminally FAILs on regen-exhaustion — the
+        anti-job_18 invariant holds).
+
+        Centralizes the repair-or-return pattern repeated at the three
+        coverage-abort sites (``_stage_content`` G7, ``_stage_composition``
+        FIX-6, and the reviewer-stage 2nd-hop timeline rebuild) so
+        :meth:`_run_pipeline_stages` stays under the Sonar S3776
+        cognitive-complexity threshold.
+        """
+        repair = self._maybe_route_coverage_abort(
+            failed, conn, job_id, topic, niche, assets_cache, output_dir
+        )
+        return repair if repair is not None else failed
+
     def _run_pipeline_stages(
         self,
         conn: Any,
@@ -2140,12 +2167,9 @@ class Orchestrator:
                 # FIX-5 (ADR 0030, Codex P1): a G7 narrative_not_covered abort
                 # is repairable — route it into the bounded Scriptwriter regen
                 # loop instead of terminal-hard-failing on first contact.
-                repair = self._maybe_route_coverage_abort(
+                return self._route_repairable_abort(
                     stage3, conn, job_id, topic, niche, assets_cache, output_dir
                 )
-                if repair is not None:
-                    return repair
-                return stage3
             if not isinstance(stage3, tuple):
                 raise RuntimeError("_stage_content returned non-tuple, non-failed value")
             script_output, voice_output = stage3
@@ -2164,12 +2188,9 @@ class Orchestrator:
             if isinstance(compose_output, dict) and compose_output.get("status") == "failed":
                 # FIX-5 (ADR 0030, Codex P1): a FIX-6 timeline_not_covered
                 # abort is repairable — route into the bounded regen loop.
-                repair = self._maybe_route_coverage_abort(
+                return self._route_repairable_abort(
                     compose_output, conn, job_id, topic, niche, assets_cache, output_dir
                 )
-                if repair is not None:
-                    return repair
-                return compose_output
 
             # Stage 5: Review + Package
             logger.info("G10: running Reviewer agent")
@@ -2196,12 +2217,9 @@ class Orchestrator:
                 # still terminally FAILs on regen-exhaustion (anti-job_18
                 # invariant holds); this only ensures the automatic regen
                 # attempt fires consistently on both coverage-abort sites.
-                repair = self._maybe_route_coverage_abort(
+                return self._route_repairable_abort(
                     abort, conn, job_id, topic, niche, assets_cache, output_dir
                 )
-                if repair is not None:
-                    return repair
-                return abort
 
             # Handle repair routing from reviewer
             repair_result = self._handle_repair_routing(
