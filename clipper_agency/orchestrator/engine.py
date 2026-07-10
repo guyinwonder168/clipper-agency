@@ -1339,7 +1339,7 @@ class Orchestrator:
         assets_cache: str,
         output_dir: str,
         config_snapshot: dict | None = None,
-    ) -> tuple[int, dict[str, Any]] | dict[str, Any]:
+    ) -> tuple[int, GateResult] | dict[str, Any]:
         """Run G1 preflight, create job, G2 cost, safety agent.
 
         Returns (job_id, cost_result) on success or a failure dict.
@@ -2082,6 +2082,33 @@ class Orchestrator:
             get_angle_name(niche_config),
         )
 
+    def _route_repairable_abort(
+        self,
+        failed: dict[str, Any],
+        conn: Any,
+        job_id: int,
+        topic: str,
+        niche: str,
+        assets_cache: str,
+        output_dir: str,
+    ) -> dict[str, Any]:
+        """FIX-5 (ADR 0030): route a coverage-repairable stage abort through
+        the bounded Scriptwriter regen loop. Returns the repair result when
+        repairable, else the original ``failed`` dict (caller returns it as a
+        terminal fail; the job still terminally FAILs on regen-exhaustion — the
+        anti-job_18 invariant holds).
+
+        Centralizes the repair-or-return pattern repeated at the three
+        coverage-abort sites (``_stage_content`` G7, ``_stage_composition``
+        FIX-6, and the reviewer-stage 2nd-hop timeline rebuild) so
+        :meth:`_run_pipeline_stages` stays under the Sonar S3776
+        cognitive-complexity threshold.
+        """
+        repair = self._maybe_route_coverage_abort(
+            failed, conn, job_id, topic, niche, assets_cache, output_dir
+        )
+        return repair if repair is not None else failed
+
     def _run_pipeline_stages(
         self,
         conn: Any,
@@ -2140,12 +2167,11 @@ class Orchestrator:
                 # FIX-5 (ADR 0030, Codex P1): a G7 narrative_not_covered abort
                 # is repairable — route it into the bounded Scriptwriter regen
                 # loop instead of terminal-hard-failing on first contact.
-                repair = self._maybe_route_coverage_abort(
+                return self._route_repairable_abort(
                     stage3, conn, job_id, topic, niche, assets_cache, output_dir
                 )
-                if repair is not None:
-                    return repair
-                return stage3
+            if not isinstance(stage3, tuple):  # pragma: no cover
+                raise RuntimeError("_stage_content returned non-tuple, non-failed value")
             script_output, voice_output = stage3
 
             # Stage 4: Composition (Visual→G10)
@@ -2162,12 +2188,9 @@ class Orchestrator:
             if isinstance(compose_output, dict) and compose_output.get("status") == "failed":
                 # FIX-5 (ADR 0030, Codex P1): a FIX-6 timeline_not_covered
                 # abort is repairable — route into the bounded regen loop.
-                repair = self._maybe_route_coverage_abort(
+                return self._route_repairable_abort(
                     compose_output, conn, job_id, topic, niche, assets_cache, output_dir
                 )
-                if repair is not None:
-                    return repair
-                return compose_output
 
             # Stage 5: Review + Package
             logger.info("G10: running Reviewer agent")
@@ -2194,12 +2217,9 @@ class Orchestrator:
                 # still terminally FAILs on regen-exhaustion (anti-job_18
                 # invariant holds); this only ensures the automatic regen
                 # attempt fires consistently on both coverage-abort sites.
-                repair = self._maybe_route_coverage_abort(
+                return self._route_repairable_abort(
                     abort, conn, job_id, topic, niche, assets_cache, output_dir
                 )
-                if repair is not None:
-                    return repair
-                return abort
 
             # Handle repair routing from reviewer
             repair_result = self._handle_repair_routing(
@@ -2217,6 +2237,16 @@ class Orchestrator:
             if repair_result is not None:
                 return repair_result
 
+            # _retry_review_and_package returns (abort, review_output, pkg_output).
+            # abort is falsy here (checked above), so review_output is guaranteed
+            # non-None — the only None-review path returns a non-None abort.
+            # Use a raise (not assert) so this contract guard survives `python -O`
+            # and cannot be silently stripped on the production COMPLETION path.
+            if review_output is None:  # pragma: no cover
+                raise RuntimeError(
+                    "_retry_review_and_package returned falsy abort with None "
+                    "review_output — contract violation"
+                )
             update_job_status(conn, job_id, "COMPLETED")
             logger.info("Pipeline COMPLETED: job #%d", job_id)
             remove_job_file_handler()
@@ -2552,6 +2582,7 @@ class Orchestrator:
         # but composer always writes to the standard contract path.
         # After compose succeeds, output is copied to the cycle dir.
         composer_output_dir = output_dir
+        cycle_dir: Path | None = None
         if cycle > 0:
             cycle_dir = Path(output_dir) / f"job_{job_id}" / f"cycle_{cycle}"
             cycle_dir.mkdir(parents=True, exist_ok=True)
@@ -2571,6 +2602,11 @@ class Orchestrator:
 
         # After compose succeeds, copy output to cycle dir for _promote_to_final
         if cycle > 0 and compose_output.get("status") != "failed":
+            # Structurally guaranteed: cycle_dir is assigned at L2563 inside the
+            # `if cycle > 0:` block above. Use a raise (not assert) so the guard
+            # survives `python -O` and narrows cycle_dir to Path for pyright.
+            if cycle_dir is None:  # pragma: no cover
+                raise RuntimeError("cycle_dir unset inside cycle>0 block")
             compose_output["cycle"] = cycle
             try:
                 job_dir = Path(output_dir) / f"job_{job_id}"
