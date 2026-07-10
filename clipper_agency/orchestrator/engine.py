@@ -2170,7 +2170,7 @@ class Orchestrator:
                 return self._route_repairable_abort(
                     stage3, conn, job_id, topic, niche, assets_cache, output_dir
                 )
-            if not isinstance(stage3, tuple):
+            if not isinstance(stage3, tuple):  # pragma: no cover
                 raise RuntimeError("_stage_content returned non-tuple, non-failed value")
             script_output, voice_output = stage3
 
@@ -2242,7 +2242,7 @@ class Orchestrator:
             # non-None — the only None-review path returns a non-None abort.
             # Use a raise (not assert) so this contract guard survives `python -O`
             # and cannot be silently stripped on the production COMPLETION path.
-            if review_output is None:
+            if review_output is None:  # pragma: no cover
                 raise RuntimeError(
                     "_retry_review_and_package returned falsy abort with None "
                     "review_output — contract violation"
@@ -2605,7 +2605,7 @@ class Orchestrator:
             # Structurally guaranteed: cycle_dir is assigned at L2563 inside the
             # `if cycle > 0:` block above. Use a raise (not assert) so the guard
             # survives `python -O` and narrows cycle_dir to Path for pyright.
-            if cycle_dir is None:
+            if cycle_dir is None:  # pragma: no cover
                 raise RuntimeError("cycle_dir unset inside cycle>0 block")
             compose_output["cycle"] = cycle
             try:
