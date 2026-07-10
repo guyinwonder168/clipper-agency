@@ -40,7 +40,10 @@ def create_job(
             ),
         )
         conn.commit()
-    return cursor.lastrowid
+    last_id = cursor.lastrowid
+    if last_id is None:
+        raise RuntimeError("create_job: INSERT returned no lastrowid")
+    return last_id
 
 
 def get_job(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
@@ -111,7 +114,10 @@ def create_agent_state(conn: sqlite3.Connection, job_id: int, agent_name: str) -
             (job_id, agent_name),
         )
         conn.commit()
-    return cursor.lastrowid
+    last_id = cursor.lastrowid
+    if last_id is None:
+        raise RuntimeError("create_agent_state: INSERT returned no lastrowid")
+    return last_id
 
 
 def get_agent_state(

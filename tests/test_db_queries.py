@@ -300,3 +300,41 @@ def test_reset_agents_from_invalid_agent_raises(temp_db_path):
     with pytest.raises(ValueError, match="Unknown agent"):
         reset_agents_from(conn, job_id, "nonexistent_agent")
     close_connection()
+
+
+# ── Fail-fast contract guards: lastrowid is None ──────────────────
+
+
+def test_create_job_raises_when_lastrowid_none():
+    """create_job raises RuntimeError when cursor.lastrowid is None.
+
+    Locks the fail-fast contract guard that replaced the old silent-None
+    corruption (which would have returned None as a job_id). Fully hermetic: a
+    MagicMock connection stands in for sqlite3 — its execute() returns a cursor
+    whose lastrowid is None, so no real DB / INSERT row is needed. The happy
+    path (lastrowid set) is covered by every other create_job test in this
+    module."""
+    from unittest.mock import MagicMock
+
+    import pytest
+
+    conn = MagicMock()
+    conn.execute.return_value.lastrowid = None
+    with pytest.raises(RuntimeError, match="create_job: INSERT returned no lastrowid"):
+        create_job(conn, topic="Test", niche="test")
+
+
+def test_create_agent_state_raises_when_lastrowid_none():
+    """create_agent_state raises RuntimeError when cursor.lastrowid is None.
+
+    Mirrors test_create_job_raises_when_lastrowid_none for the agent-state
+    insert path. No real DB needed: the INSERT is fully mocked, so job_id=1
+    never hits a FK constraint."""
+    from unittest.mock import MagicMock
+
+    import pytest
+
+    conn = MagicMock()
+    conn.execute.return_value.lastrowid = None
+    with pytest.raises(RuntimeError, match="create_agent_state: INSERT returned no lastrowid"):
+        create_agent_state(conn, job_id=1, agent_name="safety")
