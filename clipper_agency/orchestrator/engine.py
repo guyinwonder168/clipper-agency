@@ -1663,6 +1663,7 @@ class Orchestrator:
             failed_at="video_validation",
             video_path=compose_output.get("video_path"),
             hard_limit_sec=hard_limit,
+            voiceover_duration_sec=voice_output.get("voiceover_duration_sec"),
         )
         if abort:
             return abort
@@ -2634,6 +2635,7 @@ class Orchestrator:
         g10_result = g10.evaluate(
             video_path=compose_output.get("video_path"),
             hard_limit_sec=hard_limit,
+            voiceover_duration_sec=voice_output.get("voiceover_duration_sec"),
         )
         self._record_gate(assets_cache, job_id, "G10_video_validation", g10_result)
         abort = self._enforce_gate(
