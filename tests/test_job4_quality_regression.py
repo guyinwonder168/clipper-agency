@@ -5,8 +5,6 @@ never regress on them.  Each test exercises the failure at the unit level
 using the actual method signatures, not the mocked-APIs from the task spec.
 """
 
-import pytest
-
 from clipper_agency.agents.composer import ComposerAgent
 from clipper_agency.agents.reviewer import (
     ReviewerAgent,
@@ -14,7 +12,6 @@ from clipper_agency.agents.reviewer import (
 )
 from clipper_agency.agents.segment_producer import SegmentProducerAgent
 from clipper_agency.agents.visual_director import VisualDirectorAgent
-
 
 # ---------------------------------------------------------------------------
 # Failure Mode 1: Duplicate URL Dedup Repair
@@ -41,8 +38,11 @@ class TestDuplicateURLDedupRepair:
                 "target_duration_sec": 8.0,
                 "action": {"type": "tiktok_clip", "source_url": "https://tk.com/@user/video/001"},
                 "asset_candidates": [
-                    {"url": "https://tk.com/@user/video/001", "type": "tiktok_clip",
-                     "title": "Matching"},
+                    {
+                        "url": "https://tk.com/@user/video/001",
+                        "type": "tiktok_clip",
+                        "title": "Matching",
+                    },
                 ],
             },
             {
@@ -52,10 +52,16 @@ class TestDuplicateURLDedupRepair:
                 "target_duration_sec": 6.0,
                 "action": {"type": "tiktok_clip", "source_url": "https://tk.com/@user/video/001"},
                 "asset_candidates": [
-                    {"url": "https://tk.com/@user/video/001", "type": "tiktok_clip",
-                     "title": "Duplicate"},
-                    {"url": "https://tk.com/@user/video/002", "type": "tiktok_clip",
-                     "title": "Alternate"},
+                    {
+                        "url": "https://tk.com/@user/video/001",
+                        "type": "tiktok_clip",
+                        "title": "Duplicate",
+                    },
+                    {
+                        "url": "https://tk.com/@user/video/002",
+                        "type": "tiktok_clip",
+                        "title": "Alternate",
+                    },
                 ],
             },
         ]
@@ -79,8 +85,11 @@ class TestDuplicateURLDedupRepair:
                 "target_duration_sec": 8.0,
                 "action": {"type": "tiktok_clip", "source_url": "https://tk.com/@user/video/001"},
                 "asset_candidates": [
-                    {"url": "https://tk.com/@user/video/001", "type": "tiktok_clip",
-                     "title": "Sole candidate"},
+                    {
+                        "url": "https://tk.com/@user/video/001",
+                        "type": "tiktok_clip",
+                        "title": "Sole candidate",
+                    },
                 ],
             },
             {
@@ -91,8 +100,11 @@ class TestDuplicateURLDedupRepair:
                 # Same URL as beat 1, and no alternate candidates
                 "action": {"type": "tiktok_clip", "source_url": "https://tk.com/@user/video/001"},
                 "asset_candidates": [
-                    {"url": "https://tk.com/@user/video/001", "type": "tiktok_clip",
-                     "title": "Duplicate"},
+                    {
+                        "url": "https://tk.com/@user/video/001",
+                        "type": "tiktok_clip",
+                        "title": "Duplicate",
+                    },
                 ],
             },
         ]
@@ -117,7 +129,10 @@ class TestDuplicateURLDedupRepair:
                 "beat_id": 1,
                 "role": "main_claim",
                 "target_duration_sec": 8.0,
-                "action": {"type": "tiktok_clip", "source_url": "https://tk.com/@user/video/blocked"},
+                "action": {
+                    "type": "tiktok_clip",
+                    "source_url": "https://tk.com/@user/video/blocked",
+                },
                 "asset_candidates": [
                     {"url": "https://tk.com/@user/video/blocked", "type": "tiktok_clip"},
                     {"url": "https://tk.com/@user/video/safe", "type": "tiktok_clip"},
@@ -125,7 +140,9 @@ class TestDuplicateURLDedupRepair:
             },
         ]
 
-        resolved = director._resolve_beat_plan_assets(plan, do_not_use=["https://tk.com/@user/video/blocked"])
+        resolved = director._resolve_beat_plan_assets(
+            plan, do_not_use=["https://tk.com/@user/video/blocked"]
+        )
 
         assert resolved[0]["action"]["source_url"] == "https://tk.com/@user/video/safe"
 
@@ -168,7 +185,8 @@ class TestComposerDurationRegression:
             return_value=mocker.MagicMock(success=True, error=""),
         )
         mocker.patch(
-            "clipper_agency.agents.composer.run_ffmpeg_streaming", return_value=0,
+            "clipper_agency.agents.composer.run_ffmpeg_streaming",
+            return_value=0,
         )
 
     def test_guard_flags_failed_when_output_probed_short(self, mocker):
@@ -177,7 +195,9 @@ class TestComposerDurationRegression:
 
         # Patch _probe_output_duration to return shorter-than-audio value
         mocker.patch.object(
-            ComposerAgent, "_probe_output_duration", return_value=21.21,
+            ComposerAgent,
+            "_probe_output_duration",
+            return_value=21.21,
         )
 
         agent = ComposerAgent()
@@ -201,7 +221,9 @@ class TestComposerDurationRegression:
 
         # Patch _probe_output_duration to return >= voiceover value
         mocker.patch.object(
-            ComposerAgent, "_probe_output_duration", return_value=30.0,
+            ComposerAgent,
+            "_probe_output_duration",
+            return_value=30.0,
         )
 
         agent = ComposerAgent()
@@ -247,6 +269,31 @@ class TestReviewerHardGateRegression:
         assert result is not None, "Hard gate should trigger when video < audio"
         assert result["status"] == "fail"
         assert result["score"] == 0
+        assert "av_duration_mismatch" in result["issues"]
+
+    def test_hard_gate_fails_on_job18_audio_truncation_shape(self):
+        """FIX-2 Slice D regression: the job_18 shape must trip the AV hard gate.
+
+        job_18: source voiceover 35.3s, composed visual cut to 32.7s by -shortest.
+        Pre-FIX-2 the engine passed ``compose_output["duration_sec"]`` (a
+        non-existent key) as visual_duration_sec → 0.0 → _check_av_sync silently
+        SKIPPED, so the reviewer never saw the 2.6s truncation. Slice D wires the
+        real ``output_duration_sec``; this test locks that, given correct
+        durations, the reviewer hard-gates the job_18 drift (2.6s >> 0.5s tol)."""
+        reviewer = ReviewerAgent()
+
+        av_sync = _check_av_sync(audio_duration=35.3, visual_duration=32.7)
+        checks = {"av_sync": av_sync}
+
+        result = reviewer._check_hard_gates(
+            checks=checks,
+            audio_duration_sec=35.3,
+            visual_duration_sec=32.7,
+            visual_plan_actions=[{"type": "tiktok_clip", "source_url": "https://tk.com/ok"}],
+        )
+
+        assert result is not None, "Hard gate must fire on the job_18 2.6s truncation"
+        assert result["status"] == "fail"
         assert "av_duration_mismatch" in result["issues"]
 
     def test_hard_gate_passes_when_video_covers_audio(self):
@@ -567,7 +614,8 @@ class TestJob4QualityDefectRegression:
     # -- 5. ROUNDUP_FORMAT_WEAKNESS --------------------------------------
 
     def test_roundup_format_weakness_identified_by_story_mode_classifier(self):
-        """ROUNDUP_FORMAT_WEAKNESS: classifier correctly identifies broad entertainment topic as roundup."""
+        """ROUNDUP_FORMAT_WEAKNESS: classifier correctly identifies broad
+        entertainment topic as roundup."""
         from clipper_agency.core.story_mode import classify_story_mode
 
         decision = classify_story_mode(
@@ -585,23 +633,24 @@ class TestJob4QualityDefectRegression:
     # -- 6. CLAIM_VISUAL_RELEVANCE_WEAKNESS ------------------------------
 
     def test_claim_visual_relevance_weakness_flags_misleading_match(self):
-        """CLAIM_VISUAL_RELEVANCE_WEAKNESS: semantic scoring flags high person match + low event/claim as misleading."""
+        """CLAIM_VISUAL_RELEVANCE_WEAKNESS: semantic scoring flags high person
+        match + low event/claim as misleading."""
         from clipper_agency.core.semantic_visual_review import score_visual_relevance
 
         score = score_visual_relevance(
             beat={"beat_id": 1, "claim": "Sarwendah tertangkap kamera"},
             asset_inspection={
-                "person_match": 0.95,     # Very high person match
-                "event_match": 0.10,      # Very low event match
-                "claim_support": 0.10,    # Very low claim support
-                "visual_quality": 0.80,   # Good visual quality
+                "person_match": 0.95,  # Very high person match
+                "event_match": 0.10,  # Very low event match
+                "claim_support": 0.10,  # Very low claim support
+                "visual_quality": 0.80,  # Good visual quality
             },
         )
 
         assert score.misleading_risk > 0.5, (
-            f"Expected misleading_risk > 0.5 for high person + low event/claim, got {score.misleading_risk}"
+            f"Expected misleading_risk > 0.5 for high person + low "
+            f"event/claim, got {score.misleading_risk}"
         )
         assert score.decision in ("revise", "reject"), (
             f"Expected 'revise' or 'reject' for misleading visual, got '{score.decision}'"
         )
-
