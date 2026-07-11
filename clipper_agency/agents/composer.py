@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 _FFMPEG_CONCAT_TIMEOUT = 600  # seconds
 _FFMPEG_NORMALIZE_TIMEOUT = 120  # seconds
+_AUDIO_MASTER_PAD_TOL_SEC = 0.3  # FIX-2: gap below this (s) is not padded
 
 # Lazy singletons — avoid per-call YAML re-parsing.
 _treatment_builder: "TreatmentFilterBuilder | None" = None  # type: ignore[name-defined]  # noqa: F821
@@ -573,6 +574,7 @@ class ComposerAgent(BaseAgent):
             voice_files,
             video_path,
             script_scenes=script_scenes,
+            voiceover_duration_sec=voiceover_duration_sec,
         )
         ffmpeg_cmd = assemble_result["cmd"]
         card_fallback_scenes = assemble_result.get(
@@ -915,6 +917,7 @@ class ComposerAgent(BaseAgent):
         audio_files: list[str],
         output_path: str,
         script_scenes: list[dict] | None = None,
+        voiceover_duration_sec: float | None = None,
     ) -> dict[str, Any]:
         """Assemble final video from assets with scene normalization and card fallback.
 
@@ -965,6 +968,7 @@ class ComposerAgent(BaseAgent):
                 audio_files,
                 output_path,
                 script_scenes=script_scenes,
+                voiceover_duration_sec=voiceover_duration_sec,
             )
 
             logger.info(
@@ -1047,6 +1051,7 @@ class ComposerAgent(BaseAgent):
         audio_files: list[str],
         output_path: str,
         script_scenes: list[dict] | None = None,
+        voiceover_duration_sec: float | None = None,
     ) -> list[str]:
         """Build the FFmpeg assembly command from normalized assets."""
         cmd = ["ffmpeg", "-y"]
@@ -1054,6 +1059,26 @@ class ComposerAgent(BaseAgent):
             cmd.extend(["-i", n])
         for af in audio_files:
             cmd.extend(["-i", af])
+
+        # FIX-2 (ADR 0030, audio-as-master): pad the visual stream to fill
+        # the voiceover so the audio is never truncated. Formerly `-shortest`
+        # cut the output to the shortest stream (visual < audio → audio cut,
+        # the job_18 "…like dan share" CTA loss). Now: audio is the master —
+        # extend the LAST scene's trim by the gap so sum(target_duration) ≥
+        # voiceover, then cap with `-t voiceover_duration_sec` (replaces
+        # `-shortest`). The pad extends the final clip (holds its last frame
+        # if the source is shorter) rather than looping — monotony is caught
+        # upstream by G9.5 / the visual-coverage gate. Last-resort backstop.
+        if voiceover_duration_sec and voiceover_duration_sec > 0 and normalized_assets:
+            visual_sum = sum(
+                a.get("target_duration", 5) for a in normalized_assets if a.get("path")
+            )
+            gap = voiceover_duration_sec - visual_sum
+            if gap > _AUDIO_MASTER_PAD_TOL_SEC:
+                # Extend the last scene so the visual fills the voiceover.
+                last = dict(normalized_assets[-1])
+                last["target_duration"] = last.get("target_duration", 5) + gap
+                normalized_assets = [*normalized_assets[:-1], last]
 
         # Build per-input trim + transition chain filter graph.
         # Each asset's target_duration controls the trim length; defaults to 5.
@@ -1125,10 +1150,16 @@ class ComposerAgent(BaseAgent):
                 "yuv420p",
                 "-movflags",
                 "+faststart",
-                "-shortest",
-                output_path,
             ]
         )
+        # FIX-2 (audio-as-master): cap output at the voiceover duration
+        # instead of `-shortest`, which cut the audio to the shorter visual
+        # stream (the job_18 CTA loss). The pad above extends the visual to
+        # fill the voiceover; `-t` is the safety cap so a too-long visual
+        # never overruns the master audio track.
+        if voiceover_duration_sec and voiceover_duration_sec > 0:
+            cmd.extend(["-t", f"{voiceover_duration_sec:.3f}"])
+        cmd.append(output_path)
         return cmd
 
     def _generate_thumbnail(self, video_path: str, thumbnail_path: str) -> None:
@@ -1182,7 +1213,7 @@ class ComposerAgent(BaseAgent):
         )
         if result.returncode != 0:
             raise RuntimeError(f"ffprobe duration failed for {clip_path}: {result.stderr}")
-        lines = [l for l in result.stdout.strip().split("\n") if l.strip()]
+        lines = [line for line in result.stdout.strip().split("\n") if line.strip()]
         if not lines:
             raise RuntimeError(f"ffprobe returned no duration for {clip_path}")
         return float(lines[0])

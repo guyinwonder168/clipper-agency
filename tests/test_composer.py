@@ -1,7 +1,6 @@
 """Tests for ComposerAgent artifact persistence and output naming."""
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -48,11 +47,18 @@ class TestComposerArtifacts:
             "clipper_agency.core.scene_validator.SceneValidator.validate",
             return_value=mocker.MagicMock(valid=True, issues=[]),
         )
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                     return_value=mocker.MagicMock(
-                         width=1080, height=1920, codec="h264",
-                         duration=30.0, has_audio=False,
-                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=30.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
         mocker.patch(
             "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
             return_value=mocker.MagicMock(success=True, error=""),
@@ -89,17 +95,24 @@ class TestComposerArtifacts:
 
     def test_persists_ffmpeg_command(self, tmp_path, mocker):
         _mock_preflight_ok(mocker)
-        mock_ffmpeg = mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
+        _mock_ffmpeg = mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
         # Bypass new scene validation/normalization chain
         mocker.patch(
             "clipper_agency.core.scene_validator.SceneValidator.validate",
             return_value=mocker.MagicMock(valid=True, issues=[]),
         )
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                     return_value=mocker.MagicMock(
-                         width=1080, height=1920, codec="h264",
-                         duration=30.0, has_audio=False,
-                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=30.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
         mock_norm = mocker.MagicMock(success=True, error="")
         mocker.patch(
             "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
@@ -127,11 +140,18 @@ class TestComposerArtifacts:
             "clipper_agency.core.scene_validator.SceneValidator.validate",
             return_value=mocker.MagicMock(valid=True, issues=[]),
         )
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                     return_value=mocker.MagicMock(
-                         width=1080, height=1920, codec="h264",
-                         duration=30.0, has_audio=False,
-                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=30.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
         mock_norm = mocker.MagicMock(success=True, error="")
         mocker.patch(
             "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
@@ -157,7 +177,8 @@ class TestComposerArtifacts:
         import subprocess
 
         err = subprocess.CalledProcessError(
-            1, "ffmpeg",
+            1,
+            "ffmpeg",
             stderr="File not found: invalid input\n",
         )
         # Preflight must pass; actual ffmpeg compose fails
@@ -184,11 +205,18 @@ class TestComposerArtifacts:
             "clipper_agency.core.scene_validator.SceneValidator.validate",
             return_value=mocker.MagicMock(valid=True, issues=[]),
         )
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                     return_value=mocker.MagicMock(
-                         width=1080, height=1920, codec="h264",
-                         duration=30.0, has_audio=False,
-                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=30.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
         mock_norm = mocker.MagicMock(success=True, error="")
         mocker.patch(
             "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
@@ -220,11 +248,18 @@ class TestComposerOutputNaming:
             "clipper_agency.core.scene_validator.SceneValidator.validate",
             return_value=mocker.MagicMock(valid=True, issues=[]),
         )
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                     return_value=mocker.MagicMock(
-                         width=1080, height=1920, codec="h264",
-                         duration=30.0, has_audio=False,
-                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=30.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
         mocker.patch(
             "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
             return_value=mocker.MagicMock(success=True, error=""),
@@ -253,11 +288,18 @@ class TestComposerTreatmentMetadata:
             "clipper_agency.core.scene_validator.SceneValidator.validate",
             return_value=mocker.MagicMock(valid=True, issues=[]),
         )
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                      return_value=mocker.MagicMock(
-                          width=1080, height=1920, codec="h264",
-                          duration=30.0, has_audio=False,
-                          pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=30.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
         mock_norm = mocker.MagicMock(success=True, error="")
         mock_norm.path = "/tmp/norm_scene1.mp4"
         mocker.patch(
@@ -266,14 +308,16 @@ class TestComposerTreatmentMetadata:
         )
 
         agent = ComposerAgent()
-        assets_with_treatment = [{
-            "scene": 1,
-            "path": "/tmp/scene_1.mp4",
-            "treatment": "broll_standard",
-            "target_duration": 5,
-            "transition_in": "crossfade",
-            "transition_out": "hard_cut",
-        }]
+        assets_with_treatment = [
+            {
+                "scene": 1,
+                "path": "/tmp/scene_1.mp4",
+                "treatment": "broll_standard",
+                "target_duration": 5,
+                "transition_in": "crossfade",
+                "transition_out": "hard_cut",
+            }
+        ]
 
         # Create output dir so _assemble_video can write card_fallback.json
         output_dir = tmp_path / "job_40"
@@ -296,11 +340,18 @@ class TestComposerTreatmentMetadata:
             "clipper_agency.core.scene_validator.SceneValidator.validate",
             return_value=mocker.MagicMock(valid=True, issues=[]),
         )
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                      return_value=mocker.MagicMock(
-                          width=1080, height=1920, codec="h264",
-                          duration=30.0, has_audio=False,
-                          pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=30.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
         mock_norm = mocker.MagicMock(success=True, error="")
         mock_norm.path = str(tmp_path / "norm.mp4")
         mocker.patch(
@@ -310,8 +361,11 @@ class TestComposerTreatmentMetadata:
 
         agent = ComposerAgent()
         norm_path, was_card = agent._process_scene(
-            tmp_path, mocker.MagicMock(), mocker.MagicMock(),
-            1, "/tmp/scene_1.mp4",
+            tmp_path,
+            mocker.MagicMock(),
+            mocker.MagicMock(),
+            1,
+            "/tmp/scene_1.mp4",
         )
 
         assert norm_path is not None
@@ -323,11 +377,18 @@ class TestComposerTreatmentMetadata:
             "clipper_agency.core.scene_validator.SceneValidator.validate",
             return_value=mocker.MagicMock(valid=True, issues=[]),
         )
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                      return_value=mocker.MagicMock(
-                          width=1080, height=1920, codec="h264",
-                          duration=30.0, has_audio=False,
-                          pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=30.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
         mock_norm = mocker.MagicMock(success=True, error="")
         mock_norm.path = str(tmp_path / "norm.mp4")
         mocker.patch(
@@ -337,8 +398,11 @@ class TestComposerTreatmentMetadata:
 
         agent = ComposerAgent()
         norm_path, was_card = agent._process_scene(
-            tmp_path, mocker.MagicMock(), mocker.MagicMock(),
-            1, "/tmp/scene_1.mp4",
+            tmp_path,
+            mocker.MagicMock(),
+            mocker.MagicMock(),
+            1,
+            "/tmp/scene_1.mp4",
         )
 
         assert norm_path is not None
@@ -355,7 +419,10 @@ class TestComposerTreatmentMetadata:
         output_path = "/tmp/output.mp4"
 
         cmd = ComposerAgent._build_assembly_cmd(
-            valid_normalized, normalized_assets, audio_files, output_path,
+            valid_normalized,
+            normalized_assets,
+            audio_files,
+            output_path,
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
@@ -374,13 +441,102 @@ class TestComposerTreatmentMetadata:
         output_path = "/tmp/output.mp4"
 
         cmd = ComposerAgent._build_assembly_cmd(
-            valid_normalized, normalized_assets, audio_files, output_path,
+            valid_normalized,
+            normalized_assets,
+            audio_files,
+            output_path,
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
         assert "trim=duration=5" in filter_complex
         # Single scene: no transitions, label maps directly to [outv].
         assert "[outv]" in filter_complex
+
+
+class TestComposerAudioAsMaster:
+    """FIX-2 (ADR 0030): audio-as-master — visual fills the voiceover, audio
+    never truncated by `-shortest`."""
+
+    def test_build_assembly_cmd_drops_shortest_flag(self):
+        """`-shortest` is removed (it cut audio to the shorter visual stream)."""
+        valid_normalized = ["/tmp/scene_1.mp4", "/tmp/scene_2.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5},
+            {"scene": 2, "path": "/tmp/scene_2.mp4", "target_duration": 5},
+        ]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
+            voiceover_duration_sec=12.0,
+        )
+        assert "-shortest" not in cmd
+
+    def test_build_assembly_cmd_adds_t_cap_when_voiceover_given(self):
+        """Output is capped at voiceover_duration (-t) when audio-master is on."""
+        valid_normalized = ["/tmp/scene_1.mp4"]
+        normalized_assets = [{"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5}]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
+            voiceover_duration_sec=12.0,
+        )
+        assert "-t" in cmd
+        assert cmd[cmd.index("-t") + 1] == "12.000"
+
+    def test_build_assembly_cmd_no_t_cap_without_voiceover(self):
+        """No `-t` cap when voiceover_duration_sec is None (legacy callers)."""
+        valid_normalized = ["/tmp/scene_1.mp4"]
+        normalized_assets = [{"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5}]
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
+        )
+        assert "-t" not in cmd
+
+    def test_build_assembly_cmd_pads_last_scene_to_fill_voiceover(self):
+        """Visual shorter than audio → last scene's trim extended by the gap."""
+        valid_normalized = ["/tmp/scene_1.mp4", "/tmp/scene_2.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 4},
+            {"scene": 2, "path": "/tmp/scene_2.mp4", "target_duration": 7},
+        ]
+        # visual_sum = 11, voiceover = 13 → gap 2s > tol → last scene 7 → 9.
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
+            voiceover_duration_sec=13.0,
+        )
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "trim=duration=4" in filter_complex  # first scene unchanged
+        assert "trim=duration=9" in filter_complex  # last scene padded 7 → 9
+
+    def test_build_assembly_cmd_no_pad_when_visual_fills_audio(self):
+        """Visual ≥ audio → no pad; last scene duration unchanged."""
+        valid_normalized = ["/tmp/scene_1.mp4", "/tmp/scene_2.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 4},
+            {"scene": 2, "path": "/tmp/scene_2.mp4", "target_duration": 7},
+        ]
+        # visual_sum = 11, voiceover = 10 → gap -1s < tol → no pad.
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
+            voiceover_duration_sec=10.0,
+        )
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "trim=duration=4" in filter_complex
+        assert "trim=duration=7" in filter_complex  # unchanged
+        assert "trim=duration=8" not in filter_complex  # not padded
 
 
 class TestComposerTreatmentFilters:
@@ -390,11 +546,19 @@ class TestComposerTreatmentFilters:
         """cinematic_crop treatment prepends crop+scale filter before trim."""
         valid_normalized = ["/tmp/scene_1.mp4"]
         normalized_assets = [
-            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5,
-             "treatment": "cinematic_crop", "type": "video"},
+            {
+                "scene": 1,
+                "path": "/tmp/scene_1.mp4",
+                "target_duration": 5,
+                "treatment": "cinematic_crop",
+                "type": "video",
+            },
         ]
         cmd = ComposerAgent._build_assembly_cmd(
-            valid_normalized, normalized_assets, [], "/tmp/output.mp4",
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
@@ -410,11 +574,19 @@ class TestComposerTreatmentFilters:
         """broll_standard (null filter) produces same filter as no treatment."""
         valid_normalized = ["/tmp/scene_1.mp4"]
         normalized_assets = [
-            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5,
-             "treatment": "broll_standard", "type": "video"},
+            {
+                "scene": 1,
+                "path": "/tmp/scene_1.mp4",
+                "target_duration": 5,
+                "treatment": "broll_standard",
+                "type": "video",
+            },
         ]
         cmd = ComposerAgent._build_assembly_cmd(
-            valid_normalized, normalized_assets, [], "/tmp/output.mp4",
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
@@ -431,11 +603,19 @@ class TestComposerTreatmentFilters:
         """Treatment doesn't alter the target_duration used in trim."""
         valid_normalized = ["/tmp/scene_1.mp4"]
         normalized_assets = [
-            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 3,
-             "treatment": "cinematic_crop", "type": "video"},
+            {
+                "scene": 1,
+                "path": "/tmp/scene_1.mp4",
+                "target_duration": 3,
+                "treatment": "cinematic_crop",
+                "type": "video",
+            },
         ]
         cmd = ComposerAgent._build_assembly_cmd(
-            valid_normalized, normalized_assets, [], "/tmp/output.mp4",
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
@@ -450,12 +630,20 @@ class TestComposerTreatmentFilters:
         """hook_big_caption substitutes {text} with headline value."""
         valid_normalized = ["/tmp/scene_1.mp4"]
         normalized_assets = [
-            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5,
-             "treatment": "hook_big_caption", "type": "text",
-             "headline": "Test Headline"},
+            {
+                "scene": 1,
+                "path": "/tmp/scene_1.mp4",
+                "target_duration": 5,
+                "treatment": "hook_big_caption",
+                "type": "text",
+                "headline": "Test Headline",
+            },
         ]
         cmd = ComposerAgent._build_assembly_cmd(
-            valid_normalized, normalized_assets, [], "/tmp/output.mp4",
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
@@ -473,7 +661,10 @@ class TestComposerTreatmentFilters:
             {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5},
         ]
         cmd = ComposerAgent._build_assembly_cmd(
-            valid_normalized, normalized_assets, [], "/tmp/output.mp4",
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
         )
 
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
@@ -527,10 +718,8 @@ class TestComposerTransitions:
         """3 scenes: crossfade then hard_cut → both xfade and concat present."""
         valid = ["/tmp/s0.mp4", "/tmp/s1.mp4", "/tmp/s2.mp4"]
         assets = [
-            {"scene": 1, "path": valid[0], "target_duration": 5,
-             "transition_out": "crossfade"},
-            {"scene": 2, "path": valid[1], "target_duration": 5,
-             "transition_out": "hard_cut"},
+            {"scene": 1, "path": valid[0], "target_duration": 5, "transition_out": "crossfade"},
+            {"scene": 2, "path": valid[1], "target_duration": 5, "transition_out": "hard_cut"},
             {"scene": 3, "path": valid[2], "target_duration": 5},
         ]
         cmd = ComposerAgent._build_assembly_cmd(valid, assets, [], "/tmp/o.mp4")
@@ -550,8 +739,7 @@ class TestComposerTransitions:
     def test_xfade_uses_custom_transition_duration(self):
         """Asset with transition_duration override uses that value."""
         cmd = _build_two_scene_cmd(
-            {"target_duration": 5, "transition_out": "crossfade",
-             "transition_duration": 0.8},
+            {"target_duration": 5, "transition_out": "crossfade", "transition_duration": 0.8},
             {"target_duration": 5},
         )
         fc = _filter_complex(cmd)
@@ -574,8 +762,7 @@ class TestComposerTransitions:
         # clamp = min(0.3, min(1.5, 0.3) - 0.15) = min(0.3, 0.15) = 0.15
         valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
         assets = [
-            {"scene": 1, "path": valid[0], "target_duration": 1.5,
-             "transition_out": "crossfade"},
+            {"scene": 1, "path": valid[0], "target_duration": 1.5, "transition_out": "crossfade"},
             {"scene": 2, "path": valid[1], "target_duration": 0.3},
         ]
         cmd = ComposerAgent._build_assembly_cmd(valid, assets, [], "/tmp/o.mp4")
@@ -605,7 +792,10 @@ class TestComposerAudioSequencer:
         audio = ["/tmp/voice_0.mp3", "/tmp/voice_1.mp3"]
 
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, audio, "/tmp/output.mp4",
+            valid,
+            assets,
+            audio,
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -619,7 +809,10 @@ class TestComposerAudioSequencer:
         assets = [{"scene": 1, "path": valid[0], "target_duration": 5}]
 
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -638,7 +831,10 @@ class TestComposerAudioSequencer:
         audio = ["/tmp/voice_0.mp3"]
 
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, audio, "/tmp/output.mp4",
+            valid,
+            assets,
+            audio,
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -654,7 +850,10 @@ class TestComposerAudioSequencer:
         audio = ["/tmp/voice_0.mp3"]
 
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, audio, "/tmp/output.mp4",
+            valid,
+            assets,
+            audio,
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -671,14 +870,16 @@ class TestComposerAudioSequencer:
         """No amix filter should appear in any assembly command."""
         valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
         assets = [
-            {"scene": 1, "path": valid[0], "target_duration": 5,
-             "transition_out": "crossfade"},
+            {"scene": 1, "path": valid[0], "target_duration": 5, "transition_out": "crossfade"},
             {"scene": 2, "path": valid[1], "target_duration": 5},
         ]
         audio = ["/tmp/voice_0.mp3", "/tmp/voice_1.mp3"]
 
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, audio, "/tmp/output.mp4",
+            valid,
+            assets,
+            audio,
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -688,43 +889,72 @@ class TestComposerAudioSequencer:
     def test_has_xfade_transitions_helper(self):
         """_has_xfade_transitions detects xfade vs hard_cut correctly."""
         # crossfade → xfade present
-        assert _has_xfade_transitions([
-            {"transition_out": "crossfade"},
-        ]) is True
+        assert (
+            _has_xfade_transitions(
+                [
+                    {"transition_out": "crossfade"},
+                ]
+            )
+            is True
+        )
 
         # hard_cut only → no xfade
-        assert _has_xfade_transitions([
-            {"transition_out": "hard_cut"},
-        ]) is False
+        assert (
+            _has_xfade_transitions(
+                [
+                    {"transition_out": "hard_cut"},
+                ]
+            )
+            is False
+        )
 
         # No transition_out → no xfade
-        assert _has_xfade_transitions([
-            {"scene": 1, "path": "/tmp/a.mp4"},
-        ]) is False
+        assert (
+            _has_xfade_transitions(
+                [
+                    {"scene": 1, "path": "/tmp/a.mp4"},
+                ]
+            )
+            is False
+        )
 
         # Mixed: crossfade + hard_cut → xfade present
-        assert _has_xfade_transitions([
-            {"transition_out": "hard_cut"},
-            {"transition_out": "crossfade"},
-        ]) is True
+        assert (
+            _has_xfade_transitions(
+                [
+                    {"transition_out": "hard_cut"},
+                    {"transition_out": "crossfade"},
+                ]
+            )
+            is True
+        )
 
         # wipe_left is also xfade-based
-        assert _has_xfade_transitions([
-            {"transition_out": "wipe_left"},
-        ]) is True
+        assert (
+            _has_xfade_transitions(
+                [
+                    {"transition_out": "wipe_left"},
+                ]
+            )
+            is True
+        )
 
 
 class TestComposerSubtitles:
     """Subtitle overlay integration: script_scenes → drawtext in FFmpeg filter."""
 
     def _build_cmd_with_subtitles(
-        self, script_scenes: list[dict] | None,
+        self,
+        script_scenes: list[dict] | None,
     ) -> tuple[list[str], str]:
         """Helper: build assembly cmd with one scene and return (cmd, filter_complex)."""
         valid = ["/tmp/scene_1.mp4"]
         assets = [{"scene": 1, "path": valid[0], "target_duration": 5}]
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
             script_scenes=script_scenes,
         )
         fc = cmd[cmd.index("-filter_complex") + 1]
@@ -752,7 +982,10 @@ class TestComposerSubtitles:
             {"scene": 2, "path": valid[1], "target_duration": 5},
         ]
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
             script_scenes=script_scenes,
         )
         fc = cmd[cmd.index("-filter_complex") + 1]
@@ -794,15 +1027,21 @@ class TestComposerSubtitles:
         mocker.patch(
             "clipper_agency.core.media_probe.probe_video",
             return_value=mocker.MagicMock(
-                width=1080, height=1920, codec="h264",
-                duration=30.0, has_audio=False,
-                pix_fmt="yuv420p", file_size=10000,
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=30.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
             ),
         )
         mocker.patch(
             "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
             return_value=mocker.MagicMock(
-                success=True, error="", path="/tmp/norm.mp4",
+                success=True,
+                error="",
+                path="/tmp/norm.mp4",
             ),
         )
 
@@ -1045,7 +1284,10 @@ class TestComposerEdgeCases:
 
         # Act
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -1068,7 +1310,10 @@ class TestComposerEdgeCases:
 
         # Act
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -1084,22 +1329,35 @@ class TestComposerEdgeCases:
         valid = ["/tmp/img.png", "/tmp/vid.mp4", "/tmp/card.mp4"]
         assets = [
             _make_asset(
-                valid[0], duration=5.0, treatment="ken_burns_zoom_in",
-                type="image", transition_out="hard_cut",
+                valid[0],
+                duration=5.0,
+                treatment="ken_burns_zoom_in",
+                type="image",
+                transition_out="hard_cut",
             ),
             _make_asset(
-                valid[1], duration=5.0, treatment="cinematic_crop",
-                type="video", transition_out="hard_cut",
+                valid[1],
+                duration=5.0,
+                treatment="cinematic_crop",
+                type="video",
+                transition_out="hard_cut",
             ),
             _make_asset(
-                valid[2], duration=5.0, treatment="hook_big_caption",
-                type="text", headline="Big News!", transition_out="hard_cut",
+                valid[2],
+                duration=5.0,
+                treatment="hook_big_caption",
+                type="text",
+                headline="Big News!",
+                transition_out="hard_cut",
             ),
         ]
 
         # Act
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -1118,17 +1376,25 @@ class TestComposerEdgeCases:
         valid = ["/tmp/img.png", "/tmp/vid.mp4"]
         assets = [
             _make_asset(
-                valid[0], duration=5.0, treatment="ken_burns_zoom_in",
-                type="image", transition_out="crossfade",
+                valid[0],
+                duration=5.0,
+                treatment="ken_burns_zoom_in",
+                type="image",
+                transition_out="crossfade",
             ),
             _make_asset(
-                valid[1], duration=5.0, treatment="cinematic_crop",
+                valid[1],
+                duration=5.0,
+                treatment="cinematic_crop",
                 type="video",
             ),
         ]
 
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -1144,8 +1410,13 @@ class TestComposerEdgeCases:
             voiceover_path="/tmp/voice.mp3",
             trimmed_clips=["/tmp/v1.mp4", "/tmp/v2.mp4"],
             normalized_assets=[
-                {"scene": 1, "path": "/tmp/v1.mp4", "target_duration": 5,
-                 "treatment": "cinematic_crop", "type": "video"},
+                {
+                    "scene": 1,
+                    "path": "/tmp/v1.mp4",
+                    "target_duration": 5,
+                    "treatment": "cinematic_crop",
+                    "type": "video",
+                },
                 {"scene": 2, "path": "/tmp/v2.mp4", "target_duration": 5},
             ],
             keyword_captions=[],
@@ -1164,15 +1435,20 @@ class TestComposerEdgeCases:
         valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
         assets = [
             _make_asset(
-                valid[0], duration=5.0,
-                transition_out="crossfade", transition_duration=0.0,
+                valid[0],
+                duration=5.0,
+                transition_out="crossfade",
+                transition_duration=0.0,
             ),
             _make_asset(valid[1], duration=5.0),
         ]
 
         # Act
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -1189,7 +1465,8 @@ class TestComposerEdgeCases:
         valid = ["/tmp/s0.mp4", "/tmp/s1.mp4"]
         assets = [
             _make_asset(
-                valid[0], duration=1.5,
+                valid[0],
+                duration=1.5,
                 transition_out="crossfade",
             ),
             _make_asset(valid[1], duration=0.1),
@@ -1197,7 +1474,10 @@ class TestComposerEdgeCases:
 
         # Act
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -1216,7 +1496,10 @@ class TestComposerEdgeCases:
 
         # Act
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
             script_scenes=script_scenes,
         )
         fc = _filter_complex(cmd)
@@ -1237,7 +1520,10 @@ class TestComposerEdgeCases:
 
         # Act
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -1253,15 +1539,20 @@ class TestComposerEdgeCases:
         valid = ["/tmp/card.mp4"]
         assets = [
             _make_asset(
-                valid[0], duration=3.0,
-                treatment="hook_big_caption", type="text_card",
+                valid[0],
+                duration=3.0,
+                treatment="hook_big_caption",
+                type="text_card",
                 headline="Amazing Fact!",
             ),
         ]
 
         # Act
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -1286,7 +1577,10 @@ class TestComposerEdgeCases:
 
         # Act
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, [], "/tmp/output.mp4",
+            valid,
+            assets,
+            [],
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -1302,15 +1596,15 @@ class TestComposerEdgeCases:
         """4 scenes + 2 audio files → anullsrc silence padding for missing 2."""
         # Arrange
         valid = [f"/tmp/s{i}.mp4" for i in range(4)]
-        assets = [
-            _make_asset(valid[i], transition_out="hard_cut")
-            for i in range(4)
-        ]
+        assets = [_make_asset(valid[i], transition_out="hard_cut") for i in range(4)]
         audio = ["/tmp/voice_0.mp3", "/tmp/voice_1.mp3"]
 
         # Act
         cmd = ComposerAgent._build_assembly_cmd(
-            valid, assets, audio, "/tmp/output.mp4",
+            valid,
+            assets,
+            audio,
+            "/tmp/output.mp4",
         )
         fc = _filter_complex(cmd)
 
@@ -1336,14 +1630,18 @@ class TestComposerSmartTrim:
         mocker.patch.object(agent, "_probe_duration", return_value=10.0)
         # Scene boundary at 5.1s (within ±15% of 5.0 → tolerance = 0.75)
         mocker.patch.object(
-            agent, "_detect_scene_boundaries", return_value=[2.0, 5.1, 8.0],
+            agent,
+            "_detect_scene_boundaries",
+            return_value=[2.0, 5.1, 8.0],
         )
         mock_ffmpeg = mocker.patch(
             "clipper_agency.agents.composer.run_ffmpeg_streaming",
         )
 
-        result = agent._smart_trim(
-            "/tmp/clip.mp4", 5.0, tmp_path,
+        agent._smart_trim(
+            "/tmp/clip.mp4",
+            5.0,
+            tmp_path,
         )
 
         assert mock_ffmpeg.called
@@ -1362,14 +1660,18 @@ class TestComposerSmartTrim:
         mocker.patch.object(agent, "_probe_duration", return_value=10.0)
         # Boundaries far from target 5.0
         mocker.patch.object(
-            agent, "_detect_scene_boundaries", return_value=[1.0, 8.5],
+            agent,
+            "_detect_scene_boundaries",
+            return_value=[1.0, 8.5],
         )
         mock_ffmpeg = mocker.patch(
             "clipper_agency.agents.composer.run_ffmpeg_streaming",
         )
 
-        result = agent._smart_trim(
-            "/tmp/clip.mp4", 5.0, tmp_path,
+        agent._smart_trim(
+            "/tmp/clip.mp4",
+            5.0,
+            tmp_path,
         )
 
         assert mock_ffmpeg.called
@@ -1389,8 +1691,10 @@ class TestComposerSmartTrim:
             "clipper_agency.agents.composer.run_ffmpeg_streaming",
         )
 
-        result = agent._smart_trim(
-            "/tmp/clip.mp4", 5.0, tmp_path,
+        agent._smart_trim(
+            "/tmp/clip.mp4",
+            5.0,
+            tmp_path,
         )
 
         assert mock_ffmpeg.called
@@ -1411,8 +1715,10 @@ class TestComposerSmartTrim:
             "clipper_agency.agents.composer.run_ffmpeg_streaming",
         )
 
-        result = agent._smart_trim(
-            "/tmp/clip.mp4", 5.0, tmp_path,
+        agent._smart_trim(
+            "/tmp/clip.mp4",
+            5.0,
+            tmp_path,
         )
 
         assert mock_ffmpeg.called
@@ -1460,8 +1766,8 @@ class TestComposerComputeBeatDurations:
         result = ComposerAgent._compute_beat_durations(narrative, timestamps)
 
         assert len(result) == 2
-        assert result[0] == pytest.approx(1.5)   # 0.0 → 1.5
-        assert result[1] == pytest.approx(2.0)    # 1.5 → 3.5
+        assert result[0] == pytest.approx(1.5)  # 0.0 → 1.5
+        assert result[1] == pytest.approx(2.0)  # 1.5 → 3.5
 
     def test_missing_word_range_covers_full_timestamps(self):
         """Beat without word_range covers full timestamp range."""
@@ -1532,8 +1838,12 @@ class TestComposerAudioFirstCmd:
             voiceover_path="/tmp/voice.mp3",
             trimmed_clips=["/tmp/v1.mp4", "/tmp/v2.mp4"],
             normalized_assets=[
-                {"scene": 1, "path": "/tmp/v1.mp4", "target_duration": 5,
-                 "transition_out": "hard_cut"},
+                {
+                    "scene": 1,
+                    "path": "/tmp/v1.mp4",
+                    "target_duration": 5,
+                    "transition_out": "hard_cut",
+                },
                 {"scene": 2, "path": "/tmp/v2.mp4", "target_duration": 5},
             ],
             keyword_captions=[],
@@ -1550,12 +1860,18 @@ class TestComposerAudioFirstCmd:
         """Keyword captions produce drawtext in filter_complex."""
         captions = [
             CaptionOverlay(
-                text="hello world", start_seconds=0.0, end_seconds=2.5,
-                position="bottom", style="keyword",
+                text="hello world",
+                start_seconds=0.0,
+                end_seconds=2.5,
+                position="bottom",
+                style="keyword",
             ),
             CaptionOverlay(
-                text="main story", start_seconds=2.5, end_seconds=5.0,
-                position="bottom", style="keyword",
+                text="main story",
+                start_seconds=2.5,
+                end_seconds=5.0,
+                position="bottom",
+                style="keyword",
             ),
         ]
         cmd = ComposerAgent._build_audio_first_cmd(
@@ -1600,8 +1916,11 @@ class TestBuildKeywordChain:
         """Keyword chain replaces [outv] with [kcap_in] and chains drawtext."""
         captions = [
             CaptionOverlay(
-                text="keyword1", start_seconds=0.0, end_seconds=3.0,
-                position="bottom", style="keyword",
+                text="keyword1",
+                start_seconds=0.0,
+                end_seconds=3.0,
+                position="bottom",
+                style="keyword",
             ),
         ]
         result = _build_keyword_chain("[outv]", captions)
@@ -1620,12 +1939,18 @@ class TestBuildKeywordChain:
         """Multiple captions chain correctly."""
         captions = [
             CaptionOverlay(
-                text="first", start_seconds=0.0, end_seconds=2.5,
-                position="bottom", style="keyword",
+                text="first",
+                start_seconds=0.0,
+                end_seconds=2.5,
+                position="bottom",
+                style="keyword",
             ),
             CaptionOverlay(
-                text="second", start_seconds=2.5, end_seconds=5.0,
-                position="bottom", style="keyword",
+                text="second",
+                start_seconds=2.5,
+                end_seconds=5.0,
+                position="bottom",
+                style="keyword",
             ),
         ]
         result = _build_keyword_chain("[outv]", captions)
@@ -1654,7 +1979,9 @@ class TestComposerEnrichAudioFirstAssets:
         durations = [5.5]
 
         result = ComposerAgent._enrich_audio_first_assets(
-            assets, trimmed, durations,
+            assets,
+            trimmed,
+            durations,
         )
 
         assert len(result) == 1
@@ -1667,7 +1994,9 @@ class TestComposerEnrichAudioFirstAssets:
     def test_enrich_defaults_duration_to_5(self):
         """Missing beat duration defaults to 5.0."""
         result = ComposerAgent._enrich_audio_first_assets(
-            [], ["/tmp/clip.mp4"], [],
+            [],
+            ["/tmp/clip.mp4"],
+            [],
         )
         assert result[0]["target_duration"] == 5.0
 
@@ -1686,17 +2015,28 @@ class TestComposerDurationSafety:
     def test_audio_first_render_never_returns_video_shorter_than_voiceover(self, tmp_path, mocker):
         """Composer output must never be shorter than the voiceover audio."""
         _mock_preflight_ok(mocker)
-        mocker.patch("clipper_agency.core.scene_validator.SceneValidator.validate",
-                     return_value=mocker.MagicMock(valid=True, issues=[]))
-        mocker.patch("clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
-                     return_value=mocker.MagicMock(success=True, error=""))
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mocker.MagicMock(success=True, error=""),
+        )
 
         # Mock probe to report scenes shorter than audio
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                     side_effect=lambda *a, **kw: mocker.MagicMock(
-                         width=1080, height=1920, codec="h264",
-                         duration=21.21, has_audio=False,
-                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            side_effect=lambda *a, **kw: mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=21.21,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
 
         mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming", return_value=0)
 
@@ -1719,25 +2059,34 @@ class TestComposerDurationSafety:
         if result.get("status") == "completed":
             # If completed, output must not be shorter than voiceover
             output_dur = result.get("output_duration_sec", 0)
-            assert output_dur >= 23.25, (
-                f"Output {output_dur}s is shorter than voiceover 23.25s"
-            )
+            assert output_dur >= 23.25, f"Output {output_dur}s is shorter than voiceover 23.25s"
 
     def test_crossfade_overlap_is_compensated_when_matching_audio_duration(self, tmp_path, mocker):
         """When scene sum equals audio but crossfade eats time, output must still cover audio."""
         _mock_preflight_ok(mocker)
-        mocker.patch("clipper_agency.core.scene_validator.SceneValidator.validate",
-                     return_value=mocker.MagicMock(valid=True, issues=[]))
-        mocker.patch("clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
-                     return_value=mocker.MagicMock(success=True, error=""))
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mocker.MagicMock(success=True, error=""),
+        )
 
         # Each scene is 12s, total 24s for 23.25s audio
         # But crossfade overlap reduces actual output
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                     side_effect=lambda *a, **kw: mocker.MagicMock(
-                         width=1080, height=1920, codec="h264",
-                         duration=12.0, has_audio=False,
-                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            side_effect=lambda *a, **kw: mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=12.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
 
         mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming", return_value=0)
 
@@ -1773,16 +2122,27 @@ class TestComposerIntroCard:
     def test_composer_renders_intro_card_scene_as_part_of_timeline(self, tmp_path, mocker):
         """Intro card scene 0 must be included in the rendered timeline."""
         _mock_preflight_ok(mocker)
-        mocker.patch("clipper_agency.core.scene_validator.SceneValidator.validate",
-                     return_value=mocker.MagicMock(valid=True, issues=[]))
-        mocker.patch("clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
-                     return_value=mocker.MagicMock(success=True, error=""))
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mocker.MagicMock(success=True, error=""),
+        )
 
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                     return_value=mocker.MagicMock(
-                         width=1080, height=1920, codec="h264",
-                         duration=3.0, has_audio=False,
-                         pix_fmt="yuv420p", file_size=5000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=3.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=5000,
+            ),
+        )
 
         mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming", return_value=0)
 
@@ -1808,16 +2168,27 @@ class TestComposerIntroCard:
     def test_composer_intro_card_does_not_eat_voiceover_time(self, tmp_path, mocker):
         """Intro card is silent pre-roll — must not reduce available voiceover time."""
         _mock_preflight_ok(mocker)
-        mocker.patch("clipper_agency.core.scene_validator.SceneValidator.validate",
-                     return_value=mocker.MagicMock(valid=True, issues=[]))
-        mocker.patch("clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
-                     return_value=mocker.MagicMock(success=True, error=""))
+        mocker.patch(
+            "clipper_agency.core.scene_validator.SceneValidator.validate",
+            return_value=mocker.MagicMock(valid=True, issues=[]),
+        )
+        mocker.patch(
+            "clipper_agency.core.scene_normalizer.SceneNormalizer.normalize",
+            return_value=mocker.MagicMock(success=True, error=""),
+        )
 
-        mocker.patch("clipper_agency.core.media_probe.probe_video",
-                     return_value=mocker.MagicMock(
-                         width=1080, height=1920, codec="h264",
-                         duration=10.0, has_audio=False,
-                         pix_fmt="yuv420p", file_size=10000))
+        mocker.patch(
+            "clipper_agency.core.media_probe.probe_video",
+            return_value=mocker.MagicMock(
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=10.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
+            ),
+        )
 
         mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming", return_value=0)
 
@@ -1846,11 +2217,12 @@ class TestVisualCoverageDiagnostics:
     """Composer must attach visual_coverage diagnostics to output."""
 
     def test_composer_output_includes_visual_coverage_diagnostic(
-        self, tmp_path, mocker,
+        self,
+        tmp_path,
+        mocker,
     ):
         """Composer must attach visual_coverage diagnostics to output."""
         from clipper_agency.config.schema import (
-            VisualCoverageIssue,
             VisualCoverageResult,
         )
 
@@ -1863,9 +2235,13 @@ class TestVisualCoverageDiagnostics:
         mocker.patch(
             "clipper_agency.core.media_probe.probe_video",
             return_value=mocker.MagicMock(
-                width=1080, height=1920, codec="h264",
-                duration=10.0, has_audio=False,
-                pix_fmt="yuv420p", file_size=10000,
+                width=1080,
+                height=1920,
+                codec="h264",
+                duration=10.0,
+                has_audio=False,
+                pix_fmt="yuv420p",
+                file_size=10000,
             ),
         )
         mocker.patch(
@@ -1928,9 +2304,13 @@ class TestGeneratedTextManifest:
         mock_regions = mocker.patch(
             "clipper_agency.agents.composer.build_generated_text_regions",
             return_value=[
-                {"timestamp_start_sec": 1.0, "timestamp_end_sec": 2.5,
-                 "layer": "subtitle", "bbox": [120, 1480, 960, 1740],
-                 "text": "hello world"},
+                {
+                    "timestamp_start_sec": 1.0,
+                    "timestamp_end_sec": 2.5,
+                    "layer": "subtitle",
+                    "bbox": [120, 1480, 960, 1740],
+                    "text": "hello world",
+                },
             ],
         )
         mocker.patch("clipper_agency.agents.composer.run_ffmpeg_streaming")
@@ -1938,8 +2318,10 @@ class TestGeneratedTextManifest:
         mocker.patch.object(ComposerAgent, "_probe_output_duration", return_value=30.0)
         mocker.patch.object(ComposerAgent, "_persist_diagnostics")
         mocker.patch("clipper_agency.agents.composer._persist_visual_coverage")
-        mocker.patch("clipper_agency.agents.composer.evaluate_visual_coverage",
-                       return_value=MockVisualCoverageResult.pass_result())
+        mocker.patch(
+            "clipper_agency.agents.composer.evaluate_visual_coverage",
+            return_value=MockVisualCoverageResult.pass_result(),
+        )
         mocker.patch("clipper_agency.agents.composer.detect_black_segments", return_value=[])
         mocker.patch("clipper_agency.agents.composer.detect_freeze_segments", return_value=[])
         mocker.patch("clipper_agency.agents.composer.write_json")
@@ -1948,8 +2330,10 @@ class TestGeneratedTextManifest:
         result = agent._run_audio_first_render(
             job_id=1,
             voiceover_path=str(tmp_path / "voice.mp3"),
-            timestamps=[{"word": "hello", "start": 0.0, "end": 1.0},
-                         {"word": "world", "start": 1.0, "end": 2.0}],
+            timestamps=[
+                {"word": "hello", "start": 0.0, "end": 1.0},
+                {"word": "world", "start": 1.0, "end": 2.0},
+            ],
             assets=[],
             beat_durations=[0.0],
             trimmed_clips=[str(tmp_path / "clip0.mp4")],
@@ -1966,7 +2350,7 @@ class TestGeneratedTextManifest:
 
     def test_generated_text_regions_absent_when_no_captions(self, mocker, tmp_path):
         """When there are no captions, generated_text_regions should be empty list."""
-        mock_regions = mocker.patch(
+        _mock_regions = mocker.patch(
             "clipper_agency.agents.composer.build_generated_text_regions",
             return_value=[],
         )
@@ -1975,8 +2359,10 @@ class TestGeneratedTextManifest:
         mocker.patch.object(ComposerAgent, "_probe_output_duration", return_value=30.0)
         mocker.patch.object(ComposerAgent, "_persist_diagnostics")
         mocker.patch("clipper_agency.agents.composer._persist_visual_coverage")
-        mocker.patch("clipper_agency.agents.composer.evaluate_visual_coverage",
-                       return_value=MockVisualCoverageResult.pass_result())
+        mocker.patch(
+            "clipper_agency.agents.composer.evaluate_visual_coverage",
+            return_value=MockVisualCoverageResult.pass_result(),
+        )
         mocker.patch("clipper_agency.agents.composer.detect_black_segments", return_value=[])
         mocker.patch("clipper_agency.agents.composer.detect_freeze_segments", return_value=[])
         mocker.patch("clipper_agency.agents.composer.write_json")
@@ -2013,8 +2399,10 @@ class TestRenderedSceneManifest:
         mocker.patch.object(ComposerAgent, "_probe_output_duration", return_value=30.0)
         mocker.patch.object(ComposerAgent, "_persist_diagnostics")
         mocker.patch("clipper_agency.agents.composer._persist_visual_coverage")
-        mocker.patch("clipper_agency.agents.composer.evaluate_visual_coverage",
-                       return_value=MockVisualCoverageResult.pass_result())
+        mocker.patch(
+            "clipper_agency.agents.composer.evaluate_visual_coverage",
+            return_value=MockVisualCoverageResult.pass_result(),
+        )
         mocker.patch("clipper_agency.agents.composer.detect_black_segments", return_value=[])
         mocker.patch("clipper_agency.agents.composer.detect_freeze_segments", return_value=[])
         mocker.patch("clipper_agency.agents.composer.build_generated_text_regions", return_value=[])
@@ -2045,22 +2433,28 @@ class TestRenderedSceneManifest:
             "clipper_agency.agents.composer.build_rendered_scene_manifest",
             return_value=MockRenderedSceneManifest.make(),
         )
-        mocker.patch.object(ComposerAgent, "_assemble_video",
-                             return_value={"cmd": ["ffmpeg", "-y"], "card_fallback_scenes": []})
+        mocker.patch.object(
+            ComposerAgent,
+            "_assemble_video",
+            return_value={"cmd": ["ffmpeg", "-y"], "card_fallback_scenes": []},
+        )
         mocker.patch.object(ComposerAgent, "_generate_thumbnail")
         mocker.patch.object(ComposerAgent, "_probe_output_duration", return_value=30.0)
         mocker.patch.object(ComposerAgent, "_persist_diagnostics")
         mocker.patch("clipper_agency.agents.composer._persist_visual_coverage")
-        mocker.patch("clipper_agency.agents.composer.evaluate_visual_coverage",
-                       return_value=MockVisualCoverageResult.pass_result())
+        mocker.patch(
+            "clipper_agency.agents.composer.evaluate_visual_coverage",
+            return_value=MockVisualCoverageResult.pass_result(),
+        )
         mocker.patch("clipper_agency.agents.composer.detect_black_segments", return_value=[])
         mocker.patch("clipper_agency.agents.composer.detect_freeze_segments", return_value=[])
         mocker.patch("clipper_agency.agents.composer.write_json")
 
         agent = ComposerAgent()
         result = agent._try_assemble(
-            video_assets=[{"scene": 1, "path": str(tmp_path / "clip0.mp4"),
-                            "beat_id": 1, "type": "photo"}],
+            video_assets=[
+                {"scene": 1, "path": str(tmp_path / "clip0.mp4"), "beat_id": 1, "type": "photo"}
+            ],
             voice_files=[],
             video_path=str(tmp_path / "video.mp4"),
             thumbnail_path=str(tmp_path / "thumb.png"),
@@ -2084,12 +2478,19 @@ class MockRenderedSceneManifest:
             RenderedSceneEntry,
             RenderedSceneManifest,
         )
+
         return RenderedSceneManifest(
-            entries=[RenderedSceneEntry(
-                scene="1", beat_id="1", start_sec=0.0, end_sec=5.0,
-                source_path="/tmp/clip.mp4", source_type="photo",
-                selected_asset_id="abc123",
-            )],
+            entries=[
+                RenderedSceneEntry(
+                    scene="1",
+                    beat_id="1",
+                    start_sec=0.0,
+                    end_sec=5.0,
+                    source_path="/tmp/clip.mp4",
+                    source_type="photo",
+                    selected_asset_id="abc123",
+                )
+            ],
             video_duration_sec=30.0,
             video_path="/tmp/video.mp4",
         )
@@ -2101,6 +2502,7 @@ class MockVisualCoverageResult:
     @staticmethod
     def pass_result(output_duration_sec=30.0):
         from clipper_agency.config.schema import VisualCoverageResult
+
         return VisualCoverageResult(
             status="pass",
             output_duration_sec=output_duration_sec,
@@ -2119,7 +2521,9 @@ class TestEmptyFrameDetectionProbeContract:
     """
 
     def test_probe_video_called_with_path_and_allowed_base_dir(
-        self, tmp_path, mocker,
+        self,
+        tmp_path,
+        mocker,
     ):
         """probe_video receives (video_path, parent_dir) and duration via .duration."""
         from clipper_agency.agents.composer import _run_empty_frame_detection
@@ -2154,7 +2558,9 @@ class TestEmptyFrameDetectionProbeContract:
         assert isinstance(result, list)
 
     def test_probe_video_returning_none_yields_empty_list(
-        self, tmp_path, mocker,
+        self,
+        tmp_path,
+        mocker,
     ):
         """When probe_video returns None (missing/unreadable file), return []."""
         from clipper_agency.agents.composer import _run_empty_frame_detection
