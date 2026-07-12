@@ -22,12 +22,12 @@ from clipper_agency.core.candidate_semantic_ranker import (
     apply_rejection_rules,
     compute_final_score,
     derive_expected_entities,
+    is_unverifiable_entity_binding,
     rank_candidates,
 )
 from clipper_agency.core.clip_window import KeywordOverlapWindowSelector
 from clipper_agency.core.inspection_cache import (
-    compute_asset_content_hash,
-    compute_cache_key,
+    compute_candidate_cache_key,
     lookup,
 )
 from clipper_agency.core.semantic_visual_review import score_visual_relevance
@@ -35,20 +35,14 @@ from clipper_agency.core.semantic_visual_review import score_visual_relevance
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Cache-key convention — MUST stay byte-identical to VD._score_one_candidate
-# (visual_director.py:759-766). tests/core/test_asset_qualification.py SLICE 1 is
-# the hard merge gate enforcing this; do not change these values without also
-# updating VD's inline literals (or, preferably, see the follow-up below).
-#
-# Follow-up (PR 5+, design §8): extract compute_candidate_cache_key(candidate,
-# beat) into clipper_agency/core/inspection_cache.py and call it from BOTH Visual
-# Director and this module. One definition removes this drift risk by construction
-# and collapses the SLICE 1 gate to a trivial single-caller test. Deferred per the
-# locked §8 "keep VD as-is" minimal-blast-radius decision.
+# Cache-key convention — the inspection-cache key is now derived by the SHARED
+# helper ``inspection_cache.compute_candidate_cache_key`` (PR-5 follow-up, design
+# §8), called from BOTH this module's ``_score_candidate`` and VD's
+# ``_score_one_candidate``. One definition removes the VD/AQ literal-drift risk by
+# construction; ``tests/core/test_asset_qualification.py`` SLICE 1 now spies on
+# the shared helper to assert both call sites pass identical beat/candidate args.
 # ---------------------------------------------------------------------------
-_CACHE_MODEL = "multimodal"
-_CACHE_PROMPT_VERSION = "1.0"
-_CACHE_EVIDENCE_CONTRACT_HASH = ""
+# (the per-beat evidence-contract hash + model + prompt_version live in the helper)
 
 # Recovery bound (design §7 / §12): one recovery cycle per failing beat — prevents
 # an unbounded discovery loop. SLICE 5 pins the bound behavior.
@@ -135,18 +129,17 @@ def _score_candidate(
     Verbatim lift of ``VisualDirectorAgent._score_one_candidate``
     (visual_director.py:748-803) with the ``self.*`` dependencies removed: the
     multimodal inspection is delegated to the module-level ``_run_inspection`` and
-    cleanliness to ``_score_cleanliness``. The cache-key literals are byte-identical
-    to VD:759-766 (enforced by SLICE 1) so the pre-VD pass and VD share one cache
+    cleanliness to ``_score_cleanliness``. The cache key is derived by the SHARED
+    ``inspection_cache.compute_candidate_cache_key`` helper (also used by
+    ``VD._score_one_candidate``), so the pre-VD pass and VD share one cache
     namespace and VLM is never spent twice on the same candidate.
     """
     asset_id = f"{candidate.type}_{candidate.url[:40]}"
-    cache_key = compute_cache_key(
-        asset_path=candidate.url,
-        asset_hash=compute_asset_content_hash(candidate),
-        beat_claim=beat.spoken_point,
-        evidence_contract_hash=_CACHE_EVIDENCE_CONTRACT_HASH,
-        model=_CACHE_MODEL,
-        prompt_version=_CACHE_PROMPT_VERSION,
+    cache_key = compute_candidate_cache_key(
+        candidate,
+        beat.spoken_point,
+        beat.visual_must_show,
+        beat.visual_must_not_show,
     )
     cached = lookup(cache_dir, cache_key) if cache_dir else None
     # FIX-3 R-1 stale-cache guard: a pre-FIX-3 cached inspection has no
@@ -394,6 +387,16 @@ def _rank_and_select(
 
     ``reject_reasons`` is derived via the same ``apply_rejection_rules`` (identical
     args) that ``rank_candidates`` uses internally — single source of truth (DRY).
+
+    FIX-3 Slice 3 (codex round-2): a candidate the VLM could not name on an
+    entity-binding beat (``is_unverifiable_entity_binding``) is EXCLUDED from
+    ``qualified`` even though ``rank_candidates`` downgrades it to ``revise`` rather
+    than ``reject``. Treating ``revise`` as qualified here would skip the RECOVER
+    stage for precisely the unverifiable entity assets FIX-3 targets, silently
+    falling back to a text card. Excluding them forces ``_qualify_beat`` into the
+    recover-before-fallback path so a verifiable candidate (or the terminal text
+    card) wins instead. The exclusion is recorded in ``reject_reasons`` for the
+    qualification report.
     """
     ranked = rank_candidates(
         {"beat_id": str(beat.beat_id)}, scored, min_claim_support, max_misleading_risk
@@ -407,8 +410,19 @@ def _rank_and_select(
         )
         if reason:
             reject_reasons[scored_one["asset_id"]] = reason
+        # Surface the unverifiable-entity exclusion as a named reject reason even
+        # though rank_candidates left it as 'revise' (not caught by
+        # apply_rejection_rules, which only fires when a subject_name IS present
+        # but does not overlap — WRONG_ENTITY).
+        if not reason and is_unverifiable_entity_binding(scored_one):
+            reject_reasons[scored_one["asset_id"]] = "UNVERIFIABLE_ENTITY"
     scored_by_id = {s["asset_id"]: s for s in scored}
-    qualified = [scored_by_id[r.asset_id] for r in ranked if r.decision in ("accept", "revise")]
+    qualified = [
+        scored_by_id[r.asset_id]
+        for r in ranked
+        if r.decision in ("accept", "revise")
+        and not is_unverifiable_entity_binding(scored_by_id[r.asset_id])
+    ]
     return qualified, reject_reasons
 
 

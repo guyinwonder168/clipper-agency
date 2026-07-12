@@ -27,8 +27,7 @@ from clipper_agency.core.candidate_semantic_ranker import (
 )
 from clipper_agency.core.frame_inspection_pipeline import run_frame_inspection_pipeline
 from clipper_agency.core.inspection_cache import (
-    compute_asset_content_hash,
-    compute_cache_key,
+    compute_candidate_cache_key,
     lookup,
     store,
 )
@@ -920,13 +919,11 @@ class VisualDirectorAgent(BaseAgent):
     ) -> dict | None:
         """Score a single candidate using cache or multimodal inspection."""
         asset_id = f"{candidate.type}_{candidate.url[:40]}"
-        cache_key = compute_cache_key(
-            asset_path=candidate.url,
-            asset_hash=compute_asset_content_hash(candidate),
-            beat_claim=beat.spoken_point,
-            evidence_contract_hash="",
-            model="multimodal",
-            prompt_version="1.0",
+        cache_key = compute_candidate_cache_key(
+            candidate,
+            beat.spoken_point,
+            beat.visual_must_show,
+            beat.visual_must_not_show,
         )
         cached = lookup(cache_dir, cache_key) if cache_dir else None
         # FIX-3 R-1 stale-cache guard (see asset_qualification._score_candidate):

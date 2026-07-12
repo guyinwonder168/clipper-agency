@@ -51,7 +51,11 @@ def _make_beat(
         "narration_goal": f"Beat {beat_id}",
         "spoken_point": f"Point {beat_id}",
         "safe_wording": f"Safe {beat_id}",
-        "visual_must_show": f"Visual {beat_id}",
+        # FIX-3 round-3: visual_must_show is the AUTHORITATIVE entity-binding
+        # source, so the placeholder visual contract is aligned with the
+        # depicted subject_name ("Point N") — otherwise the spurious "visual"
+        # entity would reject every placeholder candidate as WRONG_ENTITY.
+        "visual_must_show": f"Point {beat_id}",
         "visual_must_not_show": "",
         "overlay_text": f"Overlay {beat_id}",
         "caption_keywords": [],
@@ -286,8 +290,7 @@ class TestInspectCandidatesUsesCache:
         # Pre-populate cache at the correct path (_do_inspect_and_select
         # computes cache_dir = agent_dir + "/inspection_cache")
         from clipper_agency.core.inspection_cache import (
-            compute_asset_content_hash,
-            compute_cache_key,
+            compute_candidate_cache_key,
         )
         from clipper_agency.core.inspection_cache import (
             store as cache_store,
@@ -295,13 +298,11 @@ class TestInspectCandidatesUsesCache:
 
         agent_dir = str(tmp_path / "agent_dir")
         cache_dir = f"{agent_dir}/inspection_cache"
-        cache_key = compute_cache_key(
-            asset_path=cand.url,
-            asset_hash=compute_asset_content_hash(cand),
-            beat_claim=beat.spoken_point,
-            evidence_contract_hash="",
-            model="multimodal",
-            prompt_version="1.0",
+        cache_key = compute_candidate_cache_key(
+            cand,
+            beat.spoken_point,
+            beat.visual_must_show,
+            beat.visual_must_not_show,
         )
         cached_result = _high_inspection()
         cache_store(cache_dir, cache_key, cached_result)
@@ -587,9 +588,9 @@ class TestDownloadImageFrameSuccess:
 
         assert len(paths) == 1
         assert paths[0].endswith(".jpg")
-        from pathlib import Path as P
+        from pathlib import Path
 
-        assert P(paths[0]).parent == frames_dir
+        assert Path(paths[0]).parent == frames_dir
 
 
 # ---------------------------------------------------------------------------
@@ -635,7 +636,6 @@ class TestRunMultimodalInspectionUsesFramePaths:
         agent = _make_agent()
         cand = _make_candidate("photo", "https://example.com/img.jpg")
         beat = _make_beat()
-        plan_item = _make_plan_item()
 
         with (
             patch.object(
@@ -665,3 +665,101 @@ class TestRunMultimodalInspectionUsesFramePaths:
 
         call_kwargs = mock_inspector.inspect_asset.call_args
         assert call_kwargs.kwargs.get("frame_paths") == ["/fake/frame.jpg"]
+
+
+# ---------------------------------------------------------------------------
+# 17. test_stale_cache_guard_reinspects — FIX-3 R-1 production-path coverage
+# ---------------------------------------------------------------------------
+
+
+class TestStaleCacheReinspectionGuard:
+    """FIX-3 R-1 — VD production path: a cached inspection missing ``subject_name``
+    is treated as a cache MISS and re-inspected (self-healing on resume/retry).
+
+    The byte-identical twin guard in ``asset_qualification._score_candidate`` IS
+    tested (tests/core/test_asset_qualification.py::TestStaleCacheReinspectionGuard),
+    but Visual Director runs the REAL VLM inspection and is the production path.
+    This closes the production-path coverage gap so a future edit to the VD copy
+    only cannot silently re-introduce the mass-downgrade (CLAUDE.md memory:
+    'Verify production path when two impls exist').
+    """
+
+    def test_stale_cache_triggers_reinspection(self, tmp_path: Any) -> None:
+        from clipper_agency.core.inspection_cache import (
+            compute_candidate_cache_key,
+        )
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        agent = _make_agent()
+        cand = _make_candidate("tiktok_clip", "https://stale.com/clip.mp4")
+        beat = _make_beat(candidates=[cand])
+        plan_item = _make_plan_item()
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        # STALE: pre-FIX-3 inspection with NO subject_name key, stored under the
+        # exact shared cache key VD._score_one_candidate computes.
+        stale = {
+            "decision": "accept",
+            "person_match": 0.9,
+            "event_match": 0.85,
+            "claim_support": 0.9,
+            "visual_quality": 0.8,
+            "misleading_risk": 0.1,
+            "source_credibility": 0.8,
+        }
+        cache_key = compute_candidate_cache_key(
+            cand,
+            beat.spoken_point,
+            beat.visual_must_show,
+            beat.visual_must_not_show,
+        )
+        cache_store(cache_dir, cache_key, stale)
+
+        # Fresh inspection the re-inspection returns — carries subject_name.
+        fresh = dict(stale, subject_name="Point 1")
+        with patch.object(
+            agent,
+            "_run_multimodal_inspection",
+            return_value=fresh,
+        ) as mock_run:
+            result = agent._score_one_candidate(cand, beat, plan_item, 1, cache_dir, "/tmp/agent")
+
+        assert result is not None
+        # Guard saw no subject_name -> treated as MISS -> _run_multimodal_inspection
+        # re-invoked (cache did NOT short-circuit).
+        mock_run.assert_called_once()
+        # The fresh (subject_name-bearing) inspection is what's recorded.
+        assert result["inspection"].get("subject_name") == "Point 1"
+        assert result["inspection_diag"]["from_cache"] is False
+
+    def test_fresh_cache_skips_reinspection(self, tmp_path: Any) -> None:
+        from clipper_agency.core.inspection_cache import (
+            compute_candidate_cache_key,
+        )
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        agent = _make_agent()
+        cand = _make_candidate("tiktok_clip", "https://fresh.com/clip.mp4")
+        beat = _make_beat(candidates=[cand])
+        plan_item = _make_plan_item()
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        # FRESH: post-FIX-3 inspection WITH subject_name -> cache hit, no re-inspect.
+        cache_key = compute_candidate_cache_key(
+            cand,
+            beat.spoken_point,
+            beat.visual_must_show,
+            beat.visual_must_not_show,
+        )
+        cache_store(cache_dir, cache_key, _high_inspection())
+
+        with patch.object(
+            agent,
+            "_run_multimodal_inspection",
+            return_value=None,
+        ) as mock_run:
+            result = agent._score_one_candidate(cand, beat, plan_item, 1, cache_dir, "/tmp/agent")
+
+        assert result is not None
+        mock_run.assert_not_called()
+        assert result["inspection_diag"]["from_cache"] is True

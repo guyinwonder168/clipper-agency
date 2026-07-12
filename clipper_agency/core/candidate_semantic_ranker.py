@@ -60,8 +60,9 @@ _DECISION_SORT_PRIORITY = {"accept": 0, "revise": 1, "reject": 2, "fallback_card
 
 # ---------------------------------------------------------------------------
 # FIX-3 Slice 2 — entity-binding helpers (pure, no I/O).
-# Expected entities are derived from the beat's spoken_point + visual_must_show;
-# the VLM-emitted subject_name must overlap one of them or the candidate is a
+# Expected entities are bound AUTHORITATIVELY from visual_must_show (spoken_point
+# is a fallback ONLY when visual_must_show yields no named entities); the
+# VLM-emitted subject_name must overlap one of them or the candidate is a
 # wrong-entity mismatch (job_18: a Sarwendah beat got a Jennifer Coppen image).
 # ---------------------------------------------------------------------------
 
@@ -163,47 +164,61 @@ def _normalize_token(token: str) -> str:
     return "".join(c for c in token.lower() if c.isalpha())
 
 
+def _entities_from_text(text: str) -> list[str]:
+    """Extract de-duplicated named-entity tokens from a single text field.
+
+    A token is kept only when it carries a named-entity signal: a leading
+    capital (proper noun), length >= ``_ENTITY_MIN_TOKEN_LEN`` after
+    normalization, and not in ``_ENTITY_STOPWORDS`` / ``_GENERIC_CONTRACT_WORDS``.
+    """
+    entities: list[str] = []
+    seen: set[str] = set()
+    for token in (text or "").split():
+        norm = _normalize_token(token)
+        if len(norm) < _ENTITY_MIN_TOKEN_LEN:
+            continue
+        if norm in _ENTITY_STOPWORDS or norm in _GENERIC_CONTRACT_WORDS:
+            continue
+        # Named-entity signal: require a leading capital (proper noun) so a
+        # generic lowercase contract yields no entities.
+        if not token[:1].isupper():
+            continue
+        if norm not in seen:
+            seen.add(norm)
+            entities.append(norm)
+    return entities
+
+
 def derive_expected_entities(
     spoken_point: str,
     visual_must_show: str = "",
 ) -> list[str]:
     """Derive candidate entity-name tokens from a beat's text fields.
 
-    Both fields require a leading capital (proper-noun signal) AND drop function
-    words (``_ENTITY_STOPWORDS``) + generic media/category terms
-    (``_GENERIC_CONTRACT_WORDS``). This is the FIX-3 Codex-P2 #1 fix: a generic
-    ``visual_must_show`` like "Thumbnail berita artis dengan teks 'BERITA HARI
-    INI'" yields NO entities, so the WRONG_ENTITY rule stays a no-op for
-    generic/context beats (a real-person ``subject_name`` is not falsely
-    rejected). Returns a de-duplicated list (visual_must_show tokens first,
-    then spoken_point).
+    FIX-3 round-3 (Codex): ``visual_must_show`` is the AUTHORITATIVE
+    entity-binding source. When it yields one or more named entities, those are
+    returned ALONE — ``spoken_point`` names must NOT widen the binding set.
+    Otherwise a beat about "Sarwendah" whose narration merely mentions "Jennifer
+    Coppen" (a comparison/contrast) adds "jennifer"/"coppen" to the expected
+    entities, and a Jennifer Coppen asset then PASSES the WRONG_ENTITY check —
+    the exact job_18 wrong-person binding failure FIX-3 targets.
+
+    ``spoken_point`` is consulted ONLY as a fallback when ``visual_must_show``
+    yields zero entities (a generic/context contract like "Thumbnail berita
+    artis"), where there is no authoritative binding to enforce. This preserves
+    the recall-tuned behavior for beats that name their subject only in
+    narration. Both fields require a leading capital (proper-noun signal) AND
+    drop function words (``_ENTITY_STOPWORDS``) + generic media/category terms
+    (``_GENERIC_CONTRACT_WORDS``).
 
     Tuned for RECALL on the named-entity subset: an extra junk token only gives
     ``subject_name`` another harmless overlap attempt, while a MISSED true entity
     causes a false WRONG_ENTITY reject.
     """
-    entities: list[str] = []
-    seen: set[str] = set()
-
-    def _consider(token: str) -> None:
-        norm = _normalize_token(token)
-        if len(norm) < _ENTITY_MIN_TOKEN_LEN:
-            return
-        if norm in _ENTITY_STOPWORDS or norm in _GENERIC_CONTRACT_WORDS:
-            return
-        # Named-entity signal: require a leading capital (proper noun) for BOTH
-        # fields so a generic lowercase contract yields no entities.
-        if not token[:1].isupper():
-            return
-        if norm not in seen:
-            seen.add(norm)
-            entities.append(norm)
-
-    for token in (visual_must_show or "").split():
-        _consider(token)
-    for token in (spoken_point or "").split():
-        _consider(token)
-    return entities
+    binding = _entities_from_text(visual_must_show)
+    if binding:
+        return binding
+    return _entities_from_text(spoken_point)
 
 
 def _expected_entity_matches(exp: str, subj_tokens: list[str]) -> bool:
@@ -242,6 +257,32 @@ def entity_overlap(subject_name: str, expected: list[str]) -> bool:
         if _expected_entity_matches(exp, subj_tokens):
             return True
     return False
+
+
+def is_unverifiable_entity_binding(candidate: dict) -> bool:
+    """True when a person-depicting asset on an entity-binding beat cannot be verified.
+
+    FIX-3 Slice 3: the VLM depicted a person (``person_match`` >=
+    ``_PERSON_PRESENT``) on a beat that expects named entities
+    (``expected_entities`` present), but could not name the subject (no
+    ``subject_name``). Such a candidate can never be entity-verified, so:
+
+    * ``rank_candidates`` downgrades it from ``accept`` to ``revise`` (VD never
+      accepts an unverified person asset); and
+    * the pre-VD asset-qualification path (``_rank_and_select``) EXCLUDES it from
+      ``qualified`` so the RECOVER stage runs before a text-card fallback —
+      otherwise the ``revise`` verdict would count as qualified and silently skip
+      recovery for precisely the unverifiable entity assets FIX-3 targets.
+
+    Pure predicate (no I/O); reads the scored-candidate dict shape produced by
+    ``_score_candidate`` / ``_score_one_candidate``.
+    """
+    insp = candidate.get("inspection", {})
+    return bool(
+        candidate.get("expected_entities")
+        and insp.get("person_match", 0.0) >= _PERSON_PRESENT
+        and not insp.get("subject_name")
+    )
 
 
 def _mean_score(data: dict, keys: tuple[str, ...]) -> float:
@@ -383,13 +424,10 @@ def rank_candidates(
         # whose subject the VLM could not name cannot be entity-verified: never
         # accept it, downgrade to revise so a verifiable candidate (or the
         # fallback/recover path) wins instead. Gated on expected_entities so
-        # non-person / undecorated beats are unaffected.
-        if (
-            decision == "accept"
-            and cand.get("expected_entities")
-            and insp.get("person_match", 0.0) >= _PERSON_PRESENT
-            and not insp.get("subject_name")
-        ):
+        # non-person / undecorated beats are unaffected. The shared predicate is
+        # also used by asset_qualification._rank_and_select to exclude these from
+        # `qualified` (trigger RECOVER before a text-card fallback).
+        if decision == "accept" and is_unverifiable_entity_binding(cand):
             decision = "revise"
             note = "person depicted but subject_name missing — cannot verify entity binding"
 

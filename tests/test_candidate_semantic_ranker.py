@@ -470,6 +470,59 @@ class TestEntityBindingRejection:
         assert apply_rejection_rules(candidate) == "WRONG_ENTITY"
 
 
+class TestVisualMustShowAuthoritativeBinding:
+    """FIX-3 round-3 (Codex) — visual_must_show is the authoritative binding
+    source; a person merely MENTIONED in spoken_point must not widen the binding
+    set and let a wrong-person asset pass WRONG_ENTITY (job_18 failure mode)."""
+
+    def test_mentioned_person_excluded_when_visual_must_show_names_target(self) -> None:
+        """visual_must_show='Sarwendah' is authoritative; 'Jennifer Coppen'
+        appearing only in spoken_point must NOT enter the binding set."""
+        ents = derive_expected_entities(
+            spoken_point="Sarwendah berbeda dengan Jennifer Coppen",
+            visual_must_show="Sarwendah",
+        )
+        assert "sarwendah" in ents
+        assert "jennifer" not in ents
+        assert "coppen" not in ents
+
+    def test_wrong_person_from_spoken_point_rejected(self) -> None:
+        """End-to-end job_18 case: an asset whose subject_name is the merely-
+        mentioned person is rejected as WRONG_ENTITY because the binding set
+        comes from visual_must_show alone."""
+        expected = derive_expected_entities(
+            spoken_point="Sarwendah berbeda dengan Jennifer Coppen",
+            visual_must_show="Sarwendah",
+        )
+        candidate = _entity_candidate(
+            subject_name="Jennifer Coppen",
+            expected_entities=expected,
+        )
+        assert apply_rejection_rules(candidate) == "WRONG_ENTITY"
+
+    def test_correct_visual_must_show_target_passes(self) -> None:
+        """Sanity: the authoritative target itself is still accepted."""
+        expected = derive_expected_entities(
+            spoken_point="Sarwendah berbeda dengan Jennifer Coppen",
+            visual_must_show="Sarwendah",
+        )
+        candidate = _entity_candidate(
+            subject_name="Sarwendah",
+            expected_entities=expected,
+        )
+        assert apply_rejection_rules(candidate) is None
+
+    def test_spoken_point_fallback_when_visual_must_show_generic(self) -> None:
+        """Recall preserved: when visual_must_show is a generic contract (no
+        named entities), spoken_point names are used so a beat that names its
+        subject only in narration still gets entity binding."""
+        ents = derive_expected_entities(
+            spoken_point="Sarwendah baru saja update",
+            visual_must_show="Thumbnail berita artis",
+        )
+        assert "sarwendah" in ents
+
+
 class TestEntityOverlap:
     """FIX-3 — entity_overlap pure helper (the alias/fuzzy matching core)."""
 
@@ -536,6 +589,11 @@ class TestDeriveExpectedEntities:
     def test_dedup_across_fields(self) -> None:
         ents = derive_expected_entities(spoken_point="Sarwendah", visual_must_show="sarwendah")
         assert ents.count("sarwendah") == 1
+
+    def test_duplicate_token_within_field_deduped(self) -> None:
+        """A repeated capitalized token within ONE field is de-duplicated."""
+        ents = derive_expected_entities(spoken_point="", visual_must_show="Sarwendah Sarwendah")
+        assert ents == ["sarwendah"]
 
     def test_empty_inputs(self) -> None:
         assert derive_expected_entities("", "") == []

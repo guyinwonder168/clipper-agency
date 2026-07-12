@@ -167,7 +167,7 @@ class TestSourceCleanlinessWiring:
 
         # Mock everything _score_one_candidate calls
         mocker.patch(
-            "clipper_agency.agents.visual_director.compute_cache_key",
+            "clipper_agency.agents.visual_director.compute_candidate_cache_key",
             return_value="key1",
         )
         mocker.patch(
