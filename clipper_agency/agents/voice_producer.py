@@ -570,7 +570,7 @@ class VoiceProducerAgent(BaseAgent):
         try:
             data = json.loads(result.stdout)
             return float(data.get("format", {}).get("duration", 0.0))
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (ValueError, TypeError) as exc:
             logger.warning(
                 "Voice: unparseable ffprobe duration for %s: %s",
                 filepath,

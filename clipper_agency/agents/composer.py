@@ -83,6 +83,25 @@ def _compute_audio_master_pad(
     return len(input_durations) - 1, gap
 
 
+def _apply_audio_master_pad(assets: list[dict], pad_input_index: int, pad_gap: float) -> list[dict]:
+    """Return assets with the pad input's target_duration extended by pad_gap.
+
+    No-op (returns assets unchanged) when ``pad_input_index < 0`` (no pad
+    needed). Immutable: the padded asset is rebuilt via a dict copy so the
+    caller's input list is not mutated. Extracted to keep the FFmpeg
+    builder functions under the Sonar S3776 cognitive-complexity threshold.
+    """
+    if pad_input_index < 0:
+        return assets
+    padded = dict(assets[pad_input_index])
+    padded["target_duration"] = padded.get("target_duration", 5) + pad_gap
+    return [
+        *assets[:pad_input_index],
+        padded,
+        *assets[pad_input_index + 1 :],
+    ]
+
+
 # Lazy singletons — avoid per-call YAML re-parsing.
 _treatment_builder: "TreatmentFilterBuilder | None" = None  # type: ignore[name-defined]  # noqa: F821
 _treatment_config: "TreatmentConfig | None" = None  # type: ignore[name-defined]  # noqa: F821
@@ -1111,14 +1130,7 @@ class ComposerAgent(BaseAgent):
         # (``trim=duration=N`` alone stops at source EOF and does NOT clone the
         # last frame). Monotony is caught upstream by the visual-coverage gate.
         pad_input_index, pad_gap = _compute_audio_master_pad(path_durations, voiceover_duration_sec)
-        if pad_input_index >= 0:
-            padded = dict(normalized_assets[pad_input_index])
-            padded["target_duration"] = padded.get("target_duration", 5) + pad_gap
-            normalized_assets = [
-                *normalized_assets[:pad_input_index],
-                padded,
-                *normalized_assets[pad_input_index + 1 :],
-            ]
+        normalized_assets = _apply_audio_master_pad(normalized_assets, pad_input_index, pad_gap)
 
         trim_parts: list[str] = []
         video_labels: list[str] = []

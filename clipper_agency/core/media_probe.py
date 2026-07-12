@@ -98,26 +98,10 @@ def probe_video(
     # --- audio stream ---
     audio_stream = _find_stream(streams, "audio")
     has_audio = audio_stream is not None
-    # FIX-2 (audio-as-master): capture the AUDIO-STREAM duration independently of
-    # the container `format.duration` (which is -shortest/-t-equalized). This is
-    # the source-of-truth the G10 AUDIO_NOT_TRUNCATED check probes.
-    audio_duration: float | None = None
-    if audio_stream is not None:
-        audio_dur_raw = audio_stream.get("duration")
-        if audio_dur_raw:
-            try:
-                audio_duration = float(audio_dur_raw)
-            except (ValueError, TypeError):
-                # FIX-2 (audio-as-master): G10 AUDIO_NOT_TRUNCATED relies on
-                # this value. Log the unparseable string so an "N/A" / malformed
-                # duration is diagnosable instead of silently becoming None
-                # (which the gate then surfaces as a soft_fail).
-                logger.warning(
-                    "media_probe: unparseable audio-stream duration %r for %s",
-                    audio_dur_raw,
-                    resolved,
-                )
-                audio_duration = None
+    # FIX-2 (audio-as-master): capture the AUDIO-STREAM duration independently
+    # of the container `format.duration` (which is -shortest/-t-equalized).
+    # This is the source-of-truth the G10 AUDIO_NOT_TRUNCATED check probes.
+    audio_duration = _parse_audio_duration(audio_stream, resolved)
 
     # --- duration ---
     duration: float | None = None
@@ -157,3 +141,27 @@ def _find_stream(
         if stream.get("codec_type") == codec_type:
             return stream
     return None
+
+
+def _parse_audio_duration(stream: dict[str, Any] | None, filepath: str) -> float | None:
+    """Parse a stream's ``duration`` field into seconds (FIX-2 audio-as-master).
+
+    Returns ``None`` when the stream is absent or the duration is missing /
+    unparseable (e.g. ffprobe ``"N/A"``); the unparseable case is LOGGED so the
+    G10 AUDIO_NOT_TRUNCATED gate's soft_fail is diagnosable. Extracted to keep
+    :func:`probe_video` under the Sonar S3776 cognitive-complexity threshold.
+    """
+    if stream is None:
+        return None
+    raw = stream.get("duration")
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        logger.warning(
+            "media_probe: unparseable audio-stream duration %r for %s",
+            raw,
+            filepath,
+        )
+        return None
