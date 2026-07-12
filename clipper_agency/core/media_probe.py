@@ -1,12 +1,15 @@
 """Media probing utilities — ffprobe-based video metadata extraction."""
 
 import json
+import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from clipper_agency.core.safe_paths import resolve_existing_file_under
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -20,6 +23,7 @@ class VideoInfo:
     pix_fmt: str
     duration: float | None
     has_audio: bool = False
+    audio_duration: float | None = None
     file_size: int = 0
     sample_aspect_ratio: str = "1:1"
     fps: float = 30.0
@@ -42,8 +46,10 @@ def probe_video(
     try:
         cmd: list[str] = [
             "ffprobe",
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
             "-show_streams",
             resolved,
@@ -90,7 +96,12 @@ def probe_video(
         fps = 30.0
 
     # --- audio stream ---
-    has_audio = _find_stream(streams, "audio") is not None
+    audio_stream = _find_stream(streams, "audio")
+    has_audio = audio_stream is not None
+    # FIX-2 (audio-as-master): capture the AUDIO-STREAM duration independently
+    # of the container `format.duration` (which is -shortest/-t-equalized).
+    # This is the source-of-truth the G10 AUDIO_NOT_TRUNCATED check probes.
+    audio_duration = _parse_audio_duration(audio_stream, resolved)
 
     # --- duration ---
     duration: float | None = None
@@ -114,6 +125,7 @@ def probe_video(
         pix_fmt=pix_fmt,
         duration=duration,
         has_audio=has_audio,
+        audio_duration=audio_duration,
         file_size=file_size,
         sample_aspect_ratio=sar_raw,
         fps=fps,
@@ -121,10 +133,35 @@ def probe_video(
 
 
 def _find_stream(
-    streams: list[dict[str, Any]], codec_type: str,
+    streams: list[dict[str, Any]],
+    codec_type: str,
 ) -> dict[str, Any] | None:
     """Return the first stream matching *codec_type*, or ``None``."""
     for stream in streams:
         if stream.get("codec_type") == codec_type:
             return stream
     return None
+
+
+def _parse_audio_duration(stream: dict[str, Any] | None, filepath: str) -> float | None:
+    """Parse a stream's ``duration`` field into seconds (FIX-2 audio-as-master).
+
+    Returns ``None`` when the stream is absent or the duration is missing /
+    unparseable (e.g. ffprobe ``"N/A"``); the unparseable case is LOGGED so the
+    G10 AUDIO_NOT_TRUNCATED gate's soft_fail is diagnosable. Extracted to keep
+    :func:`probe_video` under the Sonar S3776 cognitive-complexity threshold.
+    """
+    if stream is None:
+        return None
+    raw = stream.get("duration")
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        logger.warning(
+            "media_probe: unparseable audio-stream duration %r for %s",
+            raw,
+            filepath,
+        )
+        return None

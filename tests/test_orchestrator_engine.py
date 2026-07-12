@@ -3460,7 +3460,7 @@ class TestBoundedRepairLoop:
                 "status": "completed",
                 "video_path": str(tmp_path / "out.mp4"),
                 "thumbnail_path": "",
-                "duration_sec": 5.0,
+                "output_duration_sec": 5.0,
             },
         }
         for agent_name, output in agent_outputs.items():
@@ -3514,7 +3514,7 @@ class TestBoundedRepairLoop:
                     "status": "completed",
                     "video_path": str(tmp_path / "out.mp4"),
                     "thumbnail_path": "",
-                    "duration_sec": 5.0,
+                    "output_duration_sec": 5.0,
                 },
                 None,
             )
@@ -3568,7 +3568,7 @@ class TestBoundedRepairLoop:
                     "status": "completed",
                     "video_path": str(tmp_path / "out.mp4"),
                     "thumbnail_path": "",
-                    "duration_sec": 5.0,
+                    "output_duration_sec": 5.0,
                 },
                 None,
             )
@@ -3642,7 +3642,7 @@ class TestBoundedRepairLoop:
                     "status": "completed",
                     "video_path": str(tmp_path / "out.mp4"),
                     "thumbnail_path": "",
-                    "duration_sec": 5.0,
+                    "output_duration_sec": 5.0,
                 },
                 None,
             )
@@ -3704,7 +3704,7 @@ class TestBoundedRepairLoop:
                     "status": "completed",
                     "video_path": str(tmp_path / "out.mp4"),
                     "thumbnail_path": "",
-                    "duration_sec": 5.0,
+                    "output_duration_sec": 5.0,
                 },
                 None,
             )
@@ -3754,7 +3754,7 @@ class TestBoundedRepairLoop:
                     "status": "completed",
                     "video_path": str(tmp_path / "out.mp4"),
                     "thumbnail_path": "",
-                    "duration_sec": 5.0,
+                    "output_duration_sec": 5.0,
                 },
                 None,
             )
@@ -3806,7 +3806,7 @@ class TestBoundedRepairLoop:
                     "status": "completed",
                     "video_path": str(tmp_path / "out.mp4"),
                     "thumbnail_path": "",
-                    "duration_sec": 5.0,
+                    "output_duration_sec": 5.0,
                 },
                 None,
             )

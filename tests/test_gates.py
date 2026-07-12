@@ -471,6 +471,94 @@ class TestGateVideoValidation:
         result = gate.evaluate(video_path="/tmp/vid.mp4")
         assert result.passed
 
+    def test_g10_audio_not_truncated_passes_when_audio_fills_voiceover(self, mocker):
+        """FIX-2: AUDIO_NOT_TRUNCATED passes when audio stream ≥ voiceover - tol."""
+        mocker.patch.object(Path, "exists", return_value=True)
+        mock_info = mocker.Mock(
+            width=1080,
+            height=1920,
+            codec="h264",
+            duration=30.0,
+            has_audio=True,
+            audio_duration=30.0,
+            file_size=50000,
+        )
+        mocker.patch(
+            "clipper_agency.orchestrator.gates.probe_video",
+            return_value=mock_info,
+        )
+        gate = GateVideoValidation()
+        result = gate.evaluate(video_path="/tmp/vid.mp4", voiceover_duration_sec=30.0)
+        assert result.passed
+
+    def test_g10_fails_audio_truncated_when_stream_shorter_than_voiceover(self, mocker):
+        """FIX-2: AUDIO_NOT_TRUNCATED hard-fails when audio stream < voiceover - 0.5s.
+
+        The job_18 shape: visual 32.7s cut against 35.3s audio. The audio stream
+        (32.7s) is 2.6s shorter than the 35.3s source voiceover — far beyond the
+        0.5s tolerance. The container duration would be -shortest-equalized and
+        hide this; the audio-stream re-probe catches it."""
+        mocker.patch.object(Path, "exists", return_value=True)
+        mock_info = mocker.Mock(
+            width=1080,
+            height=1920,
+            codec="h264",
+            duration=32.7,
+            has_audio=True,
+            audio_duration=32.7,
+            file_size=50000,
+        )
+        mocker.patch(
+            "clipper_agency.orchestrator.gates.probe_video",
+            return_value=mock_info,
+        )
+        gate = GateVideoValidation()
+        result = gate.evaluate(video_path="/tmp/vid.mp4", voiceover_duration_sec=35.3)
+        assert not result.passed
+        assert result.severity == "hard_fail"
+        assert "AUDIO_NOT_TRUNCATED" in result.message
+        assert result.data["reason"] == "audio_truncated"
+
+    def test_g10_audio_check_skipped_when_voiceover_duration_none(self, mocker):
+        """FIX-2: no voiceover_duration_sec (legacy caller) → truncation check skipped."""
+        mocker.patch.object(Path, "exists", return_value=True)
+        mock_info = mocker.Mock(
+            width=1080,
+            height=1920,
+            codec="h264",
+            duration=30.0,
+            has_audio=True,
+            audio_duration=30.0,
+            file_size=50000,
+        )
+        mocker.patch(
+            "clipper_agency.orchestrator.gates.probe_video",
+            return_value=mock_info,
+        )
+        gate = GateVideoValidation()
+        result = gate.evaluate(video_path="/tmp/vid.mp4")
+        assert result.passed
+
+    def test_g10_audio_check_skipped_when_audio_duration_unavailable(self, mocker):
+        """FIX-2: audio_duration unavailable in ffprobe → check skipped (pass)."""
+        mocker.patch.object(Path, "exists", return_value=True)
+        mock_info = mocker.Mock(
+            width=1080,
+            height=1920,
+            codec="h264",
+            duration=30.0,
+            has_audio=True,
+            audio_duration=None,
+            file_size=50000,
+        )
+        mocker.patch(
+            "clipper_agency.orchestrator.gates.probe_video",
+            return_value=mock_info,
+        )
+        gate = GateVideoValidation()
+        result = gate.evaluate(video_path="/tmp/vid.mp4", voiceover_duration_sec=30.0)
+        assert result.passed
+
 
 def test_g10_missing_video():
     gate = GateVideoValidation()

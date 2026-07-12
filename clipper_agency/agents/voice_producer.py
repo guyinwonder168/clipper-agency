@@ -284,7 +284,13 @@ class VoiceProducerAgent(BaseAgent):
         Used as a fallback when the TTS provider does not return native
         timestamps (Gemini TTS, Fish Audio).
         """
-        duration = self._probe_audio_duration(audio_path)
+        try:
+            duration = self._probe_audio_duration(audio_path)
+        except RuntimeError:
+            # FIX-2: probe raises on failure so _build_success_output can never
+            # stamp duration=0.0 on a success. Approx-timestamps tolerate an
+            # unknown duration by returning [] (no word timings).
+            return []
         words = text.split()
         if not words or duration <= 0:
             return []
@@ -472,6 +478,14 @@ class VoiceProducerAgent(BaseAgent):
 
             chunk_paths.append(chunk_path)
             chunk_timestamps.append(word_ts)
+            # FIX-2 (Codex P2): a chunk whose duration can't be probed must FAIL
+            # LOUD. Appending 0.0 leaves the stitch offset unchanged and silently
+            # misaligns every subsequent chunk's word timestamps — corrupting the
+            # canonical beat timeline Composer + Reviewer consume. The final-path
+            # probe in _build_success_output does NOT catch this (it probes the
+            # concatenated file, which is fine; the per-word timestamps are wrong).
+            # Let the RuntimeError propagate to the provider chain's outer except
+            # (retries the next provider; _build_failed_output if all fail).
             chunk_durations.append(self._probe_audio_duration(chunk_path))
 
         # Concatenate audio
@@ -520,9 +534,22 @@ class VoiceProducerAgent(BaseAgent):
         raise ValueError(f"Unknown TTS provider: {provider}")
 
     def _probe_audio_duration(self, filepath: str) -> float:
-        """Measure audio duration in seconds using ffprobe."""
+        """Measure audio duration in seconds using ffprobe.
+
+        Raises ``RuntimeError`` on any probe failure (missing file, non-zero
+        ffprobe exit, parse error). FIX-2 (ADR 0030, audio-as-master): the
+        audio-first pipeline drives beat timing, visual padding, and the
+        AUDIO_NOT_TRUNCATED gate off this value — a silent ``0.0`` on the
+        success path (the former behavior) made the entire audio-as-master
+        apparatus inert without any signal. Callers that can tolerate an
+        unknown duration (``_approximate_timestamps``, chunked stitching)
+        catch this; ``_build_success_output`` lets it propagate so a provider
+        that cannot report its duration is retried / failed rather than
+        stamping ``voiceover_duration_sec=0.0`` on a ``status: success``.
+        """
         if not os.path.exists(filepath):
-            return 0.0
+            logger.warning("Voice: audio file missing during duration probe: %s", filepath)
+            raise RuntimeError(f"audio file missing: {filepath}")
         try:
             result = subprocess.run(
                 ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", filepath],
@@ -530,9 +557,24 @@ class VoiceProducerAgent(BaseAgent):
                 text=True,
                 timeout=10,
             )
-            if result.returncode != 0:
-                return 0.0
+        except Exception as exc:  # pragma: no cover - subprocess/timeout errors
+            logger.warning("Voice: ffprobe errored probing %s: %s", filepath, exc, exc_info=True)
+            raise RuntimeError(f"ffprobe error probing {filepath}: {exc}") from exc
+        if result.returncode != 0:
+            logger.warning(
+                "Voice: ffprobe non-zero exit (%d) for %s: %s",
+                result.returncode,
+                filepath,
+                (result.stderr or "").strip()[:300],
+            )
+            raise RuntimeError(f"ffprobe exit {result.returncode} for {filepath}")
+        try:
             data = json.loads(result.stdout)
             return float(data.get("format", {}).get("duration", 0.0))
-        except Exception:
-            return 0.0
+        except (ValueError, TypeError) as exc:
+            logger.warning(
+                "Voice: unparseable ffprobe duration for %s: %s",
+                filepath,
+                (result.stdout or "")[:300],
+            )
+            raise RuntimeError(f"unparseable duration for {filepath}: {exc}") from exc

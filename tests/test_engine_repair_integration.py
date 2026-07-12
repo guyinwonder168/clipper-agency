@@ -97,7 +97,7 @@ def _setup_job(db_path, assets_cache, tmp_path):
             "status": "completed",
             "video_path": str(tmp_path / "out.mp4"),
             "thumbnail_path": "",
-            "duration_sec": 5.0,
+            "output_duration_sec": 5.0,
         },
     }
     for agent_name, output in agent_outputs.items():
@@ -146,7 +146,7 @@ class TestGateFailureRepairRouting:
                 },
                 compose_output={
                     "video_path": str(tmp_path / "out.mp4"),
-                    "duration_sec": 5.0,
+                    "output_duration_sec": 5.0,
                     "rendered_scene_manifest": [],
                     "diagnostics": {},
                 },
@@ -197,7 +197,7 @@ class TestGateFailureRepairRouting:
                 },
                 compose_output={
                     "video_path": str(tmp_path / "out.mp4"),
-                    "duration_sec": 5.0,
+                    "output_duration_sec": 5.0,
                     "rendered_scene_manifest": [],
                     "diagnostics": {},
                 },
@@ -244,7 +244,7 @@ class TestGateFailureRepairRouting:
                 },
                 compose_output={
                     "video_path": str(tmp_path / "out.mp4"),
-                    "duration_sec": 5.0,
+                    "output_duration_sec": 5.0,
                     "rendered_scene_manifest": [],
                     "diagnostics": {},
                 },
@@ -791,7 +791,7 @@ class TestCoverageAbortEntryPath:
         compose_out = {
             "status": "completed",
             "video_path": str(video_path),
-            "duration_sec": 5.0,
+            "output_duration_sec": 5.0,
             "template_name": None,
         }
         Path(ac, f"job_{job_id}", "agents", "composer", "output.json").parent.mkdir(
@@ -1020,7 +1020,7 @@ class TestCoverageAbortEntryPath:
         compose_out = {
             "status": "completed",
             "video_path": str(video_path),
-            "duration_sec": 5.0,
+            "output_duration_sec": 5.0,
             "template_name": None,
         }
         Path(ac, f"job_{job_id}", "agents", "composer", "output.json").parent.mkdir(

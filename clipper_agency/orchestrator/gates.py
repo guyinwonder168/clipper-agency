@@ -11,6 +11,7 @@ from clipper_agency.core.narrative_coverage import NarrativeCoverageResult
 @dataclass
 class GateResult:
     """Result of a gate evaluation."""
+
     passed: bool
     severity: str  # "pass" | "soft_fail" | "hard_fail"
     message: str = ""
@@ -28,37 +29,42 @@ class BaseGate:
 # G1: Input Preflight — validate topic before any processing
 # ════════════════════════════════════════════════════════════════════
 
+
 class GateInputPreflight(BaseGate):
     """G1: Validate topic input before any processing."""
 
-    def evaluate(self, topic: str = "", niche_config: dict | None = None,
-                 source_url: str | None = None, **kwargs) -> GateResult:
+    def evaluate(
+        self,
+        topic: str = "",
+        niche_config: dict | None = None,
+        source_url: str | None = None,
+        **kwargs,
+    ) -> GateResult:
         if not topic or not topic.strip():
             return GateResult(False, "hard_fail", "Topic cannot be empty")
         if niche_config is None:
             return GateResult(False, "hard_fail", "Niche config required")
-        return GateResult(True, "pass", "Input valid",
-                          data={"topic": topic.strip()})
+        return GateResult(True, "pass", "Input valid", data={"topic": topic.strip()})
 
 
 # ════════════════════════════════════════════════════════════════════
 # G2: Cost Estimate — lightweight credit/cost estimate
 # ════════════════════════════════════════════════════════════════════
 
+
 class GateCostEstimate(BaseGate):
     """G2: Lightweight cost + credit estimate."""
 
     BASE_COST_CENTS = 3.3  # Budget East total in cents
 
-    def evaluate(self, cached: bool = False,
-                 niche_config: dict | None = None, **kwargs) -> GateResult:
-        estimated_cents = (
-            self.BASE_COST_CENTS if not cached
-            else self.BASE_COST_CENTS * 0.7
-        )
+    def evaluate(
+        self, cached: bool = False, niche_config: dict | None = None, **kwargs
+    ) -> GateResult:
+        estimated_cents = self.BASE_COST_CENTS if not cached else self.BASE_COST_CENTS * 0.7
         return GateResult(
-            True, "pass",
-            f"Est. cost: ${estimated_cents/100:.4f}",
+            True,
+            "pass",
+            f"Est. cost: ${estimated_cents / 100:.4f}",
             data={"estimate_cents": estimated_cents},
         )
 
@@ -67,22 +73,22 @@ class GateCostEstimate(BaseGate):
 # G3: Research Cache — check cache TTL / freshness
 # ════════════════════════════════════════════════════════════════════
 
+
 class GateResearchCache(BaseGate):
     """G3: Check research cache TTL."""
 
     def evaluate(self, cache_entry: dict | None = None, **kwargs) -> GateResult:
         if cache_entry and cache_entry.get("freshness") == "fresh":
-            return GateResult(True, "pass", "Fresh cache available",
-                              data=cache_entry)
+            return GateResult(True, "pass", "Fresh cache available", data=cache_entry)
         if cache_entry and cache_entry.get("freshness") == "stale":
-            return GateResult(True, "soft_fail", "Stale cache - reusing",
-                              data=cache_entry)
+            return GateResult(True, "soft_fail", "Stale cache - reusing", data=cache_entry)
         return GateResult(False, "hard_fail", "No valid cache - research needed")
 
 
 # ════════════════════════════════════════════════════════════════════
 # G4: Post-Research Risk — check for dangerous content
 # ════════════════════════════════════════════════════════════════════
+
 
 class GatePostResearchRisk(BaseGate):
     """G4: Post-research risk check."""
@@ -100,16 +106,17 @@ class GatePostResearchRisk(BaseGate):
                 texts.append(str(f))
         return " ".join(texts).lower()
 
-    def evaluate(self, risk_flags: list | None = None,
-                 **kwargs) -> GateResult:
+    def evaluate(self, risk_flags: list | None = None, **kwargs) -> GateResult:
         flags = risk_flags or []
         combined = self._normalize_flags(flags)
         if any(kw in combined for kw in self.DANGER_KEYWORDS):
-            return GateResult(False, "hard_fail", "High-risk content detected",
-                              data={"risk_flags": flags})
+            return GateResult(
+                False, "hard_fail", "High-risk content detected", data={"risk_flags": flags}
+            )
         if "unverified" in combined:
             return GateResult(
-                True, "soft_fail",
+                True,
+                "soft_fail",
                 "Unverified claims - use cautious wording",
                 data={"risk_flags": flags},
             )
@@ -120,6 +127,7 @@ class GatePostResearchRisk(BaseGate):
 # G5: Source Quality — check available video sources
 # ════════════════════════════════════════════════════════════════════
 
+
 class GateSourceQuality(BaseGate):
     """G5: Source quality check."""
 
@@ -128,8 +136,7 @@ class GateSourceQuality(BaseGate):
         if len(sources) >= 2:
             return GateResult(True, "pass", f"{len(sources)} sources available")
         if len(sources) == 1:
-            return GateResult(True, "soft_fail",
-                              "Only 1 source - use Pexels fallback")
+            return GateResult(True, "soft_fail", "Only 1 source - use Pexels fallback")
         return GateResult(False, "hard_fail", "No usable sources")
 
 
@@ -137,17 +144,23 @@ class GateSourceQuality(BaseGate):
 # G6: Creative Memory — check angle exhaustion
 # ════════════════════════════════════════════════════════════════════
 
+
 class GateCreativeMemory(BaseGate):
     """G6: Creative memory check."""
 
-    def evaluate(self, used_angles: list[str] | None = None,
-                 available_angles: list[str] | None = None, **kwargs) -> GateResult:
+    def evaluate(
+        self,
+        used_angles: list[str] | None = None,
+        available_angles: list[str] | None = None,
+        **kwargs,
+    ) -> GateResult:
         used = set(used_angles or [])
         available = set(available_angles or [])
         remaining = available - used
         if len(remaining) >= 2:
-            return GateResult(True, "pass", "Variation available",
-                              data={"remaining_angles": list(remaining)})
+            return GateResult(
+                True, "pass", "Variation available", data={"remaining_angles": list(remaining)}
+            )
         if len(remaining) == 1:
             return GateResult(True, "soft_fail", "Only 1 angle left")
         return GateResult(False, "hard_fail", "All angles exhausted")
@@ -156,6 +169,7 @@ class GateCreativeMemory(BaseGate):
 # ════════════════════════════════════════════════════════════════════
 # G7: Script Validation — check script + caption quality
 # ════════════════════════════════════════════════════════════════════
+
 
 class GateScriptValidation(BaseGate):
     """G7: Script validation."""
@@ -166,16 +180,14 @@ class GateScriptValidation(BaseGate):
         if not caption.strip():
             return GateResult(False, "soft_fail", "Empty caption - auto-generate")
         if len(caption) > 150:
-            return GateResult(True, "soft_fail",
-                              "Caption >150 chars - trim needed")
+            return GateResult(True, "soft_fail", "Caption >150 chars - trim needed")
         return GateResult(True, "pass", "Script and caption valid")
-
-
 
 
 # ════════════════════════════════════════════════════════════════════
 # G7 (active): Narrative coverage contract (ADR 0030 / FIX-1)
 # ════════════════════════════════════════════════════════════════════
+
 
 class GateNarrativeCoverage(BaseGate):
     """G7: Narrative coverage contract (ADR 0030 / FIX-1).
@@ -240,6 +252,7 @@ class GateNarrativeCoverage(BaseGate):
 # G8: Audio Validation — check generated audio file
 # ════════════════════════════════════════════════════════════════════
 
+
 class GateAudioValidation(BaseGate):
     """G8: Audio validation."""
 
@@ -256,19 +269,22 @@ class GateAudioValidation(BaseGate):
 # G9: Asset Validation — check visual assets
 # ════════════════════════════════════════════════════════════════════
 
+
 class GateAssetValidation(BaseGate):
     """G9: Asset validation."""
 
     @staticmethod
     def _filter_text_card_paths(
-        asset_paths: list[str], assets: list[dict],
+        asset_paths: list[str],
+        assets: list[dict],
     ) -> list[str] | None:
         """Remove text_card/none assets with empty paths.
 
         Returns None when all paths are filtered (all text cards).
         """
         skip_indices = {
-            i for i, a in enumerate(assets)
+            i
+            for i, a in enumerate(assets)
             if not a.get("path", "") and a.get("source", "") in ("text_card", "none")
         }
         if not skip_indices:
@@ -276,9 +292,9 @@ class GateAssetValidation(BaseGate):
         filtered = [p for i, p in enumerate(asset_paths) if i not in skip_indices]
         return filtered if filtered else None
 
-    def evaluate(self, asset_paths: list[str] | None = None,
-                 assets: list[dict] | None = None,
-                 **kwargs) -> GateResult:
+    def evaluate(
+        self, asset_paths: list[str] | None = None, assets: list[dict] | None = None, **kwargs
+    ) -> GateResult:
         paths = asset_paths or []
         if not paths:
             return GateResult(False, "hard_fail", "No assets")
@@ -287,22 +303,20 @@ class GateAssetValidation(BaseGate):
         if assets:
             filtered = self._filter_text_card_paths(paths, assets)
             if filtered is None:
-                return GateResult(True, "pass",
-                                  "All assets are text cards (no downloads needed)")
+                return GateResult(True, "pass", "All assets are text cards (no downloads needed)")
             paths = filtered
-        valid = [p for p in paths
-                 if Path(p).exists() and Path(p).stat().st_size > 0]
+        valid = [p for p in paths if Path(p).exists() and Path(p).stat().st_size > 0]
         if not valid:
             return GateResult(False, "hard_fail", "No valid assets")
         if len(valid) < len(paths):
-            return GateResult(True, "soft_fail",
-                              f"{len(valid)}/{len(paths)} assets valid")
+            return GateResult(True, "soft_fail", f"{len(valid)}/{len(paths)} assets valid")
         return GateResult(True, "pass", "All assets valid")
 
 
 # ════════════════════════════════════════════════════════════════════
 # G10: Video Output Validation — check final video
 # ════════════════════════════════════════════════════════════════════
+
 
 class GateVideoValidation(BaseGate):
     """G10: Deterministic video output validation using ffprobe metadata.
@@ -316,60 +330,72 @@ class GateVideoValidation(BaseGate):
     REQUIRED_CODEC = "h264"
     MIN_DURATION = 20
     DEFAULT_MAX_DURATION = 60
+    # FIX-2 (audio-as-master): tolerance for AUDIO_NOT_TRUNCATED. Audio stream
+    # may be marginally shorter than the source voiceover due to encoder
+    # padding/rounding; only flag truncation beyond this half-second gap.
+    AUDIO_TRUNC_TOL_SEC = 0.5
 
     def _check_duration_only(
-        self, duration_sec: float, hard_limit_sec: int | None = None,
+        self,
+        duration_sec: float,
+        hard_limit_sec: int | None = None,
     ) -> GateResult | None:
         """Check just the duration against limits.
 
         Returns None on pass, GateResult on fail.
         """
-        max_duration = (
-            hard_limit_sec if hard_limit_sec is not None
-            else self.DEFAULT_MAX_DURATION
-        )
+        max_duration = hard_limit_sec if hard_limit_sec is not None else self.DEFAULT_MAX_DURATION
         if duration_sec < self.MIN_DURATION:
             return GateResult(
-                False, "hard_fail",
-                f"Video too short: {duration_sec:.1f}s, "
-                f"minimum {self.MIN_DURATION}s",
+                False,
+                "hard_fail",
+                f"Video too short: {duration_sec:.1f}s, minimum {self.MIN_DURATION}s",
             )
         if duration_sec > max_duration:
             return GateResult(
-                False, "hard_fail",
-                f"Video too long: {duration_sec:.1f}s, "
-                f"maximum {max_duration}s",
+                False,
+                "hard_fail",
+                f"Video too long: {duration_sec:.1f}s, maximum {max_duration}s",
             )
         return None
 
-    def evaluate(self, video_path: str | None = None,
-                 hard_limit_sec: int | None = None, **kwargs) -> GateResult:
+    def evaluate(
+        self,
+        video_path: str | None = None,
+        hard_limit_sec: int | None = None,
+        voiceover_duration_sec: float | None = None,
+        **kwargs,
+    ) -> GateResult:
         if not video_path or not Path(video_path).exists():
             return GateResult(False, "hard_fail", "Video file missing")
 
         info = probe_video(video_path, Path(video_path).parent)
         if info is None:
             return GateResult(
-                False, "hard_fail",
+                False,
+                "hard_fail",
                 "Video file not found or unreadable by ffprobe",
             )
 
         if info.width != self.REQUIRED_WIDTH or info.height != self.REQUIRED_HEIGHT:
             return GateResult(
-                False, "hard_fail",
+                False,
+                "hard_fail",
                 f"Wrong resolution: {info.width}x{info.height}, "
                 f"expected {self.REQUIRED_WIDTH}x{self.REQUIRED_HEIGHT}",
             )
 
         if info.codec != self.REQUIRED_CODEC:
             return GateResult(
-                False, "hard_fail",
+                False,
+                "hard_fail",
                 f"Wrong codec: {info.codec}, expected {self.REQUIRED_CODEC}",
             )
 
         if info.duration is None:
             return GateResult(
-                False, "hard_fail",
+                False,
+                "hard_fail",
                 "Video duration unknown — cannot validate",
             )
 
@@ -379,8 +405,52 @@ class GateVideoValidation(BaseGate):
 
         if not info.has_audio:
             return GateResult(
-                False, "hard_fail",
+                False,
+                "hard_fail",
                 "No audio track found",
+            )
+
+        # FIX-2 (audio-as-master, ADR 0030): AUDIO_NOT_TRUNCATED — independently
+        # re-probe the audio STREAM duration (not the container duration, which
+        # is -shortest/-t-equalized and hides the job_18 truncation). The audio
+        # stream is the master; if it is shorter than the source voiceover by
+        # more than the tolerance, the audio was truncated. Skipped (pass) when
+        # voiceover_duration_sec is None (legacy callers) or the audio-stream
+        # duration is unavailable in the ffprobe metadata.
+        if (
+            voiceover_duration_sec
+            and info.audio_duration is not None
+            and info.audio_duration < voiceover_duration_sec - self.AUDIO_TRUNC_TOL_SEC
+        ):
+            return GateResult(
+                False,
+                "hard_fail",
+                f"AUDIO_NOT_TRUNCATED: audio stream {info.audio_duration:.2f}s "
+                f"< voiceover {voiceover_duration_sec:.2f}s "
+                f"- {self.AUDIO_TRUNC_TOL_SEC}s tolerance",
+                data={
+                    "reason": "audio_truncated",
+                    "audio_sec": info.audio_duration,
+                    "voiceover_sec": voiceover_duration_sec,
+                },
+            )
+
+        if voiceover_duration_sec and info.audio_duration is None:
+            # FIX-2 (ADR 0030): the caller opted into truncation enforcement
+            # by passing voiceover_duration_sec, but ffprobe reported no
+            # audio-STREAM duration. "Cannot verify" must not be equivalent
+            # to "verified good" — the silent pass here was exactly the
+            # job_18 blind spot. Surface as a recorded soft_fail (visible in
+            # the gate trail, non-aborting) instead of silently passing.
+            return GateResult(
+                True,
+                "soft_fail",
+                "AUDIO_NOT_TRUNCATED: audio-stream duration unavailable in "
+                "ffprobe metadata; cannot verify truncation",
+                data={
+                    "reason": "audio_duration_unavailable",
+                    "voiceover_sec": voiceover_duration_sec,
+                },
             )
 
         return GateResult(True, "pass", "Video valid")

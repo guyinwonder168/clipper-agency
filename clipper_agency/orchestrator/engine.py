@@ -614,7 +614,7 @@ class Orchestrator:
             caption=script_output.get("caption", ""),
             safety_rules=niche_ctx.get("safety_rules", []),
             audio_duration_sec=voice_output.get("voiceover_duration_sec", 0.0),
-            visual_duration_sec=compose_output.get("duration_sec", 0.0),
+            visual_duration_sec=compose_output.get("output_duration_sec", 0.0),
             narrative_structure=script_output.get("narrative_structure", []),
             unverified_claims=script_output.get("unverified_claims", []),
             story_beats=research_output.get("story_beats", []),
@@ -1643,6 +1643,7 @@ class Orchestrator:
             timestamps=voice_output.get("timestamps", []),
             narrative_structure=script_output.get("narrative_structure", []),
             beat_timeline=beat_timeline,
+            voiceover_duration_sec=voice_output.get("voiceover_duration_sec"),
         )
 
         if compose_output.get("status") == "failed":
@@ -1662,6 +1663,7 @@ class Orchestrator:
             failed_at="video_validation",
             video_path=compose_output.get("video_path"),
             hard_limit_sec=hard_limit,
+            voiceover_duration_sec=voice_output.get("voiceover_duration_sec"),
         )
         if abort:
             return abort
@@ -2598,6 +2600,7 @@ class Orchestrator:
             timestamps=voice_output.get("timestamps", []),
             narrative_structure=script_output.get("narrative_structure", []),
             beat_timeline=beat_timeline,
+            voiceover_duration_sec=voice_output.get("voiceover_duration_sec"),
         )
 
         # After compose succeeds, copy output to cycle dir for _promote_to_final
@@ -2633,6 +2636,7 @@ class Orchestrator:
         g10_result = g10.evaluate(
             video_path=compose_output.get("video_path"),
             hard_limit_sec=hard_limit,
+            voiceover_duration_sec=voice_output.get("voiceover_duration_sec"),
         )
         self._record_gate(assets_cache, job_id, "G10_video_validation", g10_result)
         abort = self._enforce_gate(
@@ -2682,7 +2686,7 @@ class Orchestrator:
             caption=script_output.get("caption", ""),
             safety_rules=safety_rules,
             audio_duration_sec=vo.get("voiceover_duration_sec", 0.0),
-            visual_duration_sec=compose_output.get("duration_sec", 0.0),
+            visual_duration_sec=compose_output.get("output_duration_sec", 0.0),
             narrative_structure=script_output.get("narrative_structure", []),
             unverified_claims=script_output.get("unverified_claims", []),
             story_beats=rp.get("story_beats", []),

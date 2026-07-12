@@ -68,8 +68,22 @@ _CHECK_WARN = "warn"
 
 def _check_av_sync(audio_duration: float, visual_duration: float) -> dict[str, Any]:
     """Verify audio and visual durations are within tolerance."""
-    if audio_duration == 0 or visual_duration == 0:
+    if audio_duration == 0 and visual_duration == 0:
         return {"check": "av_sync", "status": _CHECK_SKIP, "detail": "Missing duration data"}
+    if audio_duration == 0 or visual_duration == 0:
+        # FIX-2 (ADR 0030): one track has a known duration while the other is
+        # missing/0 (typically a rendered-output probe hiccup after compose
+        # completed). Surfacing as WARN keeps the gate VISIBLE — the former
+        # SKIP silently defeated the job_18 truncation check whenever the
+        # output-duration probe failed. Both-zero stays SKIP (legacy caller
+        # that supplied no duration data at all).
+        return {
+            "check": "av_sync",
+            "status": _CHECK_WARN,
+            "detail": (f"AV sync unverifiable: audio={audio_duration}s visual={visual_duration}s"),
+            "audio_sec": audio_duration,
+            "visual_sec": visual_duration,
+        }
     drift = abs(audio_duration - visual_duration)
     if drift > _AV_DRIFT_TOLERANCE_SEC:
         return {
@@ -305,7 +319,9 @@ class ReviewerAgent(BaseAgent):
                 "status": "fail",
                 "reason": _FAIL_REASON_VISUAL_COVERAGE,
                 "score": 0,
-                "feedback": f"Hard gate: visual coverage failed ({len(hard_fails)} hard-fail issues)",
+                "feedback": (
+                    f"Hard gate: visual coverage failed ({len(hard_fails)} hard-fail issues)"
+                ),
                 "issues": ["visual_coverage_failed"],
             }
         return None
