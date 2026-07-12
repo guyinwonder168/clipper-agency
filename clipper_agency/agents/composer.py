@@ -1647,14 +1647,7 @@ class ComposerAgent(BaseAgent):
         pad_input_index, pad_gap = _compute_audio_master_pad(
             input_durations, voiceover_duration_sec
         )
-        if pad_input_index >= 0 and pad_input_index < len(normalized_assets):
-            padded = dict(normalized_assets[pad_input_index])
-            padded["target_duration"] = padded.get("target_duration", 5) + pad_gap
-            normalized_assets = [
-                *normalized_assets[:pad_input_index],
-                padded,
-                *normalized_assets[pad_input_index + 1 :],
-            ]
+        normalized_assets = _apply_audio_master_pad(normalized_assets, pad_input_index, pad_gap)
 
         # Build per-input trim + transition chain
         trim_parts: list[str] = []
