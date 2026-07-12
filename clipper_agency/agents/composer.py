@@ -49,6 +49,11 @@ logger = logging.getLogger(__name__)
 _FFMPEG_CONCAT_TIMEOUT = 600  # seconds
 _FFMPEG_NORMALIZE_TIMEOUT = 120  # seconds
 _AUDIO_MASTER_PAD_TOL_SEC = 0.3  # FIX-2: gap below this (s) is not padded
+# FIX-2 (Codex P2): default duration a crossfade/xfade junction subtracts from
+# the rendered visual (per transition config; matches the default in
+# _inflate_durations_for_transitions). Used to pre-compensate the audio-master
+# pad so xfade overlap doesn't leave a frozen-frame visual tail.
+_XFADE_DEFAULT_OVERLAP_SEC = 0.5
 # FIX-2 (audio-as-master): epsilon added to the fallback output cap so a
 # fractional encoder round-off never clips the final frame when the caller
 # did not pass a voiceover duration (legacy / direct callers).
@@ -58,6 +63,7 @@ _AUDIO_MASTER_FALLBACK_EPS_SEC = 1.0
 def _compute_audio_master_pad(
     input_durations: list[float],
     voiceover_duration_sec: float | None,
+    transition_overlap_sec: float = 0.0,
 ) -> tuple[int, float]:
     """FIX-2 (ADR 0030, audio-as-master): compute the last-input pad.
 
@@ -66,6 +72,15 @@ def _compute_audio_master_pad(
     ``gap == 0.0`` (and ``last_input_index == -1``) when no pad is needed: no
     voiceover duration supplied, no inputs, or the visual already fills the
     audio within :data:`_AUDIO_MASTER_PAD_TOL_SEC`.
+
+    ``transition_overlap_sec`` is the total duration crossfade/xfade junctions
+    subtract from the rendered visual (a crossfade removes ~trans_duration per
+    junction: ``rendered = sum(durations) - overlap``). It is ADDED to the gap
+    so the pad fills the TRUE visual shortfall — without it, beats that sum to
+    the voiceover length yield ``gap == 0`` and leave a frozen-frame tail of
+    ~overlap seconds (Codex P2). Conservative: over-estimating the overlap
+    over-pads the last input, which ``-t voiceover_duration_sec`` then caps
+    (harmless).
 
     The pad targets the LAST input (every audio-first input is a real rendered
     clip; legacy callers pass only path-bearing durations). The actual frame
@@ -77,7 +92,7 @@ def _compute_audio_master_pad(
         return -1, 0.0
     if not input_durations:
         return -1, 0.0
-    gap = voiceover_duration_sec - sum(input_durations)
+    gap = voiceover_duration_sec - sum(input_durations) + transition_overlap_sec
     if gap <= _AUDIO_MASTER_PAD_TOL_SEC:
         return -1, 0.0
     return len(input_durations) - 1, gap
@@ -1644,8 +1659,14 @@ class ComposerAgent(BaseAgent):
             (normalized_assets[i] if i < len(normalized_assets) else {}).get("target_duration", 5)
             for i in range(num_videos)
         ]
+        # FIX-2 (Codex P2): a crossfade/xfade junction subtracts ~trans_duration
+        # from the rendered visual, so beats that sum to the voiceover length
+        # still leave a frozen-frame visual tail of ~(N-1)*overlap seconds.
+        # Pre-compensate: add the overlap to the pad gap (conservative — an
+        # over-estimate over-pads the last input, which -t voiceover caps).
+        transition_overlap = max(0, num_videos - 1) * _XFADE_DEFAULT_OVERLAP_SEC
         pad_input_index, pad_gap = _compute_audio_master_pad(
-            input_durations, voiceover_duration_sec
+            input_durations, voiceover_duration_sec, transition_overlap
         )
         normalized_assets = _apply_audio_master_pad(normalized_assets, pad_input_index, pad_gap)
 

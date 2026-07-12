@@ -624,10 +624,33 @@ class TestComposerAudioFirstAudioAsMaster:
         )
         filter_complex = cmd[cmd.index("-filter_complex") + 1]
         assert "trim=duration=4" in filter_complex  # first unchanged
-        assert "trim=duration=9" in filter_complex  # last padded 7 → 9
-        assert "tpad=stop_mode=clone:stop_duration=2.000" in filter_complex
+        # last padded 7 → 9.5: raw gap 2.0 (13-11) + 0.5 xfade overlap (1 junction)
+        assert "trim=duration=9.5" in filter_complex
+        assert "tpad=stop_mode=clone:stop_duration=2.500" in filter_complex
         assert "-shortest" not in cmd
         assert cmd[cmd.index("-t") + 1] == "13.000"
+
+    def test_build_audio_first_cmd_pads_for_xfade_overlap_even_when_sum_matches(
+        self,
+    ):
+        """FIX-2 (Codex P2): beats sum to voiceover BUT crossfade junctions
+        subtract ~0.5s each from the rendered visual — the pad must still fire
+        for the overlap or the visual underfills (frozen-frame tail)."""
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voice.mp3",
+            trimmed_clips=["/tmp/c1.mp4", "/tmp/c2.mp4", "/tmp/c3.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/c1.mp4", "target_duration": 5},
+                {"scene": 2, "path": "/tmp/c2.mp4", "target_duration": 5},
+                {"scene": 3, "path": "/tmp/c3.mp4", "target_duration": 5},
+            ],
+            keyword_captions=[],
+            output_path="/tmp/output.mp4",
+            voiceover_duration_sec=15.0,  # == sum(5+5+5); no raw gap
+        )
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        # 3 scenes → 2 xfade junctions → 1.0s overlap → pad last by ~1.0s
+        assert "tpad=stop_mode=clone:stop_duration=1.000" in filter_complex
 
     def test_build_audio_first_cmd_no_pad_when_visual_fills_audio(self):
         cmd = ComposerAgent._build_audio_first_cmd(
