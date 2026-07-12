@@ -478,14 +478,15 @@ class VoiceProducerAgent(BaseAgent):
 
             chunk_paths.append(chunk_path)
             chunk_timestamps.append(word_ts)
-            try:
-                chunk_durations.append(self._probe_audio_duration(chunk_path))
-            except RuntimeError:
-                # FIX-2: a single unprobeable chunk must not abort the whole
-                # chunked voiceover; offset advances by 0 for this chunk. If
-                # the final audio is genuinely broken, the final-path probe in
-                # _build_success_output will surface it.
-                chunk_durations.append(0.0)
+            # FIX-2 (Codex P2): a chunk whose duration can't be probed must FAIL
+            # LOUD. Appending 0.0 leaves the stitch offset unchanged and silently
+            # misaligns every subsequent chunk's word timestamps — corrupting the
+            # canonical beat timeline Composer + Reviewer consume. The final-path
+            # probe in _build_success_output does NOT catch this (it probes the
+            # concatenated file, which is fine; the per-word timestamps are wrong).
+            # Let the RuntimeError propagate to the provider chain's outer except
+            # (retries the next provider; _build_failed_output if all fail).
+            chunk_durations.append(self._probe_audio_duration(chunk_path))
 
         # Concatenate audio
         final_path = self._voiceover_output_path(job_id, assets_cache)
