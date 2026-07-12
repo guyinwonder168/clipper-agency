@@ -144,6 +144,34 @@ def _encode_image(image_path: str) -> str:
     return f"data:image/jpeg;base64,{encoded}"
 
 
+def _bound_scores(result: dict[str, Any]) -> None:
+    """Bound all ``_SCORE_KEYS`` float fields to [0.0, 1.0], defaulting missing to 0.0.
+
+    Extracted from ``parse_inspection_json`` to keep its cognitive complexity
+    under Sonar's python:S3776 limit.
+    """
+    for key in _SCORE_KEYS:
+        if key in result:
+            result[key] = max(0.0, min(1.0, float(result[key])))
+        else:
+            result[key] = 0.0
+
+
+def _infer_decision(result: dict[str, Any]) -> str:
+    """Derive a valid decision from scores when the LLM omitted/garbled it.
+
+    Extracted from ``parse_inspection_json`` (the ``and``/``or`` branches were
+    the bulk of its cognitive complexity — python:S3776).
+    """
+    claim = result.get("claim_support", 0.0)
+    misleading = result.get("misleading_risk", 0.0)
+    if claim >= 0.70 and misleading <= 0.30:
+        return "accept"
+    if claim < 0.40 or misleading > 0.60:
+        return "reject"
+    return "revise"
+
+
 def parse_inspection_json(raw_content: str) -> dict[str, Any]:
     """Parse LLM response JSON, bound scores, and determine decision.
 
@@ -177,25 +205,14 @@ def parse_inspection_json(raw_content: str) -> dict[str, Any]:
     result.update(parsed)
 
     # Bound float scores
-    for key in _SCORE_KEYS:
-        if key in result:
-            result[key] = max(0.0, min(1.0, float(result[key])))
-        else:
-            result[key] = 0.0
+    _bound_scores(result)
 
     # subject_name — string identity field (FIX-3 entity-binding), not a score.
     result["subject_name"] = str(result.get("subject_name", "") or "")
 
     # Ensure decision is valid
     if result.get("decision") not in ("accept", "revise", "reject"):
-        claim = result.get("claim_support", 0.0)
-        misleading = result.get("misleading_risk", 0.0)
-        if claim >= 0.70 and misleading <= 0.30:
-            result["decision"] = "accept"
-        elif claim < 0.40 or misleading > 0.60:
-            result["decision"] = "reject"
-        else:
-            result["decision"] = "revise"
+        result["decision"] = _infer_decision(result)
 
     return result
 
