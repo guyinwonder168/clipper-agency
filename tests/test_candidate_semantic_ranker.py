@@ -572,6 +572,18 @@ class TestDeriveExpectedEntities:
         )
         assert ents == []
 
+    def test_generic_hook_narration_yields_no_entity(self) -> None:
+        # Codex P2 (r3566760232, job8 fixture): capitalized generic hook/CTA
+        # openers (Halo/Reaksi/Jangan/Simak/Ternyata/...) in narration must NOT
+        # derive entities -> a real person isn't falsely rejected as WRONG_ENTITY
+        # on a context beat. Regresses the pre-fix behavior where these slipped
+        # through (they're capitalized sentence-start words but not proper nouns).
+        ents = derive_expected_entities(
+            spoken_point="Halo guys! Simak Reaksi ini. Ternyata Jangan lupa ya.",
+            visual_must_show="",
+        )
+        assert ents == [], f"expected no entities, got {ents}"
+
     def test_spoken_point_requires_capitalization(self) -> None:
         """Lowercase spoken narration words are treated as noise and dropped."""
         ents = derive_expected_entities(spoken_point="kemarin dia ke pasar")

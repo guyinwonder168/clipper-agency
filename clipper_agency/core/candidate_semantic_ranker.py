@@ -155,6 +155,48 @@ _GENERIC_CONTRACT_WORDS = frozenset(
         "scene",
         "image",
         "picture",
+        # FIX-3 Codex P2 (r3566760232, job8 fixture): generic hook/CTA narration
+        # openers that are capitalized at sentence start but are NOT named
+        # entities. Without these, a generic/context beat derives e.g. "halo" /
+        # "reaksi" / "jangan" as expected entities and falsely rejects any real
+        # person as WRONG_ENTITY -> unnecessary fallback cards. Adding more is
+        # SAFE (only removes false entities; the only risk is dropping a real
+        # entity that is a common word, which is rare for proper-name beats).
+        # Indonesian hook/discourse openers + generic narration nouns:
+        "halo",
+        "reaksi",
+        "jangan",
+        "lihat",
+        "simak",
+        "tunggu",
+        "cek",
+        "yuk",
+        "ayo",
+        "nah",
+        "wah",
+        "wow",
+        "sini",
+        "perhatikan",
+        "coba",
+        "cobain",
+        "padahal",
+        "ternyata",
+        "katanya",
+        "begitu",
+        "sekarang",
+        "ingat",
+        "bayangkan",
+        "fakta",
+        "rahasia",
+        "momen",
+        "aksi",
+        "saksi",
+        "kisah",
+        "cerita",
+        "detik",
+        "drama",
+        "skandal",
+        "sensasi",
     }
 )
 
