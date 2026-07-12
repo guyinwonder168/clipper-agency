@@ -69,6 +69,18 @@ _INSPECTION_FIELDS = (
 # ---------------------------------------------------------------------------
 
 
+def _add_text_part(parts: list[dict[str, Any]], label: str, value: str) -> None:
+    """Append a labelled text part only when value is non-empty.
+
+    DRY helper for the conditional user-message builders — collapses the
+    repeated ``if x: parts.append({...})`` blocks so
+    ``build_visual_inspection_messages`` stays under Sonar's cognitive
+    complexity limit (python:S3776).
+    """
+    if value:
+        parts.append({"type": "text", "text": f"{label}: {value}"})
+
+
 def build_visual_inspection_messages(
     beat: dict,
     frame_paths: list[str],
@@ -82,34 +94,13 @@ def build_visual_inspection_messages(
     images encoded as base64 data URIs in the user message content parts.
     """
     user_parts: list[dict[str, Any]] = []
-
-    # Beat claim
-    spoken = beat.get("spoken_point", "")
-    if spoken:
-        user_parts.append({"type": "text", "text": f"Spoken claim: {spoken}"})
-
-    # Evidence contract — visual_must_show
-    must_show = beat.get("visual_must_show", "")
-    if must_show:
-        user_parts.append({"type": "text", "text": f"Visual must show: {must_show}"})
-
-    # Evidence contract — visual_must_not_show
-    must_not = beat.get("visual_must_not_show", "")
-    if must_not:
-        user_parts.append({"type": "text", "text": f"Visual must NOT show: {must_not}"})
-
-    # OCR text
-    if ocr_text:
-        user_parts.append({"type": "text", "text": f"Detected text in frame: {ocr_text}"})
-
-    # Source description
+    _add_text_part(user_parts, "Spoken claim", beat.get("spoken_point", ""))
+    _add_text_part(user_parts, "Visual must show", beat.get("visual_must_show", ""))
+    _add_text_part(user_parts, "Visual must NOT show", beat.get("visual_must_not_show", ""))
+    _add_text_part(user_parts, "Detected text in frame", ocr_text)
     if source_metadata:
-        src = source_metadata.get("source", "")
-        url = source_metadata.get("url", "")
-        if src:
-            user_parts.append({"type": "text", "text": f"Asset source: {src}"})
-        if url:
-            user_parts.append({"type": "text", "text": f"Asset URL: {url}"})
+        _add_text_part(user_parts, "Asset source", source_metadata.get("source", ""))
+        _add_text_part(user_parts, "Asset URL", source_metadata.get("url", ""))
 
     # Inspection instructions
     user_parts.append({"type": "text", "text": _INSPECTION_FIELDS})

@@ -502,9 +502,22 @@ class TestEntityOverlap:
 class TestDeriveExpectedEntities:
     """FIX-3 — derive_expected_entities pure helper."""
 
-    def test_curated_visual_must_show_token(self) -> None:
-        ents = derive_expected_entities(spoken_point="", visual_must_show="sarwendah")
+    def test_capitalized_visual_must_show_token(self) -> None:
+        # Named entities are capitalized (proper nouns); a lowercase token is
+        # treated as a generic contract word, not an entity.
+        ents = derive_expected_entities(spoken_point="", visual_must_show="Sarwendah")
         assert "sarwendah" in ents
+
+    def test_generic_visual_must_show_yields_no_entity(self) -> None:
+        # Codex P2 #1: a generic contract (Job 8 "Thumbnail berita artis dengan
+        # teks 'BERITA HARI INI'") must NOT derive entities -> the WRONG_ENTITY
+        # rule stays a no-op so a real person (Raffi Ahmad) isn't falsely
+        # rejected on a generic/context beat.
+        ents = derive_expected_entities(
+            spoken_point="",
+            visual_must_show="Thumbnail berita artis dengan teks 'BERITA HARI INI'",
+        )
+        assert ents == []
 
     def test_spoken_point_requires_capitalization(self) -> None:
         """Lowercase spoken narration words are treated as noise and dropped."""
@@ -585,3 +598,35 @@ class TestWrongEntityFallback:
         result = rank_candidates(beat, [wrong])
         assert result[0].decision == "reject"
         assert any(r.decision == "fallback_card" for r in result)
+
+
+class TestAcceptPreferredOverRevise:
+    """FIX-3 Codex P2 #2 — a verified ``accept`` must outrank a higher-scoring
+    Slice-3-downgraded ``revise`` so ``select_best_candidate`` returns the
+    verifiable asset and VD does not fall back past it."""
+
+    def test_accept_outranks_higher_score_revise(self) -> None:
+        beat = {"beat_id": "b1"}
+        verified = _entity_candidate(
+            subject_name="Sarwendah",
+            expected_entities=["sarwendah"],
+            person_match=0.69,
+            asset_id="verified",
+        )
+        unnamed = _entity_candidate(
+            subject_name="",
+            expected_entities=["sarwendah"],
+            person_match=0.94,
+            asset_id="unnamed",
+        )
+        result = rank_candidates(beat, [unnamed, verified])
+        # unnamed is downgraded accept->revise (high score, no subject_name);
+        # verified stays accept (lower score, subject overlaps). accept must
+        # sort FIRST despite the lower score.
+        assert result[0].asset_id == "verified"
+        assert result[0].decision == "accept"
+        assert result[1].decision == "revise"
+        # select_best_candidate returns the accept, not the higher-score revise.
+        best = select_best_candidate(result)
+        assert best is not None
+        assert best.asset_id == "verified"

@@ -51,6 +51,12 @@ _INSPECTION_DIMS = ("person_match", "event_match", "claim_support", "visual_qual
 # Role priority (lower = better): evidence preferred over context
 _ROLE_PRIORITY = {"evidence": 0, "context": 1}
 
+# FIX-3 Codex P2 #2 — decision sort priority (lower = better). An ``accept``
+# must outrank a higher-scoring ``revise`` (the Slice-3 missing-subject
+# downgrade) so ``select_best_candidate`` returns the verifiable accept and VD
+# does not fall back past an acceptable asset.
+_DECISION_SORT_PRIORITY = {"accept": 0, "revise": 1, "reject": 2, "fallback_card": 3}
+
 
 # ---------------------------------------------------------------------------
 # FIX-3 Slice 2 — entity-binding helpers (pure, no I/O).
@@ -109,6 +115,48 @@ _ENTITY_STOPWORDS = frozenset(
     }
 )
 
+# FIX-3 Codex P2 #1 — generic media/news/category words that appear in a
+# visual_must_show contract but are NOT named entities (e.g. Job 8's "Thumbnail
+# berita artis dengan teks 'BERITA HARI INI'"). Even when capitalized (sentence
+# start), these must NOT become expected entities — otherwise a real-person
+# subject_name (e.g. "Raffi Ahmad") is falsely rejected as WRONG_ENTITY on a
+# generic/context beat. The entity rule fires only when a real NAMED target
+# (capitalized, non-generic) was derived.
+_GENERIC_CONTRACT_WORDS = frozenset(
+    {
+        "thumbnail",
+        "berita",
+        "artis",
+        "teks",
+        "video",
+        "gambar",
+        "foto",
+        "headline",
+        "caption",
+        "overlay",
+        "update",
+        "terbaru",
+        "viral",
+        "heboh",
+        "gosip",
+        "kabar",
+        "berbagai",
+        "beberapa",
+        "kumpulan",
+        "hari",
+        "trending",
+        "populer",
+        "terpopuler",
+        "koment",
+        "bawah",
+        "news",
+        "story",
+        "scene",
+        "image",
+        "picture",
+    }
+)
+
 
 def _normalize_token(token: str) -> str:
     """Lowercase + strip non-alpha (handles accents/diacritics + punctuation)."""
@@ -121,35 +169,40 @@ def derive_expected_entities(
 ) -> list[str]:
     """Derive candidate entity-name tokens from a beat's text fields.
 
-    ``visual_must_show`` is hand-written (curated): trust alpha tokens >= min
-    length that are not stopwords. ``spoken_point`` is free-text narration:
-    additionally require a leading uppercase letter as a proper-noun signal so
-    common words don't pollute the set. Returns a de-duplicated list
-    (visual_must_show tokens first, then spoken_point).
+    Both fields require a leading capital (proper-noun signal) AND drop function
+    words (``_ENTITY_STOPWORDS``) + generic media/category terms
+    (``_GENERIC_CONTRACT_WORDS``). This is the FIX-3 Codex-P2 #1 fix: a generic
+    ``visual_must_show`` like "Thumbnail berita artis dengan teks 'BERITA HARI
+    INI'" yields NO entities, so the WRONG_ENTITY rule stays a no-op for
+    generic/context beats (a real-person ``subject_name`` is not falsely
+    rejected). Returns a de-duplicated list (visual_must_show tokens first,
+    then spoken_point).
 
-    Tuned for RECALL: an extra junk token only gives ``subject_name`` another
-    harmless overlap attempt, while a MISSED true entity causes a false
-    WRONG_ENTITY reject. Non-person beats (no curated field, no capitalized
-    proper noun) naturally yield an empty list, which makes the WRONG_ENTITY
-    rule a no-op for them.
+    Tuned for RECALL on the named-entity subset: an extra junk token only gives
+    ``subject_name`` another harmless overlap attempt, while a MISSED true entity
+    causes a false WRONG_ENTITY reject.
     """
     entities: list[str] = []
     seen: set[str] = set()
 
-    def _consider(token: str, curated: bool) -> None:
+    def _consider(token: str) -> None:
         norm = _normalize_token(token)
-        if len(norm) < _ENTITY_MIN_TOKEN_LEN or norm in _ENTITY_STOPWORDS:
+        if len(norm) < _ENTITY_MIN_TOKEN_LEN:
             return
-        if not curated and not token[:1].isupper():
+        if norm in _ENTITY_STOPWORDS or norm in _GENERIC_CONTRACT_WORDS:
+            return
+        # Named-entity signal: require a leading capital (proper noun) for BOTH
+        # fields so a generic lowercase contract yields no entities.
+        if not token[:1].isupper():
             return
         if norm not in seen:
             seen.add(norm)
             entities.append(norm)
 
     for token in (visual_must_show or "").split():
-        _consider(token, curated=True)
+        _consider(token)
     for token in (spoken_point or "").split():
-        _consider(token, curated=False)
+        _consider(token)
     return entities
 
 
@@ -353,11 +406,17 @@ def rank_candidates(
             )
         )
 
-    # Sort: highest score first; tiebreak by role priority
+    # Sort: decision priority first (accept > revise > reject — Codex P2 #2: a
+    # verified accept must outrank a higher-scoring Slice-3-downgraded revise so
+    # VD does not fall back past an acceptable asset), then score, then role.
     def _sort_key(r: RankedCandidate) -> tuple:
         cand_match = next((c for c in candidates if c.get("asset_id") == r.asset_id), {})
         role = cand_match.get("role", "context")
-        return (-r.final_score, _ROLE_PRIORITY.get(role, 99))
+        return (
+            _DECISION_SORT_PRIORITY.get(r.decision, 99),
+            -r.final_score,
+            _ROLE_PRIORITY.get(role, 99),
+        )
 
     ranked.sort(key=_sort_key)
 
