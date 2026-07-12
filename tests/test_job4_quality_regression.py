@@ -355,6 +355,77 @@ class TestReviewerHardGateRegression:
 
         assert result is None, f"Hard gate should pass when durations equal, got {result}"
 
+    def test_av_sync_warns_when_one_duration_is_zero(self):
+        """FIX-2 (ADR 0030): when exactly one of audio/visual duration is 0
+        (compose ran but the output-duration probe hiccupped), the gate must
+        WARN (visible) — not SKIP. The former SKIP silently defeated the
+        job_18 truncation check. Both-zero stays SKIP (legacy no-data caller)."""
+        # One zero, one known → WARN
+        warn = _check_av_sync(audio_duration=35.3, visual_duration=0.0)
+        assert warn["status"] == "warn"
+        assert warn["audio_sec"] == 35.3
+        assert warn["visual_sec"] == 0.0
+
+        # Symmetric: audio zero, visual known → WARN
+        warn2 = _check_av_sync(audio_duration=0.0, visual_duration=32.7)
+        assert warn2["status"] == "warn"
+
+        # Both zero (legacy no-data caller) → still SKIP
+        skip = _check_av_sync(audio_duration=0.0, visual_duration=0.0)
+        assert skip["status"] == "skip"
+
+    def test_engine_reads_output_duration_sec_for_reviewer(self, tmp_path):
+        """FIX-2 Slice D wiring lock: the engine must resolve the reviewer's
+        ``visual_duration_sec`` from ``compose_output['output_duration_sec']``
+        (the real probed value), NOT the stale ``'duration_sec'`` key (which
+        yields 0.0 → av_sync SKIP). Drives the retry-path review stage with a
+        mocked composer output + voice output and spies on _run_reviewer."""
+        from unittest.mock import MagicMock
+
+        from clipper_agency.orchestrator.engine import Orchestrator
+
+        orch = Orchestrator(db_path=str(tmp_path / "db.sqlite"))
+        captured: dict = {}
+
+        def fake_reviewer(**kwargs):
+            captured["visual_duration_sec"] = kwargs.get("visual_duration_sec")
+            captured["audio_duration_sec"] = kwargs.get("audio_duration_sec")
+            return {"status": "pass", "score": 90, "verdict": "pass"}
+
+        orch._run_reviewer = fake_reviewer  # type: ignore[method-assign]
+        orch._persist_agent_output = MagicMock()  # type: ignore[method-assign]
+        orch._enforce_timeline_contract = MagicMock(  # type: ignore[method-assign]
+            return_value=([], None)
+        )
+
+        compose_output = {
+            "status": "completed",
+            "video_path": str(tmp_path / "out.mp4"),
+            "output_duration_sec": 32.7,
+            "rendered_scene_manifest": None,
+            "diagnostics": {},
+        }
+        voice_output = {"voiceover_duration_sec": 35.3, "timestamps": []}
+        script_output = {"script": [], "caption": "", "narrative_structure": []}
+
+        orch._retry_review_and_package(
+            conn=MagicMock(),
+            job_id=1,
+            topic="t",
+            script_output=script_output,
+            compose_output=compose_output,
+            safety_rules=[],
+            niche="test",
+            output_dir=str(tmp_path),
+            assets_cache=str(tmp_path),
+            voice_output=voice_output,
+            research_output={},
+        )
+
+        # The real probed visual duration must reach the reviewer (not 0.0).
+        assert captured["visual_duration_sec"] == 32.7
+        assert captured["audio_duration_sec"] == 35.3
+
 
 # ---------------------------------------------------------------------------
 # Failure Mode 4: Intro Card Contract

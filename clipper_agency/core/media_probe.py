@@ -1,12 +1,15 @@
 """Media probing utilities — ffprobe-based video metadata extraction."""
 
 import json
+import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from clipper_agency.core.safe_paths import resolve_existing_file_under
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,15 @@ def probe_video(
             try:
                 audio_duration = float(audio_dur_raw)
             except (ValueError, TypeError):
+                # FIX-2 (audio-as-master): G10 AUDIO_NOT_TRUNCATED relies on
+                # this value. Log the unparseable string so an "N/A" / malformed
+                # duration is diagnosable instead of silently becoming None
+                # (which the gate then surfaces as a soft_fail).
+                logger.warning(
+                    "media_probe: unparseable audio-stream duration %r for %s",
+                    audio_dur_raw,
+                    resolved,
+                )
                 audio_duration = None
 
     # --- duration ---

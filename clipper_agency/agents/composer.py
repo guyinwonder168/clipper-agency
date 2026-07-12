@@ -49,6 +49,39 @@ logger = logging.getLogger(__name__)
 _FFMPEG_CONCAT_TIMEOUT = 600  # seconds
 _FFMPEG_NORMALIZE_TIMEOUT = 120  # seconds
 _AUDIO_MASTER_PAD_TOL_SEC = 0.3  # FIX-2: gap below this (s) is not padded
+# FIX-2 (audio-as-master): epsilon added to the fallback output cap so a
+# fractional encoder round-off never clips the final frame when the caller
+# did not pass a voiceover duration (legacy / direct callers).
+_AUDIO_MASTER_FALLBACK_EPS_SEC = 1.0
+
+
+def _compute_audio_master_pad(
+    input_durations: list[float],
+    voiceover_duration_sec: float | None,
+) -> tuple[int, float]:
+    """FIX-2 (ADR 0030, audio-as-master): compute the last-input pad.
+
+    Returns ``(last_input_index, gap_seconds)``. ``gap`` is the shortfall the
+    last visual input must fill so the visual stream matches the voiceover.
+    ``gap == 0.0`` (and ``last_input_index == -1``) when no pad is needed: no
+    voiceover duration supplied, no inputs, or the visual already fills the
+    audio within :data:`_AUDIO_MASTER_PAD_TOL_SEC`.
+
+    The pad targets the LAST input (every audio-first input is a real rendered
+    clip; legacy callers pass only path-bearing durations). The actual frame
+    hold is applied downstream via ``tpad=stop_mode=clone`` because
+    ``trim=duration=N`` stops at source EOF and does NOT clone the last frame
+    for a source shorter than ``N``.
+    """
+    if not voiceover_duration_sec or voiceover_duration_sec <= 0:
+        return -1, 0.0
+    if not input_durations:
+        return -1, 0.0
+    gap = voiceover_duration_sec - sum(input_durations)
+    if gap <= _AUDIO_MASTER_PAD_TOL_SEC:
+        return -1, 0.0
+    return len(input_durations) - 1, gap
+
 
 # Lazy singletons — avoid per-call YAML re-parsing.
 _treatment_builder: "TreatmentFilterBuilder | None" = None  # type: ignore[name-defined]  # noqa: F821
@@ -452,6 +485,7 @@ class ComposerAgent(BaseAgent):
                 assets_cache=assets_cache,
                 agent_dir=agent_dir,
                 beat_timeline=beat_timeline,
+                voiceover_duration_sec=voiceover_duration_sec,
             )
 
         # ── Legacy per-scene mode ──
@@ -1060,29 +1094,32 @@ class ComposerAgent(BaseAgent):
         for af in audio_files:
             cmd.extend(["-i", af])
 
-        # FIX-2 (ADR 0030, audio-as-master): pad the visual stream to fill
-        # the voiceover so the audio is never truncated. Formerly `-shortest`
-        # cut the output to the shortest stream (visual < audio → audio cut,
-        # the job_18 "…like dan share" CTA loss). Now: audio is the master —
-        # extend the LAST scene's trim by the gap so sum(target_duration) ≥
-        # voiceover, then cap with `-t voiceover_duration_sec` (replaces
-        # `-shortest`). The pad extends the final clip (holds its last frame
-        # if the source is shorter) rather than looping — monotony is caught
-        # upstream by G9.5 / the visual-coverage gate. Last-resort backstop.
-        if voiceover_duration_sec and voiceover_duration_sec > 0 and normalized_assets:
-            visual_sum = sum(
-                a.get("target_duration", 5) for a in normalized_assets if a.get("path")
-            )
-            gap = voiceover_duration_sec - visual_sum
-            if gap > _AUDIO_MASTER_PAD_TOL_SEC:
-                # Extend the last scene so the visual fills the voiceover.
-                last = dict(normalized_assets[-1])
-                last["target_duration"] = last.get("target_duration", 5) + gap
-                normalized_assets = [*normalized_assets[:-1], last]
-
         # Build per-input trim + transition chain filter graph.
         # Each asset's target_duration controls the trim length; defaults to 5.
         num_videos = len([a for a in normalized_assets if a.get("path")])
+        path_durations = [normalized_assets[i].get("target_duration", 5) for i in range(num_videos)]
+
+        # FIX-2 (ADR 0030, audio-as-master): pad the visual stream to fill the
+        # voiceover so the audio is never truncated. Formerly `-shortest` cut
+        # the output to the shortest stream (visual < audio → audio cut, the
+        # job_18 "…like dan share" CTA loss). Now the LAST EMITTED scene (the
+        # last path-bearing asset the filter chain actually outputs — not the
+        # literal list tail, which may be a path-less text card whose extension
+        # would be inert) is extended by the gap so zoompan images render enough
+        # frames, AND a `tpad=stop_mode=clone` is appended to that input so a
+        # short source VIDEO clip genuinely holds its last frame for the gap
+        # (``trim=duration=N`` alone stops at source EOF and does NOT clone the
+        # last frame). Monotony is caught upstream by the visual-coverage gate.
+        pad_input_index, pad_gap = _compute_audio_master_pad(path_durations, voiceover_duration_sec)
+        if pad_input_index >= 0:
+            padded = dict(normalized_assets[pad_input_index])
+            padded["target_duration"] = padded.get("target_duration", 5) + pad_gap
+            normalized_assets = [
+                *normalized_assets[:pad_input_index],
+                padded,
+                *normalized_assets[pad_input_index + 1 :],
+            ]
+
         trim_parts: list[str] = []
         video_labels: list[str] = []
         builder = _get_treatment_builder()
@@ -1092,15 +1129,21 @@ class ComposerAgent(BaseAgent):
             treatment_filter = builder.build(asset)
             label = f"t{i}"
             video_labels.append(label)
+            # FIX-2: hold the last frame of the padded input for the gap so a
+            # short clip fills the voiceover instead of ending early.
+            tail_tpad = (
+                f",tpad=stop_mode=clone:stop_duration={pad_gap:.3f}" if i == pad_input_index else ""
+            )
             if treatment_filter != "null":
                 trim_parts.append(
                     f"[{i}:v]{treatment_filter},"
                     f"trim=duration={duration},"
-                    f"setpts=PTS-STARTPTS,fps=30[{label}]"
+                    f"setpts=PTS-STARTPTS,fps=30{tail_tpad}[{label}]"
                 )
             else:
                 trim_parts.append(
-                    f"[{i}:v]trim=duration={duration},setpts=PTS-STARTPTS,fps=30[{label}]"
+                    f"[{i}:v]trim=duration={duration},"
+                    f"setpts=PTS-STARTPTS,fps=30{tail_tpad}[{label}]"
                 )
 
         video_filter = _build_transition_chain(
@@ -1156,9 +1199,14 @@ class ComposerAgent(BaseAgent):
         # instead of `-shortest`, which cut the audio to the shorter visual
         # stream (the job_18 CTA loss). The pad above extends the visual to
         # fill the voiceover; `-t` is the safety cap so a too-long visual
-        # never overruns the master audio track.
+        # never overruns the master audio track. When voiceover_duration_sec
+        # is absent (legacy / direct caller), fall back to the summed visual
+        # duration + epsilon so the output stays bounded — the unconditional
+        # `-shortest` removed by FIX-2 previously provided this safety bound.
         if voiceover_duration_sec and voiceover_duration_sec > 0:
             cmd.extend(["-t", f"{voiceover_duration_sec:.3f}"])
+        elif path_durations:
+            cmd.extend(["-t", f"{sum(path_durations) + _AUDIO_MASTER_FALLBACK_EPS_SEC:.3f}"])
         cmd.append(output_path)
         return cmd
 
@@ -1554,11 +1602,18 @@ class ComposerAgent(BaseAgent):
         normalized_assets: list[dict],
         keyword_captions: list,
         output_path: str,
+        voiceover_duration_sec: float | None = None,
     ) -> list[str]:
         """Build FFmpeg command for audio-first composition.
 
         Voiceover is input 0 (audio anchor, never trimmed).
         Visual clips are inputs 1..N, trimmed/fitted to beat durations.
+
+        FIX-2 (ADR 0030, audio-as-master): ``-shortest`` is removed — it cut
+        the output to the shorter visual stream (the job_18 CTA truncation).
+        Instead the last visual input is padded (target_duration extended +
+        ``tpad=stop_mode=clone``) to fill the voiceover, and the output is
+        capped with ``-t voiceover_duration_sec``.
         """
         cmd = ["ffmpeg", "-y"]
 
@@ -1571,6 +1626,24 @@ class ComposerAgent(BaseAgent):
 
         num_videos = len(trimmed_clips)
 
+        # FIX-2: compute the last-input pad to fill the voiceover. Every
+        # audio-first input is a real rendered clip, so all durations count.
+        input_durations = [
+            (normalized_assets[i] if i < len(normalized_assets) else {}).get("target_duration", 5)
+            for i in range(num_videos)
+        ]
+        pad_input_index, pad_gap = _compute_audio_master_pad(
+            input_durations, voiceover_duration_sec
+        )
+        if pad_input_index >= 0 and pad_input_index < len(normalized_assets):
+            padded = dict(normalized_assets[pad_input_index])
+            padded["target_duration"] = padded.get("target_duration", 5) + pad_gap
+            normalized_assets = [
+                *normalized_assets[:pad_input_index],
+                padded,
+                *normalized_assets[pad_input_index + 1 :],
+            ]
+
         # Build per-input trim + transition chain
         trim_parts: list[str] = []
         video_labels: list[str] = []
@@ -1582,15 +1655,21 @@ class ComposerAgent(BaseAgent):
             treatment_filter = builder.build(asset)
             label = f"t{i}"
             video_labels.append(label)
+            # FIX-2: hold the last frame of the padded input for the gap so a
+            # short clip fills the voiceover instead of ending early.
+            tail_tpad = (
+                f",tpad=stop_mode=clone:stop_duration={pad_gap:.3f}" if i == pad_input_index else ""
+            )
             if treatment_filter != "null":
                 trim_parts.append(
                     f"[{i + 1}:v]{treatment_filter},"
                     f"trim=duration={duration},"
-                    f"setpts=PTS-STARTPTS,fps=30[{label}]"
+                    f"setpts=PTS-STARTPTS,fps=30{tail_tpad}[{label}]"
                 )
             else:
                 trim_parts.append(
-                    f"[{i + 1}:v]trim=duration={duration},setpts=PTS-STARTPTS,fps=30[{label}]"
+                    f"[{i + 1}:v]trim=duration={duration},"
+                    f"setpts=PTS-STARTPTS,fps=30{tail_tpad}[{label}]"
                 )
 
         video_filter = _build_transition_chain(
@@ -1626,10 +1705,17 @@ class ComposerAgent(BaseAgent):
                 "yuv420p",
                 "-movflags",
                 "+faststart",
-                "-shortest",
-                output_path,
             ]
         )
+        # FIX-2 (audio-as-master): cap output at the voiceover duration. This
+        # replaces the removed `-shortest` (which truncated audio to the
+        # shorter visual). Fall back to the summed visual + epsilon when the
+        # voiceover duration is unknown so the output is always bounded.
+        if voiceover_duration_sec and voiceover_duration_sec > 0:
+            cmd.extend(["-t", f"{voiceover_duration_sec:.3f}"])
+        elif input_durations:
+            cmd.extend(["-t", f"{sum(input_durations) + _AUDIO_MASTER_FALLBACK_EPS_SEC:.3f}"])
+        cmd.append(output_path)
         return cmd
 
     def _execute_audio_first(
@@ -1643,6 +1729,7 @@ class ComposerAgent(BaseAgent):
         assets_cache: str,
         agent_dir: str,
         beat_timeline: list | None = None,
+        voiceover_duration_sec: float | None = None,
     ) -> dict[str, Any]:
         """Execute audio-first composition pipeline.
 
@@ -1664,6 +1751,7 @@ class ComposerAgent(BaseAgent):
                 assets_cache,
                 agent_dir,
                 beat_timeline=beat_timeline,
+                voiceover_duration_sec=voiceover_duration_sec,
             )
         except subprocess.CalledProcessError as e:
             return self._handle_ffmpeg_error(e, video_path, agent_dir)
@@ -1674,6 +1762,7 @@ class ComposerAgent(BaseAgent):
                 "error": str(e),
                 "video_path": video_path,
                 "thumbnail_path": "",
+                "output_duration_sec": 0.0,
             }
 
     def _try_audio_first_assemble(
@@ -1688,6 +1777,7 @@ class ComposerAgent(BaseAgent):
         assets_cache: str,
         agent_dir: str,
         beat_timeline: list | None = None,
+        voiceover_duration_sec: float | None = None,
     ) -> dict[str, Any]:
         """Attempt audio-first assembly. Raises on FFmpeg or unexpected errors."""
         # ADR 0020 / RC-5: honor the canonical timeline even when empty.
@@ -1729,6 +1819,7 @@ class ComposerAgent(BaseAgent):
                     "error": "No visual assets to compose",
                     "video_path": "",
                     "thumbnail_path": "",
+                    "output_duration_sec": 0.0,
                 }
                 if agent_dir:
                     write_json(
@@ -1749,6 +1840,7 @@ class ComposerAgent(BaseAgent):
                 thumbnail_path,
                 assets_cache,
                 agent_dir,
+                voiceover_duration_sec=voiceover_duration_sec,
             )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1868,6 +1960,7 @@ class ComposerAgent(BaseAgent):
         thumbnail_path: str,
         assets_cache: str,
         agent_dir: str,
+        voiceover_duration_sec: float | None = None,
     ) -> dict[str, Any]:
         """Build FFmpeg command, render, generate thumbnail, and return result."""
         keyword_captions = build_word_subtitle_captions(
@@ -1887,6 +1980,7 @@ class ComposerAgent(BaseAgent):
             normalized_assets=enriched,
             keyword_captions=keyword_captions,
             output_path=video_path,
+            voiceover_duration_sec=voiceover_duration_sec,
         )
 
         logger.info(
@@ -1912,7 +2006,7 @@ class ComposerAgent(BaseAgent):
         }
         if agent_dir:
             self._persist_diagnostics(agent_dir, cmd, "")
-        output = self._attach_visual_coverage_diagnostics(output, None)
+        output = self._attach_visual_coverage_diagnostics(output, voiceover_duration_sec)
 
         # Build generated text region manifest from captions
         text_regions = _build_text_regions_from_captions(keyword_captions)

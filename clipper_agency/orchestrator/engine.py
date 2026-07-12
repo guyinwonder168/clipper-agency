@@ -2600,6 +2600,7 @@ class Orchestrator:
             timestamps=voice_output.get("timestamps", []),
             narrative_structure=script_output.get("narrative_structure", []),
             beat_timeline=beat_timeline,
+            voiceover_duration_sec=voice_output.get("voiceover_duration_sec"),
         )
 
         # After compose succeeds, copy output to cycle dir for _promote_to_final

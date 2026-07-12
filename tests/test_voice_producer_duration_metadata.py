@@ -3,6 +3,8 @@
 import json
 from unittest.mock import patch
 
+import pytest
+
 from clipper_agency.agents.voice_producer import VoiceProducerAgent
 
 
@@ -10,37 +12,39 @@ class TestVoiceProducerDurationMetadata:
     @patch("os.path.exists", return_value=True)
     @patch("subprocess.run")
     def test_parse_ffprobe_duration(self, mock_run, _mock_exists):
-        """_probe_audio_duration returns float seconds or 0.0 on failure."""
+        """_probe_audio_duration returns float seconds on success."""
         agent = VoiceProducerAgent()
         mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = json.dumps({
-            "format": {"duration": "12.345"}
-        })
+        mock_run.return_value.stdout = json.dumps({"format": {"duration": "12.345"}})
         dur = agent._probe_audio_duration("/fake/audio.mp3")
         assert dur == 12.345
 
     @patch("os.path.exists", return_value=True)
     @patch("subprocess.run")
-    def test_probe_duration_failure_returns_zero(self, mock_run, _mock_exists):
+    def test_probe_duration_failure_raises(self, mock_run, _mock_exists):
+        """FIX-2 (ADR 0030): probe RAISES on ffprobe non-zero exit so a
+        success-status voiceover can never carry duration=0.0."""
         agent = VoiceProducerAgent()
         mock_run.return_value.returncode = 1
         mock_run.return_value.stdout = ""
-        dur = agent._probe_audio_duration("/fake/audio.mp3")
-        assert dur == 0.0
+        with pytest.raises(RuntimeError):
+            agent._probe_audio_duration("/fake/audio.mp3")
 
-    def test_probe_duration_missing_file(self):
+    def test_probe_duration_missing_file_raises(self):
+        """FIX-2: missing audio file → raise (never a silent 0.0)."""
         agent = VoiceProducerAgent()
-        dur = agent._probe_audio_duration("/nonexistent/audio.mp3")
-        assert dur == 0.0
+        with pytest.raises(RuntimeError):
+            agent._probe_audio_duration("/nonexistent/audio.mp3")
 
     @patch("os.path.exists", return_value=True)
     @patch("subprocess.run")
-    def test_probe_duration_invalid_json(self, mock_run, _mock_exists):
+    def test_probe_duration_invalid_json_raises(self, mock_run, _mock_exists):
+        """FIX-2: unparseable ffprobe output → raise (never a silent 0.0)."""
         agent = VoiceProducerAgent()
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = "not json"
-        dur = agent._probe_audio_duration("/fake/audio.mp3")
-        assert dur == 0.0
+        with pytest.raises(RuntimeError):
+            agent._probe_audio_duration("/fake/audio.mp3")
 
     @patch("clipper_agency.agents.voice_producer.ensure_agent_dir")
     def test_voiceover_output_path_with_cache(self, mock_ensure):

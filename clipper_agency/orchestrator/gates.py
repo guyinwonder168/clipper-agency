@@ -435,4 +435,22 @@ class GateVideoValidation(BaseGate):
                 },
             )
 
+        if voiceover_duration_sec and info.audio_duration is None:
+            # FIX-2 (ADR 0030): the caller opted into truncation enforcement
+            # by passing voiceover_duration_sec, but ffprobe reported no
+            # audio-STREAM duration. "Cannot verify" must not be equivalent
+            # to "verified good" — the silent pass here was exactly the
+            # job_18 blind spot. Surface as a recorded soft_fail (visible in
+            # the gate trail, non-aborting) instead of silently passing.
+            return GateResult(
+                True,
+                "soft_fail",
+                "AUDIO_NOT_TRUNCATED: audio-stream duration unavailable in "
+                "ffprobe metadata; cannot verify truncation",
+                data={
+                    "reason": "audio_duration_unavailable",
+                    "voiceover_sec": voiceover_duration_sec,
+                },
+            )
+
         return GateResult(True, "pass", "Video valid")

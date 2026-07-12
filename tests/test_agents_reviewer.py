@@ -40,12 +40,21 @@ class TestAVSync:
         assert result["audio_sec"] == 10.0
         assert result["visual_sec"] == 11.0
 
-    def test_skip_when_audio_zero(self):
+    def test_warn_when_audio_zero(self):
+        """FIX-2 (ADR 0030): one duration known + the other 0 (compose ran
+        but probe hiccupped) → WARN (visible), not SKIP. The former SKIP
+        silently defeated the job_18 truncation check."""
         result = _check_av_sync(0.0, 10.0)
-        assert result["status"] == "skip"
+        assert result["status"] == "warn"
 
-    def test_skip_when_visual_zero(self):
+    def test_warn_when_visual_zero(self):
+        """FIX-2: visual 0 + audio known → WARN (visible), not SKIP."""
         result = _check_av_sync(10.0, 0.0)
+        assert result["status"] == "warn"
+
+    def test_skip_only_when_both_zero(self):
+        """Both durations 0 (legacy no-data caller) → still SKIP."""
+        result = _check_av_sync(0.0, 0.0)
         assert result["status"] == "skip"
 
 

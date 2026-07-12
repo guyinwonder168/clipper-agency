@@ -1,4 +1,5 @@
 """Tests for media probing utilities."""
+
 import json
 
 from clipper_agency.core.media_probe import probe_video
@@ -9,11 +10,23 @@ class TestProbeVideo:
         video = tmp_path / "test.mp4"
         video.write_bytes(b"x" * 2048)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [{"codec_type": "video", "width": 720, "height": 1280,
-                         "codec_name": "h264", "pix_fmt": "yuv420p"}],
-            "format": {"duration": "5.0"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 720,
+                            "height": 1280,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                        }
+                    ],
+                    "format": {"duration": "5.0"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), tmp_path)
         assert info is not None
@@ -37,14 +50,24 @@ class TestProbeVideo:
         video = tmp_path / "av.mp4"
         video.write_bytes(b"x" * 2048)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [
-                {"codec_type": "video", "width": 1080, "height": 1920,
-                 "codec_name": "h264", "pix_fmt": "yuv420p"},
-                {"codec_type": "audio", "codec_name": "aac"},
-            ],
-            "format": {"duration": "30.0"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1080,
+                            "height": 1920,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                        },
+                        {"codec_type": "audio", "codec_name": "aac"},
+                    ],
+                    "format": {"duration": "30.0"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), tmp_path)
         assert info is not None
@@ -54,13 +77,23 @@ class TestProbeVideo:
         video = tmp_path / "novoice.mp4"
         video.write_bytes(b"x" * 2048)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [
-                {"codec_type": "video", "width": 1080, "height": 1920,
-                 "codec_name": "h264", "pix_fmt": "yuv420p"},
-            ],
-            "format": {"duration": "30.0"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1080,
+                            "height": 1920,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                        },
+                    ],
+                    "format": {"duration": "30.0"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), tmp_path)
         assert info is not None
@@ -70,12 +103,22 @@ class TestProbeVideo:
         video = tmp_path / "noformat.mp4"
         video.write_bytes(b"x" * 2048)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [
-                {"codec_type": "video", "width": 640, "height": 480,
-                 "codec_name": "h264", "pix_fmt": "yuv420p"},
-            ],
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 640,
+                            "height": 480,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                        },
+                    ],
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), tmp_path)
         assert info is not None
@@ -84,13 +127,23 @@ class TestProbeVideo:
     def test_probe_accepts_file_inside_allowed_base(self, tmp_path, mocker):
         video = tmp_path / "inside.mp4"
         video.write_bytes(b"x" * 2048)
-        check_output = mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [
-                {"codec_type": "video", "width": 1080, "height": 1920,
-                 "codec_name": "h264", "pix_fmt": "yuv420p"},
-            ],
-            "format": {"duration": "30.0"},
-        }).encode())
+        check_output = mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1080,
+                            "height": 1920,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                        },
+                    ],
+                    "format": {"duration": "30.0"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), allowed_base_dir=tmp_path)
 
@@ -110,18 +163,119 @@ class TestProbeVideo:
         assert info is None
         check_output.assert_not_called()
 
+    def test_probe_audio_duration_distinct_from_container(self, tmp_path, mocker):
+        """FIX-2: audio-STREAM duration is the G10 source-of-truth and must be
+        distinct from the container ``format.duration`` (which is
+        -shortest/-t-equalized and hides the job_18 truncation)."""
+        video = tmp_path / "av.mp4"
+        video.write_bytes(b"x" * 2048)
+
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1080,
+                            "height": 1920,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                        },
+                        {"codec_type": "audio", "codec_name": "aac", "duration": "32.7"},
+                    ],
+                    "format": {"duration": "35.3"},
+                }
+            ).encode(),
+        )
+
+        info = probe_video(str(video), tmp_path)
+        assert info is not None
+        assert info.has_audio is True
+        assert info.audio_duration == 32.7
+        assert info.duration == 35.3
+        assert info.audio_duration != info.duration
+
+    def test_probe_audio_duration_none_when_missing(self, tmp_path, mocker):
+        """Audio stream without a duration key → audio_duration is None."""
+        video = tmp_path / "nodur.mp4"
+        video.write_bytes(b"x" * 2048)
+
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1080,
+                            "height": 1920,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                        },
+                        {"codec_type": "audio", "codec_name": "aac"},
+                    ],
+                    "format": {"duration": "35.3"},
+                }
+            ).encode(),
+        )
+
+        info = probe_video(str(video), tmp_path)
+        assert info is not None
+        assert info.has_audio is True
+        assert info.audio_duration is None
+
+    def test_probe_audio_duration_none_when_malformed(self, tmp_path, mocker):
+        """Malformed audio duration string ('N/A') → audio_duration is None."""
+        video = tmp_path / "bad.mp4"
+        video.write_bytes(b"x" * 2048)
+
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1080,
+                            "height": 1920,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                        },
+                        {"codec_type": "audio", "codec_name": "aac", "duration": "N/A"},
+                    ],
+                    "format": {"duration": "35.3"},
+                }
+            ).encode(),
+        )
+
+        info = probe_video(str(video), tmp_path)
+        assert info is not None
+        assert info.has_audio is True
+        assert info.audio_duration is None
+
     def test_probe_parses_sample_aspect_ratio(self, tmp_path, mocker):
         video = tmp_path / "sar.mp4"
         video.write_bytes(b"x" * 2048)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [
-                {"codec_type": "video", "width": 1080, "height": 1920,
-                 "codec_name": "h264", "pix_fmt": "yuv420p",
-                 "sample_aspect_ratio": "7664:7665"},
-            ],
-            "format": {"duration": "10.0"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1080,
+                            "height": 1920,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "sample_aspect_ratio": "7664:7665",
+                        },
+                    ],
+                    "format": {"duration": "10.0"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), tmp_path)
         assert info is not None
@@ -131,13 +285,23 @@ class TestProbeVideo:
         video = tmp_path / "nosar.mp4"
         video.write_bytes(b"x" * 2048)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [
-                {"codec_type": "video", "width": 1080, "height": 1920,
-                 "codec_name": "h264", "pix_fmt": "yuv420p"},
-            ],
-            "format": {"duration": "10.0"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1080,
+                            "height": 1920,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                        },
+                    ],
+                    "format": {"duration": "10.0"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), tmp_path)
         assert info is not None
@@ -147,14 +311,24 @@ class TestProbeVideo:
         video = tmp_path / "invalidsar.mp4"
         video.write_bytes(b"x" * 2048)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [
-                {"codec_type": "video", "width": 1080, "height": 1920,
-                 "codec_name": "h264", "pix_fmt": "yuv420p",
-                 "sample_aspect_ratio": "0:1"},
-            ],
-            "format": {"duration": "10.0"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1080,
+                            "height": 1920,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "sample_aspect_ratio": "0:1",
+                        },
+                    ],
+                    "format": {"duration": "10.0"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), tmp_path)
         assert info is not None
@@ -165,18 +339,25 @@ class TestProbeVideo:
         video = tmp_path / "video.mp4"
         video.write_bytes(b"x" * 100)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [{
-                "codec_type": "video",
-                "width": 1920,
-                "height": 1080,
-                "codec_name": "h264",
-                "pix_fmt": "yuv420p",
-                "sample_aspect_ratio": "1:1",
-                "r_frame_rate": "30/1",
-            }],
-            "format": {"duration": "10.5"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1920,
+                            "height": 1080,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "sample_aspect_ratio": "1:1",
+                            "r_frame_rate": "30/1",
+                        }
+                    ],
+                    "format": {"duration": "10.5"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), str(tmp_path))
         assert info is not None
@@ -187,18 +368,25 @@ class TestProbeVideo:
         video = tmp_path / "ntsc.mp4"
         video.write_bytes(b"x" * 100)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [{
-                "codec_type": "video",
-                "width": 1920,
-                "height": 1080,
-                "codec_name": "h264",
-                "pix_fmt": "yuv420p",
-                "sample_aspect_ratio": "1:1",
-                "r_frame_rate": "30000/1001",
-            }],
-            "format": {"duration": "10.5"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1920,
+                            "height": 1080,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "sample_aspect_ratio": "1:1",
+                            "r_frame_rate": "30000/1001",
+                        }
+                    ],
+                    "format": {"duration": "10.5"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), str(tmp_path))
         assert info is not None
@@ -209,18 +397,25 @@ class TestProbeVideo:
         video = tmp_path / "near30.mp4"
         video.write_bytes(b"x" * 100)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [{
-                "codec_type": "video",
-                "width": 1920,
-                "height": 1080,
-                "codec_name": "h264",
-                "pix_fmt": "yuv420p",
-                "sample_aspect_ratio": "1:1",
-                "r_frame_rate": "1000/33",
-            }],
-            "format": {"duration": "10.5"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1920,
+                            "height": 1080,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "sample_aspect_ratio": "1:1",
+                            "r_frame_rate": "1000/33",
+                        }
+                    ],
+                    "format": {"duration": "10.5"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), str(tmp_path))
         assert info is not None
@@ -231,17 +426,24 @@ class TestProbeVideo:
         video = tmp_path / "nofps.mp4"
         video.write_bytes(b"x" * 100)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [{
-                "codec_type": "video",
-                "width": 1920,
-                "height": 1080,
-                "codec_name": "h264",
-                "pix_fmt": "yuv420p",
-                "sample_aspect_ratio": "1:1",
-            }],
-            "format": {"duration": "10.5"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1920,
+                            "height": 1080,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "sample_aspect_ratio": "1:1",
+                        }
+                    ],
+                    "format": {"duration": "10.5"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), str(tmp_path))
         assert info is not None
@@ -252,10 +454,15 @@ class TestProbeVideo:
         video = tmp_path / "audio_only.mp3"
         video.write_bytes(b"x" * 100)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [{"codec_type": "audio", "codec_name": "mp3"}],
-            "format": {"duration": "3.5"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [{"codec_type": "audio", "codec_name": "mp3"}],
+                    "format": {"duration": "3.5"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), str(tmp_path))
         assert info is None
@@ -265,17 +472,24 @@ class TestProbeVideo:
         video = tmp_path / "bad_fps.mp4"
         video.write_bytes(b"x" * 100)
 
-        mocker.patch("subprocess.check_output", return_value=json.dumps({
-            "streams": [{
-                "codec_type": "video",
-                "width": 1920,
-                "height": 1080,
-                "codec_name": "h264",
-                "pix_fmt": "yuv420p",
-                "r_frame_rate": "N/A",
-            }],
-            "format": {"duration": "10.0"},
-        }).encode())
+        mocker.patch(
+            "subprocess.check_output",
+            return_value=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "width": 1920,
+                            "height": 1080,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "r_frame_rate": "N/A",
+                        }
+                    ],
+                    "format": {"duration": "10.0"},
+                }
+            ).encode(),
+        )
 
         info = probe_video(str(video), str(tmp_path))
         assert info is not None

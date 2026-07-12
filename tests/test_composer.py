@@ -487,8 +487,10 @@ class TestComposerAudioAsMaster:
         assert "-t" in cmd
         assert cmd[cmd.index("-t") + 1] == "12.000"
 
-    def test_build_assembly_cmd_no_t_cap_without_voiceover(self):
-        """No `-t` cap when voiceover_duration_sec is None (legacy callers)."""
+    def test_build_assembly_cmd_fallback_cap_without_voiceover(self):
+        """FIX-2: when voiceover_duration_sec is None the output is still
+        bounded — a fallback `-t` cap = sum(target_duration) + epsilon is
+        added so removing `-shortest` never leaves the output unbounded."""
         valid_normalized = ["/tmp/scene_1.mp4"]
         normalized_assets = [{"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 5}]
         cmd = ComposerAgent._build_assembly_cmd(
@@ -497,7 +499,9 @@ class TestComposerAudioAsMaster:
             [],
             "/tmp/output.mp4",
         )
-        assert "-t" not in cmd
+        assert "-t" in cmd
+        # 5s visual + 1.0s epsilon fallback
+        assert cmd[cmd.index("-t") + 1] == "6.000"
 
     def test_build_assembly_cmd_pads_last_scene_to_fill_voiceover(self):
         """Visual shorter than audio → last scene's trim extended by the gap."""
@@ -537,6 +541,110 @@ class TestComposerAudioAsMaster:
         assert "trim=duration=4" in filter_complex
         assert "trim=duration=7" in filter_complex  # unchanged
         assert "trim=duration=8" not in filter_complex  # not padded
+
+    def test_build_assembly_cmd_tpad_holds_last_frame_on_pad(self):
+        """FIX-2: trim=duration=N stops at source EOF and does NOT clone the
+        last frame, so the padded last scene also gets tpad=stop_mode=clone."""
+        valid_normalized = ["/tmp/scene_1.mp4", "/tmp/scene_2.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 4},
+            {"scene": 2, "path": "/tmp/scene_2.mp4", "target_duration": 7},
+        ]
+        # visual_sum = 11, voiceover = 13 → gap 2s.
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
+            voiceover_duration_sec=13.0,
+        )
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        # Isolate each input's per-clip filter ([N:v]...[tN]).
+        input0 = filter_complex.split("[0:v]")[1].split("[t0]")[0]
+        input1 = filter_complex.split("[1:v]")[1].split("[t1]")[0]
+        assert "tpad=stop_mode=clone" not in input0
+        assert "tpad=stop_mode=clone:stop_duration=2.000" in input1
+
+    def test_build_assembly_cmd_pad_targets_last_path_bearing(self):
+        """FIX-2 (P3): when the literal last asset is a path-less text card,
+        the pad targets the last PATH-BEARING asset the filter chain emits —
+        extending a path-less card would be inert."""
+        valid_normalized = ["/tmp/scene_1.mp4", "/tmp/scene_2.mp4"]
+        normalized_assets = [
+            {"scene": 1, "path": "/tmp/scene_1.mp4", "target_duration": 4},
+            {"scene": 2, "path": "/tmp/scene_2.mp4", "target_duration": 7},
+            {"scene": 3, "target_duration": 2},  # path-less text card (no -i)
+        ]
+        # Only 2 path-bearing inputs; visual_sum over those = 11, gap 2s.
+        cmd = ComposerAgent._build_assembly_cmd(
+            valid_normalized,
+            normalized_assets,
+            [],
+            "/tmp/output.mp4",
+            voiceover_duration_sec=13.0,
+        )
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        # The second path-bearing scene (index 1) is the padded one: 7 → 9.
+        assert "trim=duration=9" in filter_complex
+        assert "tpad=stop_mode=clone:stop_duration=2.000" in filter_complex
+
+
+class TestComposerAudioFirstAudioAsMaster:
+    """FIX-2 (ADR 0030): audio-as-master on the PRODUCTION audio-first path
+    (the path job_18 actually ran). `-shortest` removed, pad + tpad + `-t`."""
+
+    def test_build_audio_first_cmd_drops_shortest_adds_t_cap(self):
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voice.mp3",
+            trimmed_clips=["/tmp/c1.mp4", "/tmp/c2.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/c1.mp4", "target_duration": 5},
+                {"scene": 2, "path": "/tmp/c2.mp4", "target_duration": 5},
+            ],
+            keyword_captions=[],
+            output_path="/tmp/output.mp4",
+            voiceover_duration_sec=12.0,
+        )
+        assert "-shortest" not in cmd
+        assert "-t" in cmd
+        assert cmd[cmd.index("-t") + 1] == "12.000"
+
+    def test_build_audio_first_cmd_pads_last_scene_with_tpad(self):
+        """Visual shorter than voiceover → last clip extended + tpad clone."""
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voice.mp3",
+            trimmed_clips=["/tmp/c1.mp4", "/tmp/c2.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/c1.mp4", "target_duration": 4},
+                {"scene": 2, "path": "/tmp/c2.mp4", "target_duration": 7},
+            ],
+            keyword_captions=[],
+            output_path="/tmp/output.mp4",
+            voiceover_duration_sec=13.0,
+        )
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "trim=duration=4" in filter_complex  # first unchanged
+        assert "trim=duration=9" in filter_complex  # last padded 7 → 9
+        assert "tpad=stop_mode=clone:stop_duration=2.000" in filter_complex
+        assert "-shortest" not in cmd
+        assert cmd[cmd.index("-t") + 1] == "13.000"
+
+    def test_build_audio_first_cmd_no_pad_when_visual_fills_audio(self):
+        cmd = ComposerAgent._build_audio_first_cmd(
+            voiceover_path="/tmp/voice.mp3",
+            trimmed_clips=["/tmp/c1.mp4", "/tmp/c2.mp4"],
+            normalized_assets=[
+                {"scene": 1, "path": "/tmp/c1.mp4", "target_duration": 5},
+                {"scene": 2, "path": "/tmp/c2.mp4", "target_duration": 6},
+            ],
+            keyword_captions=[],
+            output_path="/tmp/output.mp4",
+            voiceover_duration_sec=10.0,
+        )
+        filter_complex = cmd[cmd.index("-filter_complex") + 1]
+        assert "tpad=stop_mode=clone" not in filter_complex
+        assert "trim=duration=5" in filter_complex
+        assert "trim=duration=6" in filter_complex
 
 
 class TestComposerTreatmentFilters:
