@@ -26,11 +26,18 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_SCORE_KEYS: frozenset[str] = frozenset({
-    "person_match", "event_match", "claim_support", "visual_quality",
-    "temporal_match", "source_credibility", "cleanliness_score",
-    "misleading_risk",
-})
+_SCORE_KEYS: frozenset[str] = frozenset(
+    {
+        "person_match",
+        "event_match",
+        "claim_support",
+        "visual_quality",
+        "temporal_match",
+        "source_credibility",
+        "cleanliness_score",
+        "misleading_risk",
+    }
+)
 
 _SYSTEM_PROMPT = (
     "You are a visual evidence inspector for a short-form video production pipeline. "
@@ -42,6 +49,9 @@ _SYSTEM_PROMPT = (
 _INSPECTION_FIELDS = (
     "Respond with a JSON object containing these fields:\n"
     "- person_match (0-1): Is the visible person consistent with the subject?\n"
+    "- subject_name (string): the name of the main person/entity clearly "
+    'depicted, or "" if non-person or unknown — used to verify the image '
+    "shows the BEAT's subject, not a different person\n"
     "- event_match (0-1): Does the scene show the described event?\n"
     "- claim_support (0-1): Does the visual directly support the claim?\n"
     "- visual_quality (0-1): Is image quality acceptable for publication?\n"
@@ -49,7 +59,7 @@ _INSPECTION_FIELDS = (
     "- source_credibility (0-1): Is the source text/logo credible?\n"
     "- cleanliness_score (0-1): Is the frame free of distracting overlays?\n"
     "- misleading_risk (0-1): Could the visual mislead the audience?\n"
-    "- decision: one of \"accept\", \"revise\", or \"reject\"\n"
+    '- decision: one of "accept", "revise", or "reject"\n'
     "- reason: one-sentence justification"
 )
 
@@ -57,6 +67,18 @@ _INSPECTION_FIELDS = (
 # ---------------------------------------------------------------------------
 # Pure functions — no I/O, no side effects
 # ---------------------------------------------------------------------------
+
+
+def _add_text_part(parts: list[dict[str, Any]], label: str, value: str) -> None:
+    """Append a labelled text part only when value is non-empty.
+
+    DRY helper for the conditional user-message builders — collapses the
+    repeated ``if x: parts.append({...})`` blocks so
+    ``build_visual_inspection_messages`` stays under Sonar's cognitive
+    complexity limit (python:S3776).
+    """
+    if value:
+        parts.append({"type": "text", "text": f"{label}: {value}"})
 
 
 def build_visual_inspection_messages(
@@ -71,56 +93,40 @@ def build_visual_inspection_messages(
     Returns a list of messages (system + user) with up to *max_frames*
     images encoded as base64 data URIs in the user message content parts.
     """
-    user_parts: list[dict[str, str]] = []
-
-    # Beat claim
-    spoken = beat.get("spoken_point", "")
-    if spoken:
-        user_parts.append({"type": "text", "text": f"Spoken claim: {spoken}"})
-
-    # Evidence contract — visual_must_show
-    must_show = beat.get("visual_must_show", "")
-    if must_show:
-        user_parts.append({"type": "text", "text": f"Visual must show: {must_show}"})
-
-    # Evidence contract — visual_must_not_show
-    must_not = beat.get("visual_must_not_show", "")
-    if must_not:
-        user_parts.append({"type": "text", "text": f"Visual must NOT show: {must_not}"})
-
-    # OCR text
-    if ocr_text:
-        user_parts.append({"type": "text", "text": f"Detected text in frame: {ocr_text}"})
-
-    # Source description
+    user_parts: list[dict[str, Any]] = []
+    _add_text_part(user_parts, "Spoken claim", beat.get("spoken_point", ""))
+    _add_text_part(user_parts, "Visual must show", beat.get("visual_must_show", ""))
+    _add_text_part(user_parts, "Visual must NOT show", beat.get("visual_must_not_show", ""))
+    _add_text_part(user_parts, "Detected text in frame", ocr_text)
     if source_metadata:
-        src = source_metadata.get("source", "")
-        url = source_metadata.get("url", "")
-        if src:
-            user_parts.append({"type": "text", "text": f"Asset source: {src}"})
-        if url:
-            user_parts.append({"type": "text", "text": f"Asset URL: {url}"})
+        _add_text_part(user_parts, "Asset source", source_metadata.get("source", ""))
+        _add_text_part(user_parts, "Asset URL", source_metadata.get("url", ""))
 
     # Inspection instructions
     user_parts.append({"type": "text", "text": _INSPECTION_FIELDS})
-    user_parts.append({
-        "type": "text",
-        "text": 'Example response:\n{"person_match":0.9,"event_match":0.8,'
-                '"claim_support":0.7,"visual_quality":0.85,'
-                '"temporal_match":0.75,"source_credibility":0.8,'
-                '"cleanliness_score":0.6,"misleading_risk":0.1,'
-                '"decision":"accept","reason":"Good match"}',
-    })
+    user_parts.append(
+        {
+            "type": "text",
+            "text": 'Example response:\n{"person_match":0.9,"subject_name":"Sarwendah",'
+            '"event_match":0.8,'
+            '"claim_support":0.7,"visual_quality":0.85,'
+            '"temporal_match":0.75,"source_credibility":0.8,'
+            '"cleanliness_score":0.6,"misleading_risk":0.1,'
+            '"decision":"accept","reason":"Good match"}',
+        }
+    )
 
     # Images — cap at max_frames
     capped = frame_paths[:max_frames]
     for path in capped:
         try:
             uri = _encode_image(path)
-            user_parts.append({
-                "type": "image_url",
-                "image_url": {"url": uri},
-            })
+            user_parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": uri},
+                }
+            )
         except FileNotFoundError:
             logger.warning("Frame file not found, skipping: %s", path)
 
@@ -138,11 +144,42 @@ def _encode_image(image_path: str) -> str:
     return f"data:image/jpeg;base64,{encoded}"
 
 
+def _bound_scores(result: dict[str, Any]) -> None:
+    """Bound all ``_SCORE_KEYS`` float fields to [0.0, 1.0], defaulting missing to 0.0.
+
+    Extracted from ``parse_inspection_json`` to keep its cognitive complexity
+    under Sonar's python:S3776 limit.
+    """
+    for key in _SCORE_KEYS:
+        if key in result:
+            result[key] = max(0.0, min(1.0, float(result[key])))
+        else:
+            result[key] = 0.0
+
+
+def _infer_decision(result: dict[str, Any]) -> str:
+    """Derive a valid decision from scores when the LLM omitted/garbled it.
+
+    Extracted from ``parse_inspection_json`` (the ``and``/``or`` branches were
+    the bulk of its cognitive complexity — python:S3776).
+    """
+    claim = result.get("claim_support", 0.0)
+    misleading = result.get("misleading_risk", 0.0)
+    if claim >= 0.70 and misleading <= 0.30:
+        return "accept"
+    if claim < 0.40 or misleading > 0.60:
+        return "reject"
+    return "revise"
+
+
 def parse_inspection_json(raw_content: str) -> dict[str, Any]:
     """Parse LLM response JSON, bound scores, and determine decision.
 
     Strips markdown code fences, bounds all float scores to [0.0, 1.0],
     fills missing fields with defaults, and returns a complete dict.
+
+    ``subject_name`` is coerced to a string (default ``""``); it is NOT a
+    bounded score, so it is intentionally outside ``_SCORE_KEYS``.
 
     On parse failure returns ``{"decision": "error", "reason": ...}``.
     """
@@ -168,22 +205,14 @@ def parse_inspection_json(raw_content: str) -> dict[str, Any]:
     result.update(parsed)
 
     # Bound float scores
-    for key in _SCORE_KEYS:
-        if key in result:
-            result[key] = max(0.0, min(1.0, float(result[key])))
-        else:
-            result[key] = 0.0
+    _bound_scores(result)
+
+    # subject_name — string identity field (FIX-3 entity-binding), not a score.
+    result["subject_name"] = str(result.get("subject_name", "") or "")
 
     # Ensure decision is valid
     if result.get("decision") not in ("accept", "revise", "reject"):
-        claim = result.get("claim_support", 0.0)
-        misleading = result.get("misleading_risk", 0.0)
-        if claim >= 0.70 and misleading <= 0.30:
-            result["decision"] = "accept"
-        elif claim < 0.40 or misleading > 0.60:
-            result["decision"] = "reject"
-        else:
-            result["decision"] = "revise"
+        result["decision"] = _infer_decision(result)
 
     return result
 
@@ -239,7 +268,10 @@ class MultimodalInspectionClient:
         """
         logger.info(
             "Inspection started: job=%s beat=%s asset=%s frames=%d",
-            job_id, beat_id, asset_id, len(frame_paths),
+            job_id,
+            beat_id,
+            asset_id,
+            len(frame_paths),
         )
 
         handle: TraceHandle | None = None
@@ -276,15 +308,22 @@ class MultimodalInspectionClient:
             logger.info(
                 "Inspection completed: job=%s beat=%s asset=%s decision=%s "
                 "claim_support=%.2f misleading_risk=%.2f",
-                job_id, beat_id, asset_id, result["decision"],
-                result["claim_support"], result["misleading_risk"],
+                job_id,
+                beat_id,
+                asset_id,
+                result["decision"],
+                result["claim_support"],
+                result["misleading_risk"],
             )
             return result
 
         except Exception as exc:
             logger.exception(
                 "Inspection failed: job=%s beat=%s asset=%s error=%s",
-                job_id, beat_id, asset_id, exc,
+                job_id,
+                beat_id,
+                asset_id,
+                exc,
             )
             return self._error_result(
                 asset_id=asset_id,
@@ -317,7 +356,9 @@ class MultimodalInspectionClient:
             return
         try:
             self._trace_writer.persist_request(  # type: ignore[union-attr]
-                handle, messages=messages, parameters={"temperature": 0.2},
+                handle,
+                messages=messages,
+                parameters={"temperature": 0.2},
             )
         except Exception:
             logger.warning("Trace request persist failed for call %s", handle.call_id)
@@ -362,6 +403,7 @@ class MultimodalInspectionClient:
             "source_credibility": parsed.get("source_credibility", 0.0),
             "cleanliness_score": parsed.get("cleanliness_score", 0.0),
             "misleading_risk": parsed.get("misleading_risk", 0.0),
+            "subject_name": parsed.get("subject_name", ""),
             "decision": parsed.get("decision", "error"),
             "reason": parsed.get("reason", ""),
             "frame_paths": frame_paths,
@@ -387,6 +429,7 @@ class MultimodalInspectionClient:
             "source_credibility": 0.0,
             "cleanliness_score": 0.0,
             "misleading_risk": 0.0,
+            "subject_name": "",
             "decision": "error",
             "reason": reason,
             "frame_paths": frame_paths,

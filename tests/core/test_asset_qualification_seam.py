@@ -25,9 +25,8 @@ from typing import Any
 
 from clipper_agency.agents.segment_producer import SegmentProducerAgent
 from clipper_agency.config.schema import AssetCandidate, BeatFallback, StoryBeat
-from clipper_agency.core import inspection_cache
 from clipper_agency.core.clip_window import ClipWindow
-from clipper_agency.core.inspection_cache import compute_cache_key
+from clipper_agency.core.inspection_cache import compute_candidate_cache_key
 from clipper_agency.core.paths import ensure_agent_dir, job_cache_dir
 from clipper_agency.orchestrator.engine import Orchestrator
 
@@ -51,7 +50,11 @@ def _beat_dict(beat_id: int, candidates: list[dict], **overrides: Any) -> dict:
         narration_goal=f"Beat {beat_id}",
         spoken_point=f"Point {beat_id}",
         safe_wording=f"Safe {beat_id}",
-        visual_must_show=f"Visual {beat_id}",
+        # FIX-3 round-3: visual_must_show is the AUTHORITATIVE entity-binding
+        # source, so the placeholder visual contract is aligned with the
+        # depicted subject_name ("Point N") — otherwise the spurious "visual"
+        # entity would reject every placeholder candidate as WRONG_ENTITY.
+        visual_must_show=f"Point {beat_id}",
         visual_must_not_show="",
         overlay_text=f"Overlay {beat_id}",
         caption_keywords=[],
@@ -66,6 +69,7 @@ def _beat_dict(beat_id: int, candidates: list[dict], **overrides: Any) -> dict:
 def _high() -> dict:
     return {
         "decision": "accept",
+        "subject_name": "Point 1",
         "person_match": 0.9,
         "event_match": 0.85,
         "claim_support": 0.9,
@@ -78,6 +82,7 @@ def _high() -> dict:
 def _low() -> dict:
     return {
         "decision": "reject",
+        "subject_name": "Point 1",
         "person_match": 0.1,
         "event_match": 0.1,
         "claim_support": 0.2,
@@ -87,21 +92,27 @@ def _low() -> dict:
     }
 
 
-def _store(cache_dir: str, cand: dict, beat_claim: str, insp: dict) -> None:
-    """Pre-store an inspection so ``_score_candidate`` hits cache (no inspector call)."""
+def _store(
+    cache_dir: str,
+    cand: dict,
+    beat_claim: str,
+    visual_must_show: str,
+    insp: dict,
+    visual_must_not_show: str = "",
+) -> None:
+    """Pre-store an inspection so ``_score_candidate`` hits cache (no inspector call).
+
+    ``visual_must_show`` / ``visual_must_not_show`` MUST match the beat the
+    candidate is scored against — they feed the evidence-contract hash in the
+    shared cache key (FIX-3), so a mismatch would store under a different key and
+    the AQ scorer would miss the cache.
+    """
     from clipper_agency.core.inspection_cache import store as cache_store
 
     ac = AssetCandidate(**cand)
     cache_store(
         cache_dir,
-        compute_cache_key(
-            asset_path=ac.url,
-            asset_hash=inspection_cache.compute_asset_content_hash(ac),
-            beat_claim=beat_claim,
-            evidence_contract_hash="",
-            model="multimodal",
-            prompt_version="1.0",
-        ),
+        compute_candidate_cache_key(ac, beat_claim, visual_must_show, visual_must_not_show),
         insp,
     )
 
@@ -124,10 +135,11 @@ class TestApplyAssetQualificationSeam:
         beat1 = _beat_dict(1, [accept, reject_b1])  # accept + reject → qualified
         beat2 = _beat_dict(2, [reject_b2])  # all reject → exhausted_text_card
 
-        # Force cache hits (no real inspector). beat_claim is each beat's spoken_point.
-        _store(cache_dir, accept, "Point 1", _high())
-        _store(cache_dir, reject_b1, "Point 1", _low())
-        _store(cache_dir, reject_b2, "Point 2", _low())
+        # Force cache hits (no real inspector). beat_claim is each beat's spoken_point;
+        # visual_must_show matches each beat's ``_beat_dict`` (f"Point {beat_id}").
+        _store(cache_dir, accept, "Point 1", "Point 1", _high())
+        _store(cache_dir, reject_b1, "Point 1", "Point 1", _low())
+        _store(cache_dir, reject_b2, "Point 2", "Point 2", _low())
 
         research_output = {
             "story_beats": [beat1, beat2],
@@ -201,7 +213,7 @@ class TestApplyAssetQualificationSeam:
         cache_dir = f"{vd_dir}/inspection_cache"
         accept = _candidate("https://a.com/win.mp4", ctype="tiktok_clip")
         beat = _beat_dict(1, [accept])
-        _store(cache_dir, accept, "Point 1", _high())
+        _store(cache_dir, accept, "Point 1", "Point 1", _high())
         monkeypatch.setattr(
             SegmentProducerAgent,
             "_discover_multi_source_assets",
@@ -236,7 +248,7 @@ class TestApplyAssetQualificationSeam:
         cache_dir = f"{vd_dir}/inspection_cache"
         accept = _candidate("https://a.com/default.mp4", ctype="tiktok_clip")
         beat = _beat_dict(1, [accept])
-        _store(cache_dir, accept, "Point 1", _high())
+        _store(cache_dir, accept, "Point 1", "Point 1", _high())
 
         qualified_beats, _ = Orchestrator._apply_asset_qualification(
             SimpleNamespace(_trace_writer=None),

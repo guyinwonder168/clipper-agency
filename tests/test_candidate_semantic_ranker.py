@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-import pytest
-
 from clipper_agency.core.candidate_semantic_ranker import (
     RankedCandidate,
     apply_rejection_rules,
     compute_final_score,
+    derive_expected_entities,
+    entity_overlap,
     rank_candidates,
     select_best_candidate,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_inspection(
     person_match: float = 0.7,
@@ -82,13 +82,21 @@ class TestComputeFinalScore:
     def test_higher_score_for_better_inputs(self) -> None:
         """Better inspection + relevance → higher final score."""
         low = compute_final_score(
-            _make_inspection(person_match=0.3, event_match=0.3, claim_support=0.3, visual_quality=0.3),
-            _make_visual_relevance(person_match=0.3, event_match=0.3, claim_support=0.3, visual_quality=0.3),
+            _make_inspection(
+                person_match=0.3, event_match=0.3, claim_support=0.3, visual_quality=0.3
+            ),
+            _make_visual_relevance(
+                person_match=0.3, event_match=0.3, claim_support=0.3, visual_quality=0.3
+            ),
             cleanliness_score=0.3,
         )
         high = compute_final_score(
-            _make_inspection(person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9),
-            _make_visual_relevance(person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9),
+            _make_inspection(
+                person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9
+            ),
+            _make_visual_relevance(
+                person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9
+            ),
             cleanliness_score=0.9,
         )
         assert high > low
@@ -96,8 +104,16 @@ class TestComputeFinalScore:
     def test_returns_zero_for_all_zero_inputs(self) -> None:
         """All-zero inputs produce a final score of 0.0."""
         score = compute_final_score(
-            _make_inspection(person_match=0, event_match=0, claim_support=0, visual_quality=0, source_credibility=0),
-            _make_visual_relevance(person_match=0, event_match=0, claim_support=0, visual_quality=0),
+            _make_inspection(
+                person_match=0,
+                event_match=0,
+                claim_support=0,
+                visual_quality=0,
+                source_credibility=0,
+            ),
+            _make_visual_relevance(
+                person_match=0, event_match=0, claim_support=0, visual_quality=0
+            ),
             cleanliness_score=0.0,
         )
         assert score == 0.0
@@ -135,8 +151,16 @@ class TestComputeFinalScore:
     def test_score_bounded_zero_to_one(self) -> None:
         """Score is always in [0.0, 1.0]."""
         score = compute_final_score(
-            _make_inspection(person_match=1.0, event_match=1.0, claim_support=1.0, visual_quality=1.0, source_credibility=1.0),
-            _make_visual_relevance(person_match=1.0, event_match=1.0, claim_support=1.0, visual_quality=1.0),
+            _make_inspection(
+                person_match=1.0,
+                event_match=1.0,
+                claim_support=1.0,
+                visual_quality=1.0,
+                source_credibility=1.0,
+            ),
+            _make_visual_relevance(
+                person_match=1.0, event_match=1.0, claim_support=1.0, visual_quality=1.0
+            ),
             cleanliness_score=1.0,
         )
         assert 0.0 <= score <= 1.0
@@ -207,13 +231,21 @@ class TestRankCandidates:
         beat = {"beat_id": "b1"}
         low = _make_candidate(
             asset_id="low",
-            inspection=_make_inspection(person_match=0.3, event_match=0.3, claim_support=0.3, visual_quality=0.3),
-            visual_relevance=_make_visual_relevance(person_match=0.3, event_match=0.3, claim_support=0.3, visual_quality=0.3),
+            inspection=_make_inspection(
+                person_match=0.3, event_match=0.3, claim_support=0.3, visual_quality=0.3
+            ),
+            visual_relevance=_make_visual_relevance(
+                person_match=0.3, event_match=0.3, claim_support=0.3, visual_quality=0.3
+            ),
         )
         high = _make_candidate(
             asset_id="high",
-            inspection=_make_inspection(person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9),
-            visual_relevance=_make_visual_relevance(person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9),
+            inspection=_make_inspection(
+                person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9
+            ),
+            visual_relevance=_make_visual_relevance(
+                person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9
+            ),
         )
         result = rank_candidates(beat, [low, high])
         assert len(result) == 2
@@ -252,14 +284,22 @@ class TestRankCandidates:
         evidence = _make_candidate(
             asset_id="evidence",
             role="evidence",
-            inspection=_make_inspection(person_match=0.5, event_match=0.5, claim_support=0.5, visual_quality=0.5),
-            visual_relevance=_make_visual_relevance(person_match=0.5, event_match=0.5, claim_support=0.5, visual_quality=0.5),
+            inspection=_make_inspection(
+                person_match=0.5, event_match=0.5, claim_support=0.5, visual_quality=0.5
+            ),
+            visual_relevance=_make_visual_relevance(
+                person_match=0.5, event_match=0.5, claim_support=0.5, visual_quality=0.5
+            ),
         )
         context = _make_candidate(
             asset_id="context",
             role="context",
-            inspection=_make_inspection(person_match=0.5, event_match=0.5, claim_support=0.5, visual_quality=0.5),
-            visual_relevance=_make_visual_relevance(person_match=0.5, event_match=0.5, claim_support=0.5, visual_quality=0.5),
+            inspection=_make_inspection(
+                person_match=0.5, event_match=0.5, claim_support=0.5, visual_quality=0.5
+            ),
+            visual_relevance=_make_visual_relevance(
+                person_match=0.5, event_match=0.5, claim_support=0.5, visual_quality=0.5
+            ),
         )
         result = rank_candidates(beat, [context, evidence])
         # Same score, but evidence should come first
@@ -269,8 +309,12 @@ class TestRankCandidates:
         """A single good candidate gets decision='accept'."""
         beat = {"beat_id": "b1"}
         good = _make_candidate(
-            inspection=_make_inspection(person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9),
-            visual_relevance=_make_visual_relevance(person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9),
+            inspection=_make_inspection(
+                person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9
+            ),
+            visual_relevance=_make_visual_relevance(
+                person_match=0.9, event_match=0.9, claim_support=0.9, visual_quality=0.9
+            ),
         )
         result = rank_candidates(beat, [good])
         assert len(result) == 1
@@ -329,3 +373,330 @@ class TestSelectBestCandidate:
             RankedCandidate("a1", "b1", 0.1, "reject", {}, {}, 0.1, "bad"),
         ]
         assert select_best_candidate(ranked) is None
+
+
+# ---------------------------------------------------------------------------
+# FIX-3 — entity-binding (WRONG_ENTITY rule + helpers + missing-subject downgrade)
+# ---------------------------------------------------------------------------
+
+
+def _entity_candidate(
+    subject_name: str = "",
+    expected_entities: list[str] | None = None,
+    person_match: float = 0.9,
+    claim_support: float = 0.9,
+    misleading_risk: float = 0.1,
+    asset_id: str = "asset_1",
+) -> dict:
+    """Build a scored-candidate dict carrying the FIX-3 entity-binding fields."""
+    return {
+        "asset_id": asset_id,
+        "beat_id": "b1",
+        "role": "evidence",
+        "treatment": "picture_in_picture",
+        "cleanliness_score": 0.9,
+        "expected_entities": expected_entities if expected_entities is not None else [],
+        "inspection": {
+            "person_match": person_match,
+            "event_match": 0.9,
+            "claim_support": claim_support,
+            "visual_quality": 0.9,
+            "misleading_risk": misleading_risk,
+            "source_credibility": 0.9,
+            "subject_name": subject_name,
+        },
+        "visual_relevance": {
+            "person_match": person_match,
+            "event_match": 0.9,
+            "claim_support": claim_support,
+            "visual_quality": 0.9,
+        },
+    }
+
+
+class TestEntityBindingRejection:
+    """FIX-3 — WRONG_ENTITY rejection at apply_rejection_rules (job_18 fix)."""
+
+    def test_wrong_entity_rejected(self) -> None:
+        """job_18 case: a Sarwendah beat got a Jennifer Coppen image -> rejected."""
+        candidate = _entity_candidate(
+            subject_name="Jennifer Coppen",
+            expected_entities=["sarwendah"],
+        )
+        assert apply_rejection_rules(candidate) == "WRONG_ENTITY"
+
+    def test_correct_entity_not_rejected(self) -> None:
+        """Subject name overlapping the expected entity passes."""
+        candidate = _entity_candidate(
+            subject_name="Sarwendah",
+            expected_entities=["sarwendah"],
+        )
+        assert apply_rejection_rules(candidate) is None
+
+    def test_alias_transliteration_tolerated(self) -> None:
+        """Sarwenda (no trailing h) vs sarwendah — substring alias match, not rejected."""
+        candidate = _entity_candidate(
+            subject_name="Sarwenda",
+            expected_entities=["sarwendah"],
+        )
+        assert apply_rejection_rules(candidate) is None
+
+    def test_missing_subject_name_skips_wrong_entity(self) -> None:
+        """Empty subject_name => WRONG_ENTITY rule no-op (Slice 3 handles via revise)."""
+        candidate = _entity_candidate(
+            subject_name="",
+            expected_entities=["sarwendah"],
+        )
+        assert apply_rejection_rules(candidate) is None
+
+    def test_no_expected_entities_is_noop(self) -> None:
+        """Backward compat: undecorated candidate never triggers WRONG_ENTITY."""
+        candidate = _entity_candidate(
+            subject_name="Anyone",
+            expected_entities=[],
+        )
+        # Remove the key entirely to prove absence (not just empty) is safe too.
+        del candidate["expected_entities"]
+        assert apply_rejection_rules(candidate) is None
+
+    def test_wrong_entity_takes_precedence(self) -> None:
+        """WRONG_ENTITY is checked first (most specific), before misleading_risk."""
+        candidate = _entity_candidate(
+            subject_name="Jennifer Coppen",
+            expected_entities=["sarwendah"],
+            misleading_risk=0.9,
+            claim_support=0.1,
+        )
+        assert apply_rejection_rules(candidate) == "WRONG_ENTITY"
+
+
+class TestVisualMustShowAuthoritativeBinding:
+    """FIX-3 round-3 (Codex) — visual_must_show is the authoritative binding
+    source; a person merely MENTIONED in spoken_point must not widen the binding
+    set and let a wrong-person asset pass WRONG_ENTITY (job_18 failure mode)."""
+
+    def test_mentioned_person_excluded_when_visual_must_show_names_target(self) -> None:
+        """visual_must_show='Sarwendah' is authoritative; 'Jennifer Coppen'
+        appearing only in spoken_point must NOT enter the binding set."""
+        ents = derive_expected_entities(
+            spoken_point="Sarwendah berbeda dengan Jennifer Coppen",
+            visual_must_show="Sarwendah",
+        )
+        assert "sarwendah" in ents
+        assert "jennifer" not in ents
+        assert "coppen" not in ents
+
+    def test_wrong_person_from_spoken_point_rejected(self) -> None:
+        """End-to-end job_18 case: an asset whose subject_name is the merely-
+        mentioned person is rejected as WRONG_ENTITY because the binding set
+        comes from visual_must_show alone."""
+        expected = derive_expected_entities(
+            spoken_point="Sarwendah berbeda dengan Jennifer Coppen",
+            visual_must_show="Sarwendah",
+        )
+        candidate = _entity_candidate(
+            subject_name="Jennifer Coppen",
+            expected_entities=expected,
+        )
+        assert apply_rejection_rules(candidate) == "WRONG_ENTITY"
+
+    def test_correct_visual_must_show_target_passes(self) -> None:
+        """Sanity: the authoritative target itself is still accepted."""
+        expected = derive_expected_entities(
+            spoken_point="Sarwendah berbeda dengan Jennifer Coppen",
+            visual_must_show="Sarwendah",
+        )
+        candidate = _entity_candidate(
+            subject_name="Sarwendah",
+            expected_entities=expected,
+        )
+        assert apply_rejection_rules(candidate) is None
+
+    def test_spoken_point_fallback_when_visual_must_show_generic(self) -> None:
+        """Recall preserved: when visual_must_show is a generic contract (no
+        named entities), spoken_point names are used so a beat that names its
+        subject only in narration still gets entity binding."""
+        ents = derive_expected_entities(
+            spoken_point="Sarwendah baru saja update",
+            visual_must_show="Thumbnail berita artis",
+        )
+        assert "sarwendah" in ents
+
+
+class TestEntityOverlap:
+    """FIX-3 — entity_overlap pure helper (the alias/fuzzy matching core)."""
+
+    def test_exact_token_match(self) -> None:
+        assert entity_overlap("Sarwendah", ["sarwendah"]) is True
+
+    def test_case_insensitive(self) -> None:
+        assert entity_overlap("sarwendah", ["SARWENDAH"]) is True
+
+    def test_substring_alias(self) -> None:
+        """sarwenda is a substring of sarwendah (transliteration tolerance)."""
+        assert entity_overlap("Sarwenda", ["sarwendah"]) is True
+
+    def test_jennifer_not_sarwendah(self) -> None:
+        """The load-bearing safety case: different celebrity must NOT match."""
+        assert entity_overlap("Jennifer Coppen", ["sarwendah"]) is False
+
+    def test_multi_word_subject_token_match(self) -> None:
+        assert entity_overlap("Cristiano Ronaldo", ["ronaldo"]) is True
+
+    def test_empty_inputs(self) -> None:
+        assert entity_overlap("", ["x"]) is False
+        assert entity_overlap("x", []) is False
+
+    def test_short_expected_entity_ignored(self) -> None:
+        """Expected tokens shorter than 4 chars are skipped (kills 'wen'-style noise)."""
+        assert entity_overlap("Jo", ["jo"]) is False
+
+
+class TestDeriveExpectedEntities:
+    """FIX-3 — derive_expected_entities pure helper."""
+
+    def test_capitalized_visual_must_show_token(self) -> None:
+        # Named entities are capitalized (proper nouns); a lowercase token is
+        # treated as a generic contract word, not an entity.
+        ents = derive_expected_entities(spoken_point="", visual_must_show="Sarwendah")
+        assert "sarwendah" in ents
+
+    def test_generic_visual_must_show_yields_no_entity(self) -> None:
+        # Codex P2 #1: a generic contract (Job 8 "Thumbnail berita artis dengan
+        # teks 'BERITA HARI INI'") must NOT derive entities -> the WRONG_ENTITY
+        # rule stays a no-op so a real person (Raffi Ahmad) isn't falsely
+        # rejected on a generic/context beat.
+        ents = derive_expected_entities(
+            spoken_point="",
+            visual_must_show="Thumbnail berita artis dengan teks 'BERITA HARI INI'",
+        )
+        assert ents == []
+
+    def test_generic_hook_narration_yields_no_entity(self) -> None:
+        # Codex P2 (r3566760232, job8 fixture): capitalized generic hook/CTA
+        # openers (Halo/Reaksi/Jangan/Simak/Ternyata/...) in narration must NOT
+        # derive entities -> a real person isn't falsely rejected as WRONG_ENTITY
+        # on a context beat. Regresses the pre-fix behavior where these slipped
+        # through (they're capitalized sentence-start words but not proper nouns).
+        ents = derive_expected_entities(
+            spoken_point="Halo guys! Simak Reaksi ini. Ternyata Jangan lupa ya.",
+            visual_must_show="",
+        )
+        assert ents == [], f"expected no entities, got {ents}"
+
+    def test_spoken_point_requires_capitalization(self) -> None:
+        """Lowercase spoken narration words are treated as noise and dropped."""
+        ents = derive_expected_entities(spoken_point="kemarin dia ke pasar")
+        assert ents == []
+
+    def test_capitalized_spoken_token_kept(self) -> None:
+        ents = derive_expected_entities(spoken_point="Sarwendah baru saja update")
+        assert "sarwendah" in ents
+        assert "baru" not in ents
+
+    def test_stopwords_dropped(self) -> None:
+        ents = derive_expected_entities(spoken_point="Yang Dari Dengan")
+        assert ents == []
+
+    def test_dedup_across_fields(self) -> None:
+        ents = derive_expected_entities(spoken_point="Sarwendah", visual_must_show="sarwendah")
+        assert ents.count("sarwendah") == 1
+
+    def test_duplicate_token_within_field_deduped(self) -> None:
+        """A repeated capitalized token within ONE field is de-duplicated."""
+        ents = derive_expected_entities(spoken_point="", visual_must_show="Sarwendah Sarwendah")
+        assert ents == ["sarwendah"]
+
+    def test_empty_inputs(self) -> None:
+        assert derive_expected_entities("", "") == []
+
+
+class TestMissingSubjectDowngrade:
+    """FIX-3 Slice 3 — person depicted + no subject_name + entity beat => revise."""
+
+    def test_accept_downgraded_to_revise(self) -> None:
+        beat = {"beat_id": "b1"}
+        cand = _entity_candidate(
+            subject_name="",
+            expected_entities=["sarwendah"],
+            person_match=0.9,
+        )
+        result = rank_candidates(beat, [cand])
+        assert result[0].decision == "revise"
+        assert "subject_name missing" in result[0].rank_reason
+
+    def test_accept_kept_when_subject_overlaps(self) -> None:
+        beat = {"beat_id": "b1"}
+        cand = _entity_candidate(
+            subject_name="Sarwendah",
+            expected_entities=["sarwendah"],
+            person_match=0.9,
+        )
+        result = rank_candidates(beat, [cand])
+        assert result[0].decision == "accept"
+
+    def test_no_downgrade_without_expected_entities(self) -> None:
+        """Backward compat: undecorated candidate stays accept (entity binding off)."""
+        beat = {"beat_id": "b1"}
+        cand = _entity_candidate(subject_name="", expected_entities=[], person_match=0.9)
+        del cand["expected_entities"]
+        result = rank_candidates(beat, [cand])
+        assert result[0].decision == "accept"
+
+    def test_no_downgrade_when_person_match_low(self) -> None:
+        """A non-person asset (person_match < 0.5) is not entity-checked."""
+        beat = {"beat_id": "b1"}
+        cand = _entity_candidate(
+            subject_name="",
+            expected_entities=["sarwendah"],
+            person_match=0.3,
+        )
+        result = rank_candidates(beat, [cand])
+        assert result[0].decision == "accept"
+
+
+class TestWrongEntityFallback:
+    """FIX-3 — all-wrong-entity beat yields the fallback_card path."""
+
+    def test_all_wrong_entity_appends_fallback(self) -> None:
+        beat = {"beat_id": "b1"}
+        wrong = _entity_candidate(
+            subject_name="Jennifer Coppen",
+            expected_entities=["sarwendah"],
+            asset_id="wrong",
+        )
+        result = rank_candidates(beat, [wrong])
+        assert result[0].decision == "reject"
+        assert any(r.decision == "fallback_card" for r in result)
+
+
+class TestAcceptPreferredOverRevise:
+    """FIX-3 Codex P2 #2 — a verified ``accept`` must outrank a higher-scoring
+    Slice-3-downgraded ``revise`` so ``select_best_candidate`` returns the
+    verifiable asset and VD does not fall back past it."""
+
+    def test_accept_outranks_higher_score_revise(self) -> None:
+        beat = {"beat_id": "b1"}
+        verified = _entity_candidate(
+            subject_name="Sarwendah",
+            expected_entities=["sarwendah"],
+            person_match=0.69,
+            asset_id="verified",
+        )
+        unnamed = _entity_candidate(
+            subject_name="",
+            expected_entities=["sarwendah"],
+            person_match=0.94,
+            asset_id="unnamed",
+        )
+        result = rank_candidates(beat, [unnamed, verified])
+        # unnamed is downgraded accept->revise (high score, no subject_name);
+        # verified stays accept (lower score, subject overlaps). accept must
+        # sort FIRST despite the lower score.
+        assert result[0].asset_id == "verified"
+        assert result[0].decision == "accept"
+        assert result[1].decision == "revise"
+        # select_best_candidate returns the accept, not the higher-score revise.
+        best = select_best_candidate(result)
+        assert best is not None
+        assert best.asset_id == "verified"

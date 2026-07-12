@@ -20,11 +20,14 @@ if TYPE_CHECKING:
 from clipper_agency.agents.base import BaseAgent
 from clipper_agency.config.schema import StoryBeat, WordTimestamp
 from clipper_agency.core.artifacts import write_json
-from clipper_agency.core.candidate_semantic_ranker import rank_candidates, select_best_candidate
+from clipper_agency.core.candidate_semantic_ranker import (
+    derive_expected_entities,
+    rank_candidates,
+    select_best_candidate,
+)
 from clipper_agency.core.frame_inspection_pipeline import run_frame_inspection_pipeline
 from clipper_agency.core.inspection_cache import (
-    compute_asset_content_hash,
-    compute_cache_key,
+    compute_candidate_cache_key,
     lookup,
     store,
 )
@@ -916,15 +919,18 @@ class VisualDirectorAgent(BaseAgent):
     ) -> dict | None:
         """Score a single candidate using cache or multimodal inspection."""
         asset_id = f"{candidate.type}_{candidate.url[:40]}"
-        cache_key = compute_cache_key(
-            asset_path=candidate.url,
-            asset_hash=compute_asset_content_hash(candidate),
-            beat_claim=beat.spoken_point,
-            evidence_contract_hash="",
-            model="multimodal",
-            prompt_version="1.0",
+        cache_key = compute_candidate_cache_key(
+            candidate,
+            beat.spoken_point,
+            beat.visual_must_show,
+            beat.visual_must_not_show,
         )
         cached = lookup(cache_dir, cache_key) if cache_dir else None
+        # FIX-3 R-1 stale-cache guard (see asset_qualification._score_candidate):
+        # a pre-FIX-3 cached inspection has no subject_name; treat it as a MISS
+        # so it is re-inspected (self-healing on resume/retry).
+        if cached is not None and cached.get("subject_name") is None:
+            cached = None
         inspection = cached or self._run_multimodal_inspection(
             candidate,
             beat,
@@ -945,6 +951,7 @@ class VisualDirectorAgent(BaseAgent):
             "beat_id": str(beat.beat_id),
             "role": beat.role,
             "treatment": plan_item.get("treatment", ""),
+            "expected_entities": derive_expected_entities(beat.spoken_point, beat.visual_must_show),
             "inspection": inspection,
             "visual_relevance": {
                 "person_match": rel.person_match,
@@ -1099,6 +1106,8 @@ class VisualDirectorAgent(BaseAgent):
                     "role": beat.role,
                     "narration_goal": beat.narration_goal,
                     "spoken_point": beat.spoken_point,
+                    "visual_must_show": beat.visual_must_show,
+                    "visual_must_not_show": beat.visual_must_not_show,
                 },
                 frame_paths=frame_paths,
                 ocr_text=ocr_text,

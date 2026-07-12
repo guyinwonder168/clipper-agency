@@ -65,10 +65,19 @@ def _reject_inspection() -> dict:
 
 
 def _accept_inspection() -> dict:
-    """Inspection that clears every rejection rule and the accept threshold."""
+    """Inspection that clears every rejection rule and the accept threshold.
+
+    Post-FIX-3 this is NON-PERSON high-claim footage (``person_match`` < 0.5,
+    ``subject_name`` empty): a recovered good clip that does not depict an
+    unverifiable person, so it cleanly accepts on entity-binding beats too. A
+    person-depicting accept without a verifiable ``subject_name`` would now be
+    excluded by ``is_unverifiable_entity_binding`` (correctly — that is the
+    FIX-3 entity-binding contract this fixture must not violate).
+    """
     return {
         "decision": "accept",
-        "person_match": 0.9,
+        "subject_name": "",
+        "person_match": 0.1,
         "event_match": 0.85,
         "claim_support": 0.9,
         "visual_quality": 0.8,

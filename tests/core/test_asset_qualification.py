@@ -1,17 +1,14 @@
 """SLICE 1 — cache-key parity hard gate for the pre-VD asset-qualification boundary.
 
 Guards PR 5's #1 risk (design doc §12: "Cache-key literal drift — forks cache
-namespace, re-spends VLM"). The new ``asset_qualification._score_candidate`` is a
-verbatim lift of ``VD._score_one_candidate`` (visual_director.py:748-803); VD's copy
-is KEPT AS-IS (design §8). Two textually-distinct call sites of ``compute_cache_key``
-therefore coexist after PR 5 with zero compile-time coupling. This test fails the
-merge if the lifted copy drifts from VD's convention on any of the six cache-key
-inputs.
-
-NOTE: a strictly-better follow-up (design §8) is to extract a shared
-``inspection_cache.compute_candidate_cache_key(candidate, beat)`` called by BOTH
-sites, removing this risk by construction. Until that follow-up PR lands, this gate
-IS the contract.
+namespace, re-spends VLM"). Both ``asset_qualification._score_candidate`` and
+``VD._score_one_candidate`` route through the SHARED
+``inspection_cache.compute_candidate_cache_key(candidate, spoken_point,
+visual_must_show, visual_must_not_show)`` (the design §8 follow-up, now landed), so
+the two sites cannot drift on the six cache-key inputs by construction. This test
+spies on the shared helper and asserts both call sites pass identical
+candidate/beat args, and that the helper's convention (model, prompt_version,
+evidence-contract hash) is pinned.
 """
 
 from __future__ import annotations
@@ -24,7 +21,7 @@ import pytest
 from clipper_agency.agents.visual_director import VisualDirectorAgent
 from clipper_agency.config.schema import AssetCandidate, BeatFallback, StoryBeat
 from clipper_agency.core import asset_qualification, inspection_cache
-from clipper_agency.core.inspection_cache import compute_cache_key
+from clipper_agency.core.inspection_cache import compute_candidate_cache_key
 
 # ---------------------------------------------------------------------------
 # Fixtures (mirror tests/agents/test_visual_director_candidate_inspection.py)
@@ -35,7 +32,7 @@ def _make_candidate(
     ctype: str = "tiktok_clip",
     url: str = "https://example.com/clip1.mp4",
     # Reason tokens overlap the default beat's keywords (spoken_point="Point N",
-    # visual_must_show="Visual N", narration_goal="Beat N") so cache-miss tests
+    # visual_must_show="Point N", narration_goal="Beat N") so cache-miss tests
     # exercise the inspection path instead of being skipped by the PR 8
     # pre-VLM keyword-overlap gate (which skips only on ZERO overlap).
     reason: str = "test point visual beat candidate",
@@ -56,7 +53,11 @@ def _make_beat(beat_id: int = 1, **overrides: Any) -> StoryBeat:
         "narration_goal": f"Beat {beat_id}",
         "spoken_point": f"Point {beat_id}",
         "safe_wording": f"Safe {beat_id}",
-        "visual_must_show": f"Visual {beat_id}",
+        # FIX-3 round-3: visual_must_show is the AUTHORITATIVE entity-binding
+        # source, so the placeholder visual contract is aligned with the
+        # depicted subject_name ("Point N") — otherwise the spurious "visual"
+        # entity would reject every placeholder candidate as WRONG_ENTITY.
+        "visual_must_show": f"Point {beat_id}",
         "visual_must_not_show": "",
         "overlay_text": f"Overlay {beat_id}",
         "caption_keywords": [],
@@ -81,6 +82,7 @@ def _cached_inspection() -> dict:
     """A valid cached inspection dict (cache-hit path skips the inspection call)."""
     return {
         "decision": "accept",
+        "subject_name": "Point 1",
         "person_match": 0.9,
         "event_match": 0.85,
         "claim_support": 0.9,
@@ -104,24 +106,27 @@ class TestCacheKeyParityWithVisualDirector:
         plan_item = _make_plan_item()
         cached = _cached_inspection()
 
-        vd_kwargs: dict[str, Any] = {}
-        aq_kwargs: dict[str, Any] = {}
-        real_compute = inspection_cache.compute_cache_key
+        vd_calls: list[tuple[Any, ...]] = []
+        aq_calls: list[tuple[Any, ...]] = []
+        real_helper = inspection_cache.compute_candidate_cache_key
 
-        def vd_spy(**kwargs: Any) -> str:
-            vd_kwargs.update(kwargs)
-            return real_compute(**kwargs)
+        def vd_spy(*args: Any) -> str:
+            vd_calls.append(args)
+            return real_helper(*args)
 
-        def aq_spy(**kwargs: Any) -> str:
-            aq_kwargs.update(kwargs)
-            return real_compute(**kwargs)
+        def aq_spy(*args: Any) -> str:
+            aq_calls.append(args)
+            return real_helper(*args)
 
         agent = VisualDirectorAgent()
 
         # Force a cache hit on both paths so _run_multimodal_inspection / _run_inspection
-        # are never reached — this test isolates the compute_cache_key call only.
+        # are never reached — this test isolates the compute_candidate_cache_key call.
         with (
-            patch("clipper_agency.agents.visual_director.compute_cache_key", vd_spy),
+            patch(
+                "clipper_agency.agents.visual_director.compute_candidate_cache_key",
+                vd_spy,
+            ),
             patch("clipper_agency.agents.visual_director.lookup", return_value=cached),
         ):
             vd_result = agent._score_one_candidate(
@@ -129,36 +134,68 @@ class TestCacheKeyParityWithVisualDirector:
             )
 
         with (
-            patch("clipper_agency.core.asset_qualification.compute_cache_key", aq_spy),
+            patch(
+                "clipper_agency.core.asset_qualification.compute_candidate_cache_key",
+                aq_spy,
+            ),
             patch("clipper_agency.core.asset_qualification.lookup", return_value=cached),
         ):
             aq_result = asset_qualification._score_candidate(
                 cand, beat, plan_item, 1, "/tmp/cache", "/tmp/agent", inspector=None
             )
 
-        # Both paths must have invoked compute_cache_key exactly once.
-        assert vd_kwargs, "VD._score_one_candidate did not call compute_cache_key"
-        assert aq_kwargs, "asset_qualification._score_candidate did not call compute_cache_key"
+        # Both paths must have invoked the shared helper exactly once.
+        assert vd_calls, "VD._score_one_candidate did not call compute_candidate_cache_key"
+        assert aq_calls, (
+            "asset_qualification._score_candidate did not call compute_candidate_cache_key"
+        )
 
-        # 1) Kwarg-equality: catches ANY drift on any of the 6 inputs (literal value,
-        #    field source, or hash computation). This is the primary gate.
-        assert vd_kwargs == aq_kwargs
+        # 1) Arg-equality: catches ANY drift on candidate or beat field source. This is
+        #    the primary gate — both must pass (candidate, spoken_point,
+        #    visual_must_show, visual_must_not_show) in the same order.
+        assert vd_calls == aq_calls
+        assert vd_calls[0] == (
+            cand,
+            beat.spoken_point,
+            beat.visual_must_show,
+            beat.visual_must_not_show,
+        )
 
-        # 2) Digest-equality: order-sensitive belt-and-suspenders. compute_cache_key
-        #    joins inputs in fixed positional order, so this is implied by #1, but it
-        #    documents the byte-identity intent directly.
-        assert compute_cache_key(**vd_kwargs) == compute_cache_key(**aq_kwargs)
+        # 2) Byte-identity: both derive the same digest from the same args.
+        assert real_helper(*vd_calls[0]) == real_helper(*aq_calls[0])
 
-        # 3) Pin the VD convention explicitly so a future edit to VD:759-766 literals
-        #    also trips this gate — not only edits to the lifted copy.
-        assert vd_kwargs["model"] == "multimodal"
-        assert vd_kwargs["prompt_version"] == "1.0"
-        assert vd_kwargs["evidence_contract_hash"] == ""
-        assert vd_kwargs["asset_path"] == cand.url
-        assert vd_kwargs["beat_claim"] == beat.spoken_point
-        # Independently pin asset_hash so a simultaneous bug at BOTH call sites
-        # (e.g. both hashing the wrong object) cannot false-pass the parity check.
-        assert vd_kwargs["asset_hash"] == inspection_cache.compute_asset_content_hash(cand)
+        # 3) Pin the shared helper's convention so a future edit to the helper's
+        #    constants (model / prompt_version / evidence-contract hash) trips this
+        #    gate. prompt_version=1.1 invalidates pre-FIX-3 caches; the evidence
+        #    hash is non-empty (FIX-3 added visual_must_show/_not_show to the prompt).
+        from clipper_agency.core.inspection_cache import (
+            CANDIDATE_CACHE_MODEL,
+            CANDIDATE_CACHE_PROMPT_VERSION,
+            compute_evidence_contract_hash,
+        )
+        from clipper_agency.core.inspection_cache import (
+            compute_cache_key as _low,
+        )
+
+        key = real_helper(*vd_calls[0])
+        # The helper's convention is observable by re-running the low-level key with
+        # the documented literals — assert they reproduce the helper output.
+        assert (
+            _low(
+                asset_path=cand.url,
+                asset_hash=inspection_cache.compute_asset_content_hash(cand),
+                beat_claim=beat.spoken_point,
+                evidence_contract_hash=compute_evidence_contract_hash(
+                    beat.visual_must_show, beat.visual_must_not_show
+                ),
+                model=CANDIDATE_CACHE_MODEL,
+                prompt_version=CANDIDATE_CACHE_PROMPT_VERSION,
+            )
+            == key
+        )
+        assert CANDIDATE_CACHE_PROMPT_VERSION == "1.1"
+        # Evidence-contract hash is NON-empty once visual fields are present.
+        assert compute_evidence_contract_hash(beat.visual_must_show, "") != ""
 
         # Sanity: the cache-hit path completed end-to-end on both scorers.
         assert vd_result is not None
@@ -253,6 +290,7 @@ def _high_inspection() -> dict:
     """Inspection that clears every rejection rule and the accept threshold (~0.84)."""
     return {
         "decision": "accept",
+        "subject_name": "Point 1",
         "person_match": 0.9,
         "event_match": 0.85,
         "claim_support": 0.9,
@@ -266,6 +304,7 @@ def _low_inspection() -> dict:
     """Inspection that fails the HIGH_MISLEADING_RISK hard rule (misleading_risk=0.8)."""
     return {
         "decision": "reject",
+        "subject_name": "Point 1",
         "person_match": 0.1,
         "event_match": 0.1,
         "claim_support": 0.2,
@@ -281,6 +320,7 @@ def _mid_inspection() -> dict:
     contract."""
     return {
         "decision": "revise",
+        "subject_name": "Point 1",
         "person_match": 0.5,
         "event_match": 0.5,
         "claim_support": 0.6,
@@ -346,13 +386,11 @@ class TestQualifyBeatHappyPath:
         for cand, insp in ((good, _high_inspection()), (bad, _low_inspection())):
             cache_store(
                 cache_dir,
-                compute_cache_key(
-                    asset_path=cand.url,
-                    asset_hash=inspection_cache.compute_asset_content_hash(cand),
-                    beat_claim=beat.spoken_point,
-                    evidence_contract_hash="",
-                    model="multimodal",
-                    prompt_version="1.0",
+                compute_candidate_cache_key(
+                    cand,
+                    beat.spoken_point,
+                    beat.visual_must_show,
+                    beat.visual_must_not_show,
                 ),
                 insp,
             )
@@ -389,13 +427,11 @@ class TestQualifyBeatHappyPath:
 
         cache_store(
             cache_dir,
-            compute_cache_key(
-                asset_path=good.url,
-                asset_hash=inspection_cache.compute_asset_content_hash(good),
-                beat_claim=beat.spoken_point,
-                evidence_contract_hash="",
-                model="multimodal",
-                prompt_version="1.0",
+            compute_candidate_cache_key(
+                good,
+                beat.spoken_point,
+                beat.visual_must_show,
+                beat.visual_must_not_show,
             ),
             _high_inspection(),
         )
@@ -436,13 +472,11 @@ class TestQualifyBeatHappyPath:
         for cand, insp in ((high, _high_inspection()), (mid, _mid_inspection())):
             cache_store(
                 cache_dir,
-                compute_cache_key(
-                    asset_path=cand.url,
-                    asset_hash=inspection_cache.compute_asset_content_hash(cand),
-                    beat_claim=beat.spoken_point,
-                    evidence_contract_hash="",
-                    model="multimodal",
-                    prompt_version="1.0",
+                compute_candidate_cache_key(
+                    cand,
+                    beat.spoken_point,
+                    beat.visual_must_show,
+                    beat.visual_must_not_show,
                 ),
                 insp,
             )
@@ -552,13 +586,11 @@ class TestQualifyBeatRecoveryBeforeTextCard:
         for cand, insp in ((bad, _low_inspection()), (rescued, _high_inspection())):
             cache_store(
                 cache_dir,
-                compute_cache_key(
-                    asset_path=cand.url,
-                    asset_hash=inspection_cache.compute_asset_content_hash(cand),
-                    beat_claim=beat.spoken_point,
-                    evidence_contract_hash="",
-                    model="multimodal",
-                    prompt_version="1.0",
+                compute_candidate_cache_key(
+                    cand,
+                    beat.spoken_point,
+                    beat.visual_must_show,
+                    beat.visual_must_not_show,
                 ),
                 insp,
             )
@@ -612,13 +644,11 @@ class TestQualifyBeatRecoveryBeforeTextCard:
         for cand, insp in ((bad, _low_inspection()), (rescued, _high_inspection())):
             cache_store(
                 cache_dir,
-                compute_cache_key(
-                    asset_path=cand.url,
-                    asset_hash=inspection_cache.compute_asset_content_hash(cand),
-                    beat_claim=beat.spoken_point,
-                    evidence_contract_hash="",
-                    model="multimodal",
-                    prompt_version="1.0",
+                compute_candidate_cache_key(
+                    cand,
+                    beat.spoken_point,
+                    beat.visual_must_show,
+                    beat.visual_must_not_show,
                 ),
                 insp,
             )
@@ -661,13 +691,11 @@ class TestQualifyBeatRecoveryBeforeTextCard:
         for cand, insp in ((bad, _low_inspection()), (still_bad, _low_inspection())):
             cache_store(
                 cache_dir,
-                compute_cache_key(
-                    asset_path=cand.url,
-                    asset_hash=inspection_cache.compute_asset_content_hash(cand),
-                    beat_claim=beat.spoken_point,
-                    evidence_contract_hash="",
-                    model="multimodal",
-                    prompt_version="1.0",
+                compute_candidate_cache_key(
+                    cand,
+                    beat.spoken_point,
+                    beat.visual_must_show,
+                    beat.visual_must_not_show,
                 ),
                 insp,
             )
@@ -709,6 +737,158 @@ class TestQualifyBeatRecoveryBeforeTextCard:
 
 
 # ---------------------------------------------------------------------------
+# FIX-3 round-2 (codex) — unverifiable entity assets must trigger RECOVER, not
+# silently qualify as 'revise' and skip recovery for the assets FIX-3 targets.
+# ---------------------------------------------------------------------------
+
+
+class TestUnverifiableEntityTriggersRecovery:
+    """A person-depicting asset the VLM could NOT name on an entity-binding beat is
+    excluded from ``qualified`` even though ``rank_candidates`` downgrades it to
+    ``revise`` (not ``reject``). The ``revise`` verdict used to count as qualified,
+    skipping RECOVER and silently falling back to a text card. Now RECOVER fires
+    first (finding #4)."""
+
+    def test_unverifiable_person_triggers_recover_not_qualified(self, tmp_path: Any) -> None:
+        # Entity-binding beat: derive_expected_entities yields non-empty tokens
+        # from visual_must_show + spoken_point (e.g. ["visual", "point"]).
+        unverifiable = _make_candidate("tiktok_clip", "https://u.com/unverifiable.mp4")
+        rescued = _make_candidate("tiktok_clip", "https://r.com/rescued.mp4")
+        beat = _make_beat(beat_id=7, asset_candidates=[unverifiable])
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        # unverifiable: person depicted (person_match >= 0.5), high claim (would
+        # accept), but the VLM could not name the subject (subject_name=""). NOTE:
+        # subject_name is the EMPTY STRING (key present), NOT absent — the stale-cache
+        # guard only treats a MISSING key as stale, so this cache entry HITS, and the
+        # is_unverifiable_entity_binding predicate (``not ""``) then excludes it.
+        unverifiable_insp = {
+            "decision": "accept",
+            "subject_name": "",
+            "person_match": 0.9,
+            "event_match": 0.8,
+            "claim_support": 0.9,
+            "visual_quality": 0.8,
+            "misleading_risk": 0.1,
+            "source_credibility": 0.8,
+        }
+        # rescued: a clean non-person high-claim accept (recovery finds it).
+        rescued_insp = {
+            "decision": "accept",
+            "subject_name": "",
+            "person_match": 0.1,
+            "event_match": 0.85,
+            "claim_support": 0.9,
+            "visual_quality": 0.8,
+            "misleading_risk": 0.1,
+            "source_credibility": 0.8,
+        }
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        for cand, insp in (
+            (unverifiable, unverifiable_insp),
+            (rescued, rescued_insp),
+        ):
+            cache_store(
+                cache_dir,
+                compute_candidate_cache_key(
+                    cand,
+                    beat.spoken_point,
+                    beat.visual_must_show,
+                    beat.visual_must_not_show,
+                ),
+                insp,
+            )
+
+        discover_calls: list[list[str]] = []
+
+        def discover_fn(queries: list[str]) -> tuple[list[dict], list[dict]]:
+            discover_calls.append(list(queries))
+            return (
+                [{"type": "tiktok_clip", "url": rescued.url, "reason": "recovered"}],
+                [{"provider": "youtube"}],
+            )
+
+        recovery = asset_qualification.RecoveryPolicy(
+            enabled=True, max_cycles=1, discover_fn=discover_fn
+        )
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir=cache_dir,
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=recovery,
+            plan_item=None,
+        )
+        result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        # RECOVER ran (not a direct text-card fallback) — the missing-subject
+        # candidate was excluded from qualified, leaving qualified empty pre-recovery.
+        assert len(discover_calls) == 1
+        assert result.verdict == "recovered"
+        assert result.recovery_outcome == "ran"
+        assert result.fallback_card is None
+        # The rescued candidate is the one that qualified — NOT the unverifiable one.
+        assert len(result.qualified) == 1
+        assert result.qualified[0]["candidate"].url == rescued.url
+        # The unverifiable candidate is recorded as an UNVERIFIABLE_ENTITY reject
+        # (not silently accepted as 'revise').
+        unverifiable_id = f"tiktok_clip_{unverifiable.url[:40]}"
+        assert result.reject_reasons.get(unverifiable_id) == "UNVERIFIABLE_ENTITY"
+
+    def test_unverifiable_person_without_recovery_falls_back_to_text_card(
+        self, tmp_path: Any
+    ) -> None:
+        """Recovery disabled: the unverifiable candidate is still excluded from
+        qualified, so the beat falls back to a text card (safe) rather than using
+        the unverified person asset."""
+        unverifiable = _make_candidate("tiktok_clip", "https://u.com/unverifiable2.mp4")
+        beat = _make_beat(beat_id=8, asset_candidates=[unverifiable])
+        cache_dir = str(tmp_path / "inspection_cache")
+
+        unverifiable_insp = {
+            "decision": "accept",
+            "subject_name": "",
+            "person_match": 0.9,
+            "event_match": 0.8,
+            "claim_support": 0.9,
+            "visual_quality": 0.8,
+            "misleading_risk": 0.1,
+            "source_credibility": 0.8,
+        }
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        cache_store(
+            cache_dir,
+            compute_candidate_cache_key(
+                unverifiable,
+                beat.spoken_point,
+                beat.visual_must_show,
+                beat.visual_must_not_show,
+            ),
+            unverifiable_insp,
+        )
+
+        ctx = asset_qualification.AssetQualificationContext(
+            job_id=1,
+            cache_dir=cache_dir,
+            agent_dir="/tmp/agent",
+            inspector=None,
+            recovery=None,  # recovery disabled
+            plan_item=None,
+        )
+        result = asset_qualification._qualify_beat(beat, ctx, 0.30, 0.50)
+
+        # Not qualified — the unverified person asset did NOT slip through as
+        # 'revise'. Terminal text-card fallback (the safe outcome).
+        assert result.verdict == "exhausted_text_card"
+        assert result.qualified == []
+        assert result.fallback_card is not None
+        unverifiable_id = f"tiktok_clip_{unverifiable.url[:40]}"
+        assert result.reject_reasons.get(unverifiable_id) == "UNVERIFIABLE_ENTITY"
+
+
+# ---------------------------------------------------------------------------
 # SLICE 5 — MAX_RECOVERY_CYCLES bound: recovery runs at most one pass (no loop).
 #
 # Recovery is structurally single-cycle (no while/for loop; max_cycles is a 0/1 gate).
@@ -730,13 +910,11 @@ class TestRecoveryBoundMaxOneCycle:
 
         cache_store(
             cache_dir,
-            compute_cache_key(
-                asset_path=bad.url,
-                asset_hash=inspection_cache.compute_asset_content_hash(bad),
-                beat_claim=beat.spoken_point,
-                evidence_contract_hash="",
-                model="multimodal",
-                prompt_version="1.0",
+            compute_candidate_cache_key(
+                bad,
+                beat.spoken_point,
+                beat.visual_must_show,
+                beat.visual_must_not_show,
             ),
             _low_inspection(),
         )
@@ -825,6 +1003,69 @@ class TestQualifyResearchCandidatesPublicEntry:
 # so the HARD verification gate ("qualification_report.json exists with the
 # documented shape") is enforceable.
 # ---------------------------------------------------------------------------
+
+
+class TestStaleCacheReinspectionGuard:
+    """FIX-3 R-1 — a cached inspection missing the ``subject_name`` key is treated
+    as a cache MISS and re-inspected (self-healing on resume/retry after the FIX-3
+    deploy, so Slice-3 doesn't mass-downgrade stale person-assets to 'revise')."""
+
+    def _cache_key(self, cand: AssetCandidate, beat: StoryBeat) -> str:
+        return compute_candidate_cache_key(
+            cand,
+            beat.spoken_point,
+            beat.visual_must_show,
+            beat.visual_must_not_show,
+        )
+
+    def test_stale_cache_triggers_reinspection(self, tmp_path: Any) -> None:
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        cand = _make_candidate()
+        beat = _make_beat()
+        cache_dir = str(tmp_path / "inspection_cache")
+        # STALE: pre-FIX-3 inspection with NO subject_name key.
+        stale = {
+            "decision": "accept",
+            "person_match": 0.9,
+            "event_match": 0.85,
+            "claim_support": 0.9,
+            "visual_quality": 0.8,
+            "misleading_risk": 0.1,
+            "source_credibility": 0.8,
+        }
+        cache_store(cache_dir, self._cache_key(cand, beat), stale)
+
+        fresh = dict(stale, subject_name="Point 1")
+        mock_inspector = MagicMock(return_value=fresh)
+        scored = asset_qualification._score_candidate(
+            cand, beat, None, 1, cache_dir, "/tmp/agent", inspector=mock_inspector
+        )
+        assert scored is not None
+        # Guard saw no subject_name -> treated as MISS -> inspector re-invoked.
+        mock_inspector.assert_called_once()
+        # The fresh (subject_name-bearing) inspection is what's recorded.
+        assert scored["inspection"].get("subject_name") == "Point 1"
+        # Decoration is attached (entity-binding parity). derive_expected_entities
+        # binds AUTHORITATIVELY from visual_must_show ("Point N") — spoken_point
+        # is a fallback only when visual_must_show yields no entities (FIX-3 r3).
+        assert scored["expected_entities"] == ["point"]
+
+    def test_fresh_cache_skips_reinspection(self, tmp_path: Any) -> None:
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        cand = _make_candidate()
+        beat = _make_beat()
+        cache_dir = str(tmp_path / "inspection_cache")
+        # FRESH: post-FIX-3 inspection WITH subject_name -> cache hit, no re-inspect.
+        cache_store(cache_dir, self._cache_key(cand, beat), _high_inspection())
+
+        mock_inspector = MagicMock(return_value=_high_inspection())
+        scored = asset_qualification._score_candidate(
+            cand, beat, None, 1, cache_dir, "/tmp/agent", inspector=mock_inspector
+        )
+        assert scored is not None
+        mock_inspector.assert_not_called()
 
 
 def _scored_dict(asset_id: str, quality: float = 0.9) -> dict:

@@ -9,7 +9,7 @@ import json
 import os
 import tempfile
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,7 +18,6 @@ from clipper_agency.llm.multimodal_client import (
     build_visual_inspection_messages,
     parse_inspection_json,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -252,6 +251,55 @@ class TestParseInspectionJson:
 # ---------------------------------------------------------------------------
 
 
+class TestSubjectNameExtraction:
+    """FIX-3 Slice 1 — the ``subject_name`` field flows end-to-end (parse + build +
+    error paths). It is a string, NOT a bounded score, so it lives outside _SCORE_KEYS."""
+
+    def test_parse_extracts_subject_name(self):
+        payload = dict(_SAMPLE_RESPONSE, subject_name="Sarwendah")
+        result = parse_inspection_json(json.dumps(payload))
+        assert result["subject_name"] == "Sarwendah"
+
+    def test_parse_defaults_subject_name_to_empty(self):
+        result = parse_inspection_json(json.dumps(_SAMPLE_RESPONSE))
+        assert result["subject_name"] == ""
+
+    def test_parse_coerces_non_string_subject_name(self):
+        payload = dict(_SAMPLE_RESPONSE, subject_name=123)
+        result = parse_inspection_json(json.dumps(payload))
+        assert result["subject_name"] == "123"
+
+    def test_build_result_carries_subject_name(self):
+        client = _make_mock_client()
+        inspector = MultimodalInspectionClient(client=client)
+        path = _make_frame_file()
+        try:
+            result = inspector.inspect_asset(
+                job_id=1,
+                beat_id="B03",
+                asset_id="A001",
+                beat=_SAMPLE_BEAT,
+                frame_paths=[path],
+            )
+        finally:
+            os.unlink(path)
+        assert "subject_name" in result
+
+    def test_error_result_has_empty_subject_name(self):
+        client = MagicMock()
+        client.chat.side_effect = RuntimeError("boom")
+        inspector = MultimodalInspectionClient(client=client)
+        result = inspector.inspect_asset(
+            job_id=1,
+            beat_id="B03",
+            asset_id="A001",
+            beat=_SAMPLE_BEAT,
+            frame_paths=[],
+        )
+        assert result["decision"] == "error"
+        assert result["subject_name"] == ""
+
+
 class TestMultimodalInspectionClientInspectAsset:
     """Integration tests using mocked OpenRouterClient."""
 
@@ -297,10 +345,20 @@ class TestMultimodalInspectionClientInspectAsset:
             os.unlink(path)
 
         expected_fields = {
-            "asset_id", "beat_id", "person_match", "event_match",
-            "claim_support", "visual_quality", "temporal_match",
-            "source_credibility", "cleanliness_score", "misleading_risk",
-            "decision", "reason", "frame_paths", "model",
+            "asset_id",
+            "beat_id",
+            "person_match",
+            "event_match",
+            "claim_support",
+            "visual_quality",
+            "temporal_match",
+            "source_credibility",
+            "cleanliness_score",
+            "misleading_risk",
+            "decision",
+            "reason",
+            "frame_paths",
+            "model",
         }
         assert expected_fields.issubset(set(result.keys()))
         assert result["asset_id"] == "A001"
