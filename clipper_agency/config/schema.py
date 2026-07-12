@@ -604,6 +604,7 @@ class AssetSemanticInspection(BaseModel):
     source_credibility: float = Field(0.0, ge=0.0, le=1.0)
     cleanliness_score: float = Field(0.0, ge=0.0, le=1.0)
     misleading_risk: float = Field(ge=0.0, le=1.0)
+    subject_name: str = ""
     decision: str
     reason: str
     frame_paths: list[str]

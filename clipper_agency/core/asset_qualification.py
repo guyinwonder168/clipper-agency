@@ -21,6 +21,7 @@ from clipper_agency.config.schema import AssetCandidate, StoryBeat
 from clipper_agency.core.candidate_semantic_ranker import (
     apply_rejection_rules,
     compute_final_score,
+    derive_expected_entities,
     rank_candidates,
 )
 from clipper_agency.core.clip_window import KeywordOverlapWindowSelector
@@ -148,6 +149,12 @@ def _score_candidate(
         prompt_version=_CACHE_PROMPT_VERSION,
     )
     cached = lookup(cache_dir, cache_key) if cache_dir else None
+    # FIX-3 R-1 stale-cache guard: a pre-FIX-3 cached inspection has no
+    # subject_name; treat it as a MISS so it is re-inspected (self-healing on
+    # resume/retry). Without this, the Slice-3 missing-subject downgrade would
+    # mass-downgrade every stale person-asset to "revise".
+    if cached is not None and cached.get("subject_name") is None:
+        cached = None
     if cached is None:
         # PR 8 (option 1) — pre-VLM keyword-overlap skip gate. A candidate with
         # zero textual overlap to the beat is almost certainly irrelevant (the
@@ -181,6 +188,7 @@ def _score_candidate(
         "beat_id": str(beat.beat_id),
         "role": beat.role,
         "treatment": (plan_item or {}).get("treatment", ""),
+        "expected_entities": derive_expected_entities(beat.spoken_point, beat.visual_must_show),
         "inspection": inspection,
         "visual_relevance": {
             "person_match": rel.person_match,

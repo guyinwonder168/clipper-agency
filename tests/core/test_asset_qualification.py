@@ -81,6 +81,7 @@ def _cached_inspection() -> dict:
     """A valid cached inspection dict (cache-hit path skips the inspection call)."""
     return {
         "decision": "accept",
+        "subject_name": "Point 1",
         "person_match": 0.9,
         "event_match": 0.85,
         "claim_support": 0.9,
@@ -253,6 +254,7 @@ def _high_inspection() -> dict:
     """Inspection that clears every rejection rule and the accept threshold (~0.84)."""
     return {
         "decision": "accept",
+        "subject_name": "Point 1",
         "person_match": 0.9,
         "event_match": 0.85,
         "claim_support": 0.9,
@@ -266,6 +268,7 @@ def _low_inspection() -> dict:
     """Inspection that fails the HIGH_MISLEADING_RISK hard rule (misleading_risk=0.8)."""
     return {
         "decision": "reject",
+        "subject_name": "Point 1",
         "person_match": 0.1,
         "event_match": 0.1,
         "claim_support": 0.2,
@@ -281,6 +284,7 @@ def _mid_inspection() -> dict:
     contract."""
     return {
         "decision": "revise",
+        "subject_name": "Point 1",
         "person_match": 0.5,
         "event_match": 0.5,
         "claim_support": 0.6,
@@ -825,6 +829,70 @@ class TestQualifyResearchCandidatesPublicEntry:
 # so the HARD verification gate ("qualification_report.json exists with the
 # documented shape") is enforceable.
 # ---------------------------------------------------------------------------
+
+
+class TestStaleCacheReinspectionGuard:
+    """FIX-3 R-1 — a cached inspection missing the ``subject_name`` key is treated
+    as a cache MISS and re-inspected (self-healing on resume/retry after the FIX-3
+    deploy, so Slice-3 doesn't mass-downgrade stale person-assets to 'revise')."""
+
+    def _cache_key(self, cand: AssetCandidate, beat: StoryBeat) -> str:
+        return compute_cache_key(
+            asset_path=cand.url,
+            asset_hash=inspection_cache.compute_asset_content_hash(cand),
+            beat_claim=beat.spoken_point,
+            evidence_contract_hash="",
+            model="multimodal",
+            prompt_version="1.0",
+        )
+
+    def test_stale_cache_triggers_reinspection(self, tmp_path: Any) -> None:
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        cand = _make_candidate()
+        beat = _make_beat()
+        cache_dir = str(tmp_path / "inspection_cache")
+        # STALE: pre-FIX-3 inspection with NO subject_name key.
+        stale = {
+            "decision": "accept",
+            "person_match": 0.9,
+            "event_match": 0.85,
+            "claim_support": 0.9,
+            "visual_quality": 0.8,
+            "misleading_risk": 0.1,
+            "source_credibility": 0.8,
+        }
+        cache_store(cache_dir, self._cache_key(cand, beat), stale)
+
+        fresh = dict(stale, subject_name="Point 1")
+        mock_inspector = MagicMock(return_value=fresh)
+        scored = asset_qualification._score_candidate(
+            cand, beat, None, 1, cache_dir, "/tmp/agent", inspector=mock_inspector
+        )
+        assert scored is not None
+        # Guard saw no subject_name -> treated as MISS -> inspector re-invoked.
+        mock_inspector.assert_called_once()
+        # The fresh (subject_name-bearing) inspection is what's recorded.
+        assert scored["inspection"].get("subject_name") == "Point 1"
+        # Decoration is attached (entity-binding parity). derive_expected_entities
+        # yields visual_must_show tokens first, then spoken_point tokens.
+        assert scored["expected_entities"] == ["visual", "point"]
+
+    def test_fresh_cache_skips_reinspection(self, tmp_path: Any) -> None:
+        from clipper_agency.core.inspection_cache import store as cache_store
+
+        cand = _make_candidate()
+        beat = _make_beat()
+        cache_dir = str(tmp_path / "inspection_cache")
+        # FRESH: post-FIX-3 inspection WITH subject_name -> cache hit, no re-inspect.
+        cache_store(cache_dir, self._cache_key(cand, beat), _high_inspection())
+
+        mock_inspector = MagicMock(return_value=_high_inspection())
+        scored = asset_qualification._score_candidate(
+            cand, beat, None, 1, cache_dir, "/tmp/agent", inspector=mock_inspector
+        )
+        assert scored is not None
+        mock_inspector.assert_not_called()
 
 
 def _scored_dict(asset_id: str, quality: float = 0.9) -> dict:

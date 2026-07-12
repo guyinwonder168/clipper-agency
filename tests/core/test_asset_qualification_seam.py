@@ -66,6 +66,7 @@ def _beat_dict(beat_id: int, candidates: list[dict], **overrides: Any) -> dict:
 def _high() -> dict:
     return {
         "decision": "accept",
+        "subject_name": "Point 1",
         "person_match": 0.9,
         "event_match": 0.85,
         "claim_support": 0.9,
@@ -78,6 +79,7 @@ def _high() -> dict:
 def _low() -> dict:
     return {
         "decision": "reject",
+        "subject_name": "Point 1",
         "person_match": 0.1,
         "event_match": 0.1,
         "claim_support": 0.2,

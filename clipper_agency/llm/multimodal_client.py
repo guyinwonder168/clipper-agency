@@ -26,11 +26,18 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_SCORE_KEYS: frozenset[str] = frozenset({
-    "person_match", "event_match", "claim_support", "visual_quality",
-    "temporal_match", "source_credibility", "cleanliness_score",
-    "misleading_risk",
-})
+_SCORE_KEYS: frozenset[str] = frozenset(
+    {
+        "person_match",
+        "event_match",
+        "claim_support",
+        "visual_quality",
+        "temporal_match",
+        "source_credibility",
+        "cleanliness_score",
+        "misleading_risk",
+    }
+)
 
 _SYSTEM_PROMPT = (
     "You are a visual evidence inspector for a short-form video production pipeline. "
@@ -42,6 +49,9 @@ _SYSTEM_PROMPT = (
 _INSPECTION_FIELDS = (
     "Respond with a JSON object containing these fields:\n"
     "- person_match (0-1): Is the visible person consistent with the subject?\n"
+    "- subject_name (string): the name of the main person/entity clearly "
+    'depicted, or "" if non-person or unknown — used to verify the image '
+    "shows the BEAT's subject, not a different person\n"
     "- event_match (0-1): Does the scene show the described event?\n"
     "- claim_support (0-1): Does the visual directly support the claim?\n"
     "- visual_quality (0-1): Is image quality acceptable for publication?\n"
@@ -49,7 +59,7 @@ _INSPECTION_FIELDS = (
     "- source_credibility (0-1): Is the source text/logo credible?\n"
     "- cleanliness_score (0-1): Is the frame free of distracting overlays?\n"
     "- misleading_risk (0-1): Could the visual mislead the audience?\n"
-    "- decision: one of \"accept\", \"revise\", or \"reject\"\n"
+    '- decision: one of "accept", "revise", or "reject"\n'
     "- reason: one-sentence justification"
 )
 
@@ -71,7 +81,7 @@ def build_visual_inspection_messages(
     Returns a list of messages (system + user) with up to *max_frames*
     images encoded as base64 data URIs in the user message content parts.
     """
-    user_parts: list[dict[str, str]] = []
+    user_parts: list[dict[str, Any]] = []
 
     # Beat claim
     spoken = beat.get("spoken_point", "")
@@ -103,24 +113,29 @@ def build_visual_inspection_messages(
 
     # Inspection instructions
     user_parts.append({"type": "text", "text": _INSPECTION_FIELDS})
-    user_parts.append({
-        "type": "text",
-        "text": 'Example response:\n{"person_match":0.9,"event_match":0.8,'
-                '"claim_support":0.7,"visual_quality":0.85,'
-                '"temporal_match":0.75,"source_credibility":0.8,'
-                '"cleanliness_score":0.6,"misleading_risk":0.1,'
-                '"decision":"accept","reason":"Good match"}',
-    })
+    user_parts.append(
+        {
+            "type": "text",
+            "text": 'Example response:\n{"person_match":0.9,"subject_name":"Sarwendah",'
+            '"event_match":0.8,'
+            '"claim_support":0.7,"visual_quality":0.85,'
+            '"temporal_match":0.75,"source_credibility":0.8,'
+            '"cleanliness_score":0.6,"misleading_risk":0.1,'
+            '"decision":"accept","reason":"Good match"}',
+        }
+    )
 
     # Images — cap at max_frames
     capped = frame_paths[:max_frames]
     for path in capped:
         try:
             uri = _encode_image(path)
-            user_parts.append({
-                "type": "image_url",
-                "image_url": {"url": uri},
-            })
+            user_parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": uri},
+                }
+            )
         except FileNotFoundError:
             logger.warning("Frame file not found, skipping: %s", path)
 
@@ -143,6 +158,9 @@ def parse_inspection_json(raw_content: str) -> dict[str, Any]:
 
     Strips markdown code fences, bounds all float scores to [0.0, 1.0],
     fills missing fields with defaults, and returns a complete dict.
+
+    ``subject_name`` is coerced to a string (default ``""``); it is NOT a
+    bounded score, so it is intentionally outside ``_SCORE_KEYS``.
 
     On parse failure returns ``{"decision": "error", "reason": ...}``.
     """
@@ -173,6 +191,9 @@ def parse_inspection_json(raw_content: str) -> dict[str, Any]:
             result[key] = max(0.0, min(1.0, float(result[key])))
         else:
             result[key] = 0.0
+
+    # subject_name — string identity field (FIX-3 entity-binding), not a score.
+    result["subject_name"] = str(result.get("subject_name", "") or "")
 
     # Ensure decision is valid
     if result.get("decision") not in ("accept", "revise", "reject"):
@@ -239,7 +260,10 @@ class MultimodalInspectionClient:
         """
         logger.info(
             "Inspection started: job=%s beat=%s asset=%s frames=%d",
-            job_id, beat_id, asset_id, len(frame_paths),
+            job_id,
+            beat_id,
+            asset_id,
+            len(frame_paths),
         )
 
         handle: TraceHandle | None = None
@@ -276,15 +300,22 @@ class MultimodalInspectionClient:
             logger.info(
                 "Inspection completed: job=%s beat=%s asset=%s decision=%s "
                 "claim_support=%.2f misleading_risk=%.2f",
-                job_id, beat_id, asset_id, result["decision"],
-                result["claim_support"], result["misleading_risk"],
+                job_id,
+                beat_id,
+                asset_id,
+                result["decision"],
+                result["claim_support"],
+                result["misleading_risk"],
             )
             return result
 
         except Exception as exc:
             logger.exception(
                 "Inspection failed: job=%s beat=%s asset=%s error=%s",
-                job_id, beat_id, asset_id, exc,
+                job_id,
+                beat_id,
+                asset_id,
+                exc,
             )
             return self._error_result(
                 asset_id=asset_id,
@@ -317,7 +348,9 @@ class MultimodalInspectionClient:
             return
         try:
             self._trace_writer.persist_request(  # type: ignore[union-attr]
-                handle, messages=messages, parameters={"temperature": 0.2},
+                handle,
+                messages=messages,
+                parameters={"temperature": 0.2},
             )
         except Exception:
             logger.warning("Trace request persist failed for call %s", handle.call_id)
@@ -362,6 +395,7 @@ class MultimodalInspectionClient:
             "source_credibility": parsed.get("source_credibility", 0.0),
             "cleanliness_score": parsed.get("cleanliness_score", 0.0),
             "misleading_risk": parsed.get("misleading_risk", 0.0),
+            "subject_name": parsed.get("subject_name", ""),
             "decision": parsed.get("decision", "error"),
             "reason": parsed.get("reason", ""),
             "frame_paths": frame_paths,
@@ -387,6 +421,7 @@ class MultimodalInspectionClient:
             "source_credibility": 0.0,
             "cleanliness_score": 0.0,
             "misleading_risk": 0.0,
+            "subject_name": "",
             "decision": "error",
             "reason": reason,
             "frame_paths": frame_paths,

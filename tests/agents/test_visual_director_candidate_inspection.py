@@ -80,6 +80,7 @@ def _make_plan_item(
 def _high_inspection() -> dict:
     return {
         "decision": "accept",
+        "subject_name": "Point 1",
         "person_match": 0.9,
         "event_match": 0.85,
         "claim_support": 0.9,
@@ -92,6 +93,7 @@ def _high_inspection() -> dict:
 def _low_inspection() -> dict:
     return {
         "decision": "reject",
+        "subject_name": "Point 1",
         "person_match": 0.1,
         "event_match": 0.1,
         "claim_support": 0.2,
