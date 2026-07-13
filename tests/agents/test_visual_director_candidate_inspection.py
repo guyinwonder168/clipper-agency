@@ -885,7 +885,7 @@ class TestSubjectNameThreadedThroughExecuteChain:
             matched_beat_ids=[1],
             subject_name="Jennifer Coppen",
         )
-        reviews = _run_entity_binding_review([wrong_entity_mapping], [beat_dict], ["Sarwendah"])
+        reviews = _run_entity_binding_review([wrong_entity_mapping], [beat_dict])
         assert len(reviews) == 1
         assert reviews[0].decision == "reject"
         assert "ENTITY_MISMATCH" in reviews[0].reason

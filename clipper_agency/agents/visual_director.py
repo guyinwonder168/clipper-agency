@@ -749,68 +749,62 @@ class VisualDirectorAgent(BaseAgent):
         pexels = PexelsService()
         ytdlp = YtDlpService()
         Path(scenes_dir).mkdir(parents=True, exist_ok=True)
+        return [self._build_asset_for_item(item, scenes_dir, pexels, ytdlp) for item in plan]
 
-        assets: list[dict] = []
-        for item in plan:
-            scene_id = item.get("scene_number", item.get("beat_id", 0))
-            action = item.get("action", {})
-            fallback = item.get("fallback")
-            primary_result = self._execute_action(
-                action,
-                scene_id,
-                scenes_dir,
-                pexels,
-                ytdlp,
-            )
-            result = primary_result
+    def _build_asset_for_item(
+        self,
+        item: dict,
+        scenes_dir: str,
+        pexels: PexelsService,
+        ytdlp: YtDlpService,
+    ) -> dict:
+        """Execute one plan item's action (+ fallback) and carry beat metadata.
 
-            if result is None and fallback:
-                logger.info("Beat %d: primary failed, using fallback", scene_id)
-                result = self._execute_action(
-                    fallback,
-                    scene_id,
-                    scenes_dir,
-                    pexels,
-                    ytdlp,
-                )
+        Extracted from ``_execute_beat_plan`` to keep cognitive complexity under
+        the gate threshold. FIX-4 (ADR 0030): ``subject_name`` + ``asset_id``
+        describe the INSPECTED candidate, so copy them ONLY when the primary
+        action rendered that exact candidate. On a fallback (primary failed →
+        alternate visual) or text-card (source:none) beat, the rendered asset
+        depicts something else / nothing — carrying the failed candidate's
+        subject_name would let the reviewer per-scene entity gate falsely PASS
+        an unverified visual. Other fields are beat-level, not candidate-specific,
+        so always carry.
+        """
+        scene_id = item.get("scene_number", item.get("beat_id", 0))
+        action = item.get("action", {})
+        fallback = item.get("fallback")
+        primary_result = self._execute_action(action, scene_id, scenes_dir, pexels, ytdlp)
+        result = primary_result
 
-            if result:
-                asset = {"scene": scene_id, **result}
-            else:
-                asset = {"scene": scene_id, "source": "none", "path": ""}
+        if result is None and fallback:
+            logger.info("Beat %d: primary failed, using fallback", scene_id)
+            result = self._execute_action(fallback, scene_id, scenes_dir, pexels, ytdlp)
 
-            # Pass through beat metadata for composer compatibility.
-            # FIX-4 (ADR 0030): subject_name + asset_id describe the INSPECTED
-            # candidate, so copy them ONLY when the primary action rendered that
-            # exact candidate. On a fallback (primary failed → alternate visual)
-            # or text-card (source:none) beat, the rendered asset depicts
-            # something else / nothing — carrying the failed candidate's
-            # subject_name would let the reviewer per-scene entity gate falsely
-            # PASS an unverified visual. Other fields are beat-level, not
-            # candidate-specific, so always carry.
-            primary_rendered = primary_result is not None
-            for field in (
-                "treatment",
-                "target_duration",
-                "transition_in",
-                "transition_out",
-                "beat_id",
-                "role",
-                "start_time",
-                "duration",
-                "subject_name",
-                "asset_id",
-            ):
-                if field not in item:
-                    continue
-                if field in ("subject_name", "asset_id") and not primary_rendered:
-                    continue
-                asset[field] = item[field]
+        if result:
+            asset = {"scene": scene_id, **result}
+        else:
+            asset = {"scene": scene_id, "source": "none", "path": ""}
 
-            asset = self._apply_default_treatment(asset)
-            assets.append(asset)
+        primary_rendered = primary_result is not None
+        for field in (
+            "treatment",
+            "target_duration",
+            "transition_in",
+            "transition_out",
+            "beat_id",
+            "role",
+            "start_time",
+            "duration",
+            "subject_name",
+            "asset_id",
+        ):
+            if field not in item:
+                continue
+            if field in ("subject_name", "asset_id") and not primary_rendered:
+                continue
+            asset[field] = item[field]
 
-        return assets
+        return self._apply_default_treatment(asset)
 
     @staticmethod
     def _default_treatment_for_role(role: str) -> str:

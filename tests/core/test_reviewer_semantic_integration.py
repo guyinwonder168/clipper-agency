@@ -682,7 +682,7 @@ class TestRunEntityBindingReviewPure:
         beats = [
             {"beat_id": 1, "spoken_point": "Sarwendah update", "visual_must_show": "Sarwendah"}
         ]
-        reviews = _run_entity_binding_review(mappings, beats, ["Sarwendah"])
+        reviews = _run_entity_binding_review(mappings, beats)
         assert len(reviews) == 1
         assert reviews[0].decision == "reject"
         assert "ENTITY_MISMATCH" in reviews[0].reason
@@ -702,7 +702,7 @@ class TestRunEntityBindingReviewPure:
         beats = [
             {"beat_id": 1, "spoken_point": "Sarwendah update", "visual_must_show": "Sarwendah"}
         ]
-        reviews = _run_entity_binding_review(mappings, beats, ["Sarwendah"])
+        reviews = _run_entity_binding_review(mappings, beats)
         # Correct match → no reject review returned (no issue to flag).
         assert all(r.decision != "reject" for r in reviews)
 
@@ -721,7 +721,7 @@ class TestRunEntityBindingReviewPure:
         beats = [
             {"beat_id": 1, "spoken_point": "Sarwendah update", "visual_must_show": "Sarwendah"}
         ]
-        reviews = _run_entity_binding_review(mappings, beats, ["Sarwendah"])
+        reviews = _run_entity_binding_review(mappings, beats)
         assert len(reviews) == 1
         assert reviews[0].decision == "accept"  # WARN, not hard-fail
         assert "ENTITY_UNVERIFIABLE" in reviews[0].reason
@@ -745,7 +745,7 @@ class TestRunEntityBindingReviewPure:
             "visual_must_show": "Sarwendah",
         }
         # Beat-local derivation is authoritative → globals must NOT widen it.
-        expected = _entity_expected_for_beat(beat, main_entities)
+        expected = _entity_expected_for_beat(beat)
         assert "sarwendah" in expected
         assert "ruben" not in expected
         assert "onsu" not in expected
@@ -759,7 +759,7 @@ class TestRunEntityBindingReviewPure:
                 subject_name="Ruben Onsu",  # the secondary global — must NOT pass
             )
         ]
-        reviews = _run_entity_binding_review(mappings, [beat], main_entities)
+        reviews = _run_entity_binding_review(mappings, [beat])
         assert len(reviews) == 1
         assert reviews[0].decision == "reject"
         assert "ENTITY_MISMATCH" in reviews[0].reason
@@ -784,7 +784,7 @@ class TestRunEntityBindingReviewPure:
             "spoken_point": "Thumbnail berita artis",
             "visual_must_show": "Thumbnail berita artis",
         }
-        expected = _entity_expected_for_beat(beat, main_entities)
+        expected = _entity_expected_for_beat(beat)
         # Globals are NOT appended → non-entity beat has no expectation.
         assert expected == []
         assert "sarwendah" not in expected
@@ -798,7 +798,7 @@ class TestRunEntityBindingReviewPure:
                 subject_name="Sarwendah",
             )
         ]
-        reviews = _run_entity_binding_review(mappings, [beat], main_entities)
+        reviews = _run_entity_binding_review(mappings, [beat])
         # Non-entity beat is skipped → no reject review returned (no false reject
         # of a primary-subject asset, and no false reject of a non-person asset).
         assert all(r.decision != "reject" for r in reviews)
@@ -823,7 +823,7 @@ class TestRunEntityBindingReviewPure:
         }
         # "tiktok" is a _GENERIC_CONTRACT_WORD → derive_expected_entities
         # returns [] → no global widening → beat has no entity expectation.
-        assert _entity_expected_for_beat(beat, main_entities) == []
+        assert _entity_expected_for_beat(beat) == []
 
         mappings = [
             SceneBeatMapping(
@@ -834,6 +834,6 @@ class TestRunEntityBindingReviewPure:
                 subject_name="TikTok logo",
             )
         ]
-        reviews = _run_entity_binding_review(mappings, [beat], main_entities)
+        reviews = _run_entity_binding_review(mappings, [beat])
         # No expectation → beat skipped → the correct TikTok asset is NOT rejected.
         assert all(r.decision != "reject" for r in reviews)

@@ -298,29 +298,23 @@ def _run_programmatic_scene_reviews(
     return [_evaluate_scene_semantic(m) for m in mappings]
 
 
-def _entity_expected_for_beat(
-    beat: dict,
-    main_entities: list[str] | None,  # noqa: ARG001 — kept for API stability
-) -> list[str]:
+def _entity_expected_for_beat(beat: dict) -> list[str]:
     """FIX-4 (ADR 0030): expected named entities for one beat.
 
     Reuses FIX-3's ``derive_expected_entities`` (DRY — single source for the
     entity-binding contract). Beat-local entities (from ``visual_must_show`` /
     ``spoken_point``) are AUTHORITATIVE and the ONLY source of expectation.
 
-    ``main_entities`` is accepted for API stability but is intentionally NOT
-    used to widen a beat's expected set. Applying topic-level globals to a beat
-    that names no entity itself (platform/format/hook/CTA beats whose
-    spoken_point/visual_must_show yield no entity after derive_expected_entities
-    filters generic words like "TikTok") would convert genuinely non-person
-    beats into person-expecting beats — so once a real subject_name flows
-    (codex round-2 P1) a legitimate "TikTok logo" asset on a "TikTok viral hari
-    ini" beat would false-positive ENTITY_MISMATCH (codex round-2 P2). A beat
-    with no beat-local entity therefore gets NO entity expectation and is
-    skipped by ``_run_entity_binding_review`` (matches this function's
-    docstring: "non-entity beats are skipped"). Recall loss here is safe — it
-    degrades to ENTITY_UNVERIFIABLE (accept-warn), and the canonical topic
-    person is still bound on the beats that actually name them.
+    Topic-level globals are intentionally NOT applied: widening a beat that
+    names no entity itself (platform/format/hook/CTA beats whose text yields no
+    entity after derive_expected_entities filters generic words like "TikTok")
+    would convert genuinely non-person beats into person-expecting beats — so
+    once a real subject_name flows (codex round-2 P1) a legitimate "TikTok
+    logo" asset on a "TikTok viral hari ini" beat would false-positive
+    ENTITY_MISMATCH (codex round-2 P2). A beat with no beat-local entity gets
+    NO expectation and is skipped by the caller. Recall loss degrades safely to
+    ENTITY_UNVERIFIABLE (accept-warn); the canonical topic person is still bound
+    on the beats that actually name them.
     """
     return list(
         derive_expected_entities(
@@ -330,10 +324,61 @@ def _entity_expected_for_beat(
     )
 
 
+def _entity_review_for_mapping(
+    m: SceneBeatMapping,
+    beats_by_id: dict,
+) -> SceneSemanticReview | None:
+    """FIX-4 (ADR 0030): one scene's entity-vs-beat review, or None to skip.
+
+    Extracted from ``_run_entity_binding_review`` to keep cognitive complexity
+    under the gate threshold (one scene's logic in isolation).
+    """
+    if not m.matched_beat_ids:
+        return None
+    # Collect expected entities across all matched beats for this scene.
+    expected: list[str] = []
+    for bid in m.matched_beat_ids:
+        beat = beats_by_id.get(bid)
+        if beat:
+            expected.extend(_entity_expected_for_beat(beat))
+    if not expected:
+        return None  # non-person beat → entity gate is a no-op
+    beat_id_str = ",".join(str(b) for b in m.matched_beat_ids)
+    if not m.subject_name:
+        # WARN: cannot verify (mirror FIX-3 is_unverifiable_entity_binding).
+        logger.warning(
+            "FIX-4 entity gate: scene %s beat %s expects %s but subject_name "
+            "is empty — cannot verify entity binding",
+            m.scene_index,
+            beat_id_str,
+            expected,
+        )
+        return SceneSemanticReview(
+            beat_id=beat_id_str,
+            timestamp_start_sec=m.scene_start_sec,
+            timestamp_end_sec=m.scene_end_sec,
+            decision="accept",  # do NOT hard-fail on unverifiable
+            reason=(
+                f"ENTITY_UNVERIFIABLE: expected {expected} but asset "
+                f"subject_name empty (cannot verify)"
+            ),
+            score=0.6,
+        )
+    if entity_overlap(m.subject_name, expected):
+        return None
+    return SceneSemanticReview(
+        beat_id=beat_id_str,
+        timestamp_start_sec=m.scene_start_sec,
+        timestamp_end_sec=m.scene_end_sec,
+        decision="reject",
+        reason=(f"ENTITY_MISMATCH: asset depicts '{m.subject_name}' but beat expects {expected}"),
+        score=0.0,
+    )
+
+
 def _run_entity_binding_review(
     mappings: list[SceneBeatMapping],
     story_beats: list[dict],
-    main_entities: list[str] | None,
 ) -> list[SceneSemanticReview]:
     """FIX-4 (ADR 0030): per-scene entity-vs-beat binding review.
 
@@ -354,54 +399,9 @@ def _run_entity_binding_review(
     beats_by_id = {b.get("beat_id"): b for b in story_beats}
     reviews: list[SceneSemanticReview] = []
     for m in mappings:
-        if not m.matched_beat_ids:
-            continue
-        # Collect expected entities across all matched beats for this scene.
-        expected: list[str] = []
-        for bid in m.matched_beat_ids:
-            beat = beats_by_id.get(bid)
-            if beat:
-                expected.extend(_entity_expected_for_beat(beat, main_entities))
-        if not expected:
-            continue  # non-person beat → entity gate is a no-op
-        beat_id_str = ",".join(str(b) for b in m.matched_beat_ids)
-        if not m.subject_name:
-            # WARN: cannot verify (mirror FIX-3 is_unverifiable_entity_binding).
-            logger.warning(
-                "FIX-4 entity gate: scene %s beat %s expects %s but subject_name "
-                "is empty — cannot verify entity binding",
-                m.scene_index,
-                beat_id_str,
-                expected,
-            )
-            reviews.append(
-                SceneSemanticReview(
-                    beat_id=beat_id_str,
-                    timestamp_start_sec=m.scene_start_sec,
-                    timestamp_end_sec=m.scene_end_sec,
-                    decision="accept",  # do NOT hard-fail on unverifiable
-                    reason=(
-                        f"ENTITY_UNVERIFIABLE: expected {expected} but asset "
-                        f"subject_name empty (cannot verify)"
-                    ),
-                    score=0.6,
-                )
-            )
-            continue
-        if not entity_overlap(m.subject_name, expected):
-            reviews.append(
-                SceneSemanticReview(
-                    beat_id=beat_id_str,
-                    timestamp_start_sec=m.scene_start_sec,
-                    timestamp_end_sec=m.scene_end_sec,
-                    decision="reject",
-                    reason=(
-                        f"ENTITY_MISMATCH: asset depicts '{m.subject_name}' but "
-                        f"beat expects {expected}"
-                    ),
-                    score=0.0,
-                )
-            )
+        review = _entity_review_for_mapping(m, beats_by_id)
+        if review is not None:
+            reviews.append(review)
     return reviews
 
 
@@ -784,6 +784,39 @@ class ReviewerAgent(BaseAgent):
         )
         return _run_programmatic_scene_reviews(mappings)
 
+    @staticmethod
+    def _compute_entity_reviews(
+        ctx: dict,
+        story_beats: list[dict] | None,
+        audio_duration_sec: float,
+        rendered_scene_manifest: dict | None,
+    ) -> list[SceneSemanticReview]:
+        """FIX-4 (ADR 0030): per-scene entity-vs-beat reviews via the shared
+        scene→beat mapping (carrying the threaded ``subject_name``) + FIX-3's
+        ``_run_entity_binding_review``. Extracted from ``execute`` to keep its
+        cognitive complexity under the gate threshold.
+        """
+        if not rendered_scene_manifest or not story_beats:
+            return []
+        entries = rendered_scene_manifest.get("entries", [])
+        if not entries:
+            return []
+        beat_time_ranges = None
+        bt_ctx = ctx.get("beat_timeline")
+        if bt_ctx:
+            beat_time_ranges = [
+                (e["start_sec"], e["end_sec"]) if isinstance(e, dict) else (e.start_sec, e.end_sec)
+                for e in bt_ctx
+            ]
+        mappings = map_scenes_to_beats(
+            manifest_entries=entries,
+            story_beats=story_beats,
+            word_timestamps=ctx.get("word_timestamps") or [],
+            audio_duration_sec=audio_duration_sec,
+            beat_time_ranges=beat_time_ranges,
+        )
+        return _run_entity_binding_review(mappings, story_beats)
+
     def execute(
         self,
         job_id: int,
@@ -886,33 +919,14 @@ class ReviewerAgent(BaseAgent):
             beat_timeline=ctx.get("beat_timeline"),
         )
 
-        # 2d. FIX-4 (ADR 0030): per-scene entity-vs-beat review. Reuses the
-        # scene→beat mapping (with the threaded subject_name) + FIX-3's
-        # derive_expected_entities / entity_overlap — the job_18 wrong-entity
-        # gate that the total-duration reviewer could not see.
-        entity_reviews: list[SceneSemanticReview] = []
-        if rendered_scene_manifest and story_beats:
-            entries = rendered_scene_manifest.get("entries", [])
-            if entries:
-                beat_time_ranges = None
-                bt_ctx = ctx.get("beat_timeline")
-                if bt_ctx:
-                    beat_time_ranges = [
-                        (e["start_sec"], e["end_sec"])
-                        if isinstance(e, dict)
-                        else (e.start_sec, e.end_sec)
-                        for e in bt_ctx
-                    ]
-                entity_mappings = map_scenes_to_beats(
-                    manifest_entries=entries,
-                    story_beats=story_beats,
-                    word_timestamps=word_timestamps or [],
-                    audio_duration_sec=audio_duration_sec,
-                    beat_time_ranges=beat_time_ranges,
-                )
-                entity_reviews = _run_entity_binding_review(
-                    entity_mappings, story_beats, main_entities
-                )
+        # 2d. FIX-4 (ADR 0030): per-scene entity-vs-beat review (extracted to
+        # _compute_entity_reviews to keep execute() cognitive complexity under
+        # the gate threshold). Reuses the scene→beat mapping (with the threaded
+        # subject_name) + FIX-3's derive_expected_entities / entity_overlap —
+        # the job_18 wrong-entity gate the total-duration reviewer could not see.
+        entity_reviews = self._compute_entity_reviews(
+            ctx, story_beats, audio_duration_sec, rendered_scene_manifest
+        )
 
         gate_result = (
             self._fail_if_visual_coverage_failed(diagnostics)
