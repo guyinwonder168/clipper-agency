@@ -318,19 +318,34 @@ def _expected_entity_matches(exp: str, subj_tokens: list[str]) -> bool:
     return False
 
 
+def _phrase_matches(phrase: list[str], subj_tokens: list[str], subj_set: set[str]) -> bool:
+    """Does one expected entity PHRASE match the subject? (FIX-4 Codex P2.)
+
+    Single-token phrase: lenient Rules A/B/C via ``_expected_entity_matches``
+    (alias/transliteration tolerance + the Cristiano-Ronaldo/ronaldo case).
+    Multi-token phrase: token-set Jaccard >= ``_ENTITY_JACCARD_THRESHOLD`` so a
+    single shared token ("ahmad" between "Raffi Ahmad" and "Ahmad Doe") does NOT
+    accept a different person. Tokens are normalized + filtered (generic words
+    + sub-min-length noise dropped) defensively.
+    """
+    significant = [
+        t
+        for t in (_normalize_token(tok) for tok in phrase)
+        if len(t) >= _ENTITY_MIN_TOKEN_LEN and t not in _GENERIC_CONTRACT_WORDS
+    ]
+    if not significant:
+        return False
+    if len(significant) == 1:
+        return _expected_entity_matches(significant[0], subj_tokens)
+    inter = len(subj_set & set(significant))
+    union = len(subj_set | set(significant))
+    return bool(union) and inter / union >= _ENTITY_JACCARD_THRESHOLD
+
+
 def entity_overlap(subject_name: str, expected: list[list[str]]) -> bool:
     """True if ``subject_name`` plausibly matches any expected entity PHRASE.
 
     FIX-4 (Codex P2): ``expected`` is a list of phrases (``list[list[str]]``).
-
-    - Single-token phrase: lenient Rules A/B/C via ``_expected_entity_matches``
-      (preserves alias/transliteration tolerance + the Cristiano-Ronaldo/
-      ronaldo single-token case).
-    - Multi-token phrase: require token-set Jaccard >=
-      ``_ENTITY_JACCARD_THRESHOLD`` so a single shared token (e.g. "ahmad"
-      between expected "Raffi Ahmad" and subject "Ahmad Doe") does NOT accept a
-      different person.
-
     Generic words are filtered out of each phrase (defense-in-depth) so a
     "TikTok" asset never matches a beat that merely mentions TikTok.
     """
@@ -340,26 +355,7 @@ def entity_overlap(subject_name: str, expected: list[list[str]]) -> bool:
     if not subj_tokens:
         return False
     subj_set = set(subj_tokens)
-    for phrase in expected:
-        # Normalize (defensive — production phrases are pre-normalized) + drop
-        # generic words AND tokens shorter than the min length (kills "jo"-style
-        # noise) so they can never count as a match.
-        significant = [
-            t
-            for t in (_normalize_token(tok) for tok in phrase)
-            if len(t) >= _ENTITY_MIN_TOKEN_LEN and t not in _GENERIC_CONTRACT_WORDS
-        ]
-        if not significant:
-            continue
-        if len(significant) == 1:
-            if _expected_entity_matches(significant[0], subj_tokens):
-                return True
-        else:
-            inter = len(subj_set & set(significant))
-            union = len(subj_set | set(significant))
-            if union and inter / union >= _ENTITY_JACCARD_THRESHOLD:
-                return True
-    return False
+    return any(_phrase_matches(p, subj_tokens, subj_set) for p in expected)
 
 
 def is_unverifiable_entity_binding(candidate: dict) -> bool:

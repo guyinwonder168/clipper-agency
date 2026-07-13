@@ -817,19 +817,15 @@ class ReviewerAgent(BaseAgent):
         )
         return _run_entity_binding_review(mappings, story_beats)
 
-    def execute(
-        self,
-        job_id: int,
-        topic: str = "",
-        script: list[dict] | None = None,
-        caption: str = "",
-        safety_rules: list[str] | None = None,
-        context: ReviewContext | None = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        # Merge context dict with legacy kwargs for backward compat
+    @staticmethod
+    def _merge_legacy_context(context: ReviewContext | None, kwargs: dict) -> dict:
+        """Merge the ReviewContext dict with legacy kwargs (backward compat).
+
+        Keys present in both are kept from the explicit context; matched kwargs
+        are popped so they don't leak into downstream ``kwargs.get(...)`` reads.
+        """
         ctx: dict[str, Any] = dict(context or {})
-        _legacy_keys = (
+        for key in (
             "audio_duration_sec",
             "visual_duration_sec",
             "narrative_structure",
@@ -842,23 +838,93 @@ class ReviewerAgent(BaseAgent):
             "word_timestamps",
             "rendered_scene_manifest",
             "beat_timeline",
-            # FIX-4 (ADR 0030): threaded on ALL reviewer entry paths (normal,
-            # retry, repair, resume) so the audio-stream re-probe fires
-            # everywhere — a happy-path-only wire is inert in retry/repair.
+            # FIX-4 (ADR 0030): threaded on ALL reviewer entry paths so the
+            # audio-stream re-probe fires everywhere.
             "voiceover_duration_sec",
-        )
-        for key in _legacy_keys:
+        ):
             if key in kwargs and key not in ctx:
                 ctx[key] = kwargs.pop(key)
+        return ctx
+
+    @staticmethod
+    def _build_programmatic_checks(
+        ctx: dict,
+        audio_duration_sec: float,
+        visual_duration_sec: float,
+        voiceover_duration_sec: float,
+        rendered_scene_manifest: dict | None,
+    ) -> tuple[list[dict], dict[str, dict], dict]:
+        """Run the 4 legacy programmatic checks + the FIX-4 audio-truncation
+        re-probe. Extracted from execute() to keep cognitive complexity low."""
+        av_sync = _check_av_sync(audio_duration_sec, visual_duration_sec)
+        caption_q = _check_caption_quality(ctx.get("caption", ""))
+        fact_safety = _check_fact_safety(ctx.get("unverified_claims") or [])
+        narrative_q = _check_narrative_structure(ctx.get("narrative_structure") or [])
+        results = [av_sync, caption_q, fact_safety, narrative_q]
+        checks = {
+            "av_sync": av_sync,
+            "caption_quality": caption_q,
+            "fact_safety": fact_safety,
+            "narrative_structure": narrative_q,
+        }
+        # FIX-4 (ADR 0030): defense-in-depth audio-stream re-probe. Reuse the
+        # rendered manifest's video_path so no new engine param is required.
+        video_path = ""
+        if isinstance(rendered_scene_manifest, dict):
+            video_path = str(rendered_scene_manifest.get("video_path") or "")
+        audio_trunc = _check_audio_not_truncated(video_path, voiceover_duration_sec)
+        results.append(audio_trunc)
+        checks["audio_not_truncated"] = audio_trunc
+        return results, checks, audio_trunc
+
+    def _run_deterministic_gates(
+        self,
+        ctx: dict,
+        diagnostics: dict | None,
+        audio_trunc: dict,
+        entity_reviews: list,
+        scene_reviews: list,
+    ) -> dict | None:
+        """Run the deterministic ``_fail_if_*`` gate chain (extracted from
+        execute to keep cognitive complexity under the gate threshold)."""
+        return (
+            self._fail_if_visual_coverage_failed(diagnostics)
+            or self._fail_if_text_collision_failed(diagnostics)
+            or self._fail_if_safe_area_failed(diagnostics)
+            or self._fail_if_package_consistency_failed(
+                ctx.get("story_mode_decision"),
+                ctx.get("thumbnail_text", ""),
+                ctx.get("main_entities"),
+                ctx.get("caption", ""),
+                ctx.get("topic", ""),
+                ctx.get("script") or [],
+            )
+            or self._fail_if_audio_truncated(audio_trunc)
+            or self._fail_if_entity_mismatch(entity_reviews)
+            or self._fail_if_timestamp_semantic_failed(scene_reviews)
+            or self._fail_if_semantic_review_failed(diagnostics)
+        )
+
+    def execute(
+        self,
+        job_id: int,
+        topic: str = "",
+        script: list[dict] | None = None,
+        caption: str = "",
+        safety_rules: list[str] | None = None,
+        context: ReviewContext | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        # Merge context dict with legacy kwargs for backward compat.
+        ctx = self._merge_legacy_context(context, kwargs)
+        # Stash execute params the deterministic-gate helper needs into ctx.
+        ctx.setdefault("caption", caption)
+        ctx.setdefault("topic", topic)
+        ctx.setdefault("script", script or [])
 
         audio_duration_sec: float = ctx.get("audio_duration_sec", 0.0)
         visual_duration_sec: float = ctx.get("visual_duration_sec", 0.0)
-        narrative_structure: list[dict] | None = ctx.get("narrative_structure")
-        unverified_claims: list[dict] | None = ctx.get("unverified_claims")
         visual_plan_actions: list[dict] | None = ctx.get("visual_plan_actions")
-        story_mode_decision: dict | None = ctx.get("story_mode_decision")
-        thumbnail_text: str = ctx.get("thumbnail_text", "")
-        main_entities: list[str] | None = ctx.get("main_entities")
         story_beats: list[dict] | None = ctx.get("story_beats")
         word_timestamps: list[dict] | None = ctx.get("word_timestamps")
         rendered_scene_manifest: dict | None = ctx.get("rendered_scene_manifest")
@@ -867,32 +933,14 @@ class ReviewerAgent(BaseAgent):
         scenes = script or []
         logger.info("Reviewer: scenes=%d", len(scenes))
 
-        # 1. Programmatic quality checks (fast, free, deterministic)
-        av_sync = _check_av_sync(audio_duration_sec, visual_duration_sec)
-        caption_q = _check_caption_quality(caption)
-        fact_safety = _check_fact_safety(unverified_claims or [])
-        narrative_q = _check_narrative_structure(
-            narrative_structure or [],
+        # 1. Programmatic quality checks (fast, free, deterministic).
+        programmatic_results, checks, audio_trunc = self._build_programmatic_checks(
+            ctx,
+            audio_duration_sec,
+            visual_duration_sec,
+            voiceover_duration_sec,
+            rendered_scene_manifest,
         )
-        programmatic_results = [av_sync, caption_q, fact_safety, narrative_q]
-
-        checks = {
-            "av_sync": av_sync,
-            "caption_quality": caption_q,
-            "fact_safety": fact_safety,
-            "narrative_structure": narrative_q,
-        }
-
-        # FIX-4 (ADR 0030): defense-in-depth audio-stream re-probe. Runs as a
-        # programmatic check (visible in programmatic_checks) AND a hard gate
-        # below. Reuse the rendered manifest's video_path so no new param is
-        # required on the engine wiring beyond voiceover_duration_sec.
-        video_path = ""
-        if isinstance(rendered_scene_manifest, dict):
-            video_path = str(rendered_scene_manifest.get("video_path") or "")
-        audio_trunc = _check_audio_not_truncated(video_path, voiceover_duration_sec)
-        programmatic_results.append(audio_trunc)
-        checks["audio_not_truncated"] = audio_trunc
 
         # 2. Hard gates: force FAIL before expensive LLM call
         hard_gate_result = self._check_hard_gates(
@@ -928,22 +976,8 @@ class ReviewerAgent(BaseAgent):
             ctx, story_beats, audio_duration_sec, rendered_scene_manifest
         )
 
-        gate_result = (
-            self._fail_if_visual_coverage_failed(diagnostics)
-            or self._fail_if_text_collision_failed(diagnostics)
-            or self._fail_if_safe_area_failed(diagnostics)
-            or self._fail_if_package_consistency_failed(
-                story_mode_decision,
-                thumbnail_text,
-                main_entities,
-                caption,
-                topic,
-                script,
-            )
-            or self._fail_if_audio_truncated(audio_trunc)
-            or self._fail_if_entity_mismatch(entity_reviews)
-            or self._fail_if_timestamp_semantic_failed(scene_reviews)
-            or self._fail_if_semantic_review_failed(diagnostics)
+        gate_result = self._run_deterministic_gates(
+            ctx, diagnostics, audio_trunc, entity_reviews, scene_reviews
         )
         if gate_result is not None:
             gate_result["programmatic_checks"] = checks
