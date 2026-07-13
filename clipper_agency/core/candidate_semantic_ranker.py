@@ -197,6 +197,22 @@ _GENERIC_CONTRACT_WORDS = frozenset(
         "drama",
         "skandal",
         "sensasi",
+        # FIX-4 (ADR 0030) Slice 4: platform/format words that appear in
+        # narration/contracts but are NOT named entities. Without these, a beat
+        # whose spoken_point mentions "TikTok" derives "tiktok" as an expected
+        # entity, and any TikTok-branded asset falsely matches — or worse, a
+        # real-person asset is falsely rejected as WRONG_ENTITY. "viral" is
+        # already present; the rest are new.
+        "tiktok",
+        "youtube",
+        "ig",
+        "instagram",
+        "reels",
+        "duet",
+        "stitch",
+        "fyp",
+        "konten",
+        "kreator",
     }
 )
 
@@ -289,13 +305,27 @@ def entity_overlap(subject_name: str, expected: list[str]) -> bool:
     """True if ``subject_name`` plausibly matches any of the ``expected`` entities."""
     if not subject_name or not expected:
         return False
+    # FIX-4 (ADR 0030) Slice 4: defense-in-depth — filter generic platform/format
+    # words out of the expected set so they can never count as a match, even if
+    # one slipped past derive_expected_entities. A "TikTok" asset must not match
+    # a beat that merely mentions TikTok.
+    filtered_expected = [e for e in expected if _normalize_token(e) not in _GENERIC_CONTRACT_WORDS]
+    if not filtered_expected:
+        return False
     subj_tokens = [t for t in (_normalize_token(s) for s in subject_name.split()) if t]
     if not subj_tokens:
         return False
-    for exp_raw in expected:
+    # FIX-4 (ADR 0030) Slice 5: phrase-level exact match first. Handles full-name
+    # phrases ("Jennifer Coppen") and aliases as single expected entries by
+    # comparing the FULL normalized subject to the FULL normalized expected
+    # entry, before falling back to the per-token matcher.
+    subj_phrase = _normalize_token(subject_name)
+    for exp_raw in filtered_expected:
         exp = _normalize_token(exp_raw)
         if len(exp) < _ENTITY_MIN_TOKEN_LEN:
             continue
+        if exp == subj_phrase and len(subj_phrase) >= _ENTITY_MIN_TOKEN_LEN:
+            return True
         if _expected_entity_matches(exp, subj_tokens):
             return True
     return False

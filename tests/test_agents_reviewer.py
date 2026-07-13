@@ -331,10 +331,12 @@ class TestReviewerExecute:
         )
 
         system_content = mock_chat.call_args.kwargs["messages"][0]["content"]
-        assert (
-            system_content
-            == "File reviewer prompt: - no_defamation | - av_sync: skip\n- caption_quality: pass\n- fact_safety: pass\n- narrative_structure: skip"
+        expected_prompt = (
+            "File reviewer prompt: - no_defamation | - av_sync: skip\n"
+            "- caption_quality: pass\n- fact_safety: pass\n"
+            "- narrative_structure: skip\n- audio_not_truncated: skip"
         )
+        assert system_content == expected_prompt
 
     # --- New audio-first execute tests ---
 
@@ -412,6 +414,9 @@ class TestReviewerExecute:
             "caption_quality",
             "fact_safety",
             "narrative_structure",
+            # FIX-4 (ADR 0030): audio-stream re-probe (skip here — no
+            # voiceover_duration_sec supplied).
+            "audio_not_truncated",
         }
         # AV drift > 0.5s → fail
         assert checks["av_sync"]["status"] == "fail"

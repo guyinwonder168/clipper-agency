@@ -37,6 +37,12 @@ GATE_FAILURE_REPAIR_MAP: dict[str, tuple[str, str]] = {
     "TIMESTAMP_SEMANTIC_FAILED": ("semantic_mismatch", "replace_visual"),
     NARRATIVE_NOT_COVERED: ("narrative_coverage_gap", REGEN_NARRATIVE_ACTION),
     TIMELINE_NOT_COVERED: ("timeline_coverage_gap", REGEN_NARRATIVE_ACTION),
+    # FIX-4 (ADR 0030): reviewer per-scene entity-vs-beat mismatch routes to
+    # Visual Director — the wrong-entity asset must be re-selected. The
+    # AUDIO_TRUNCATED_REVIEWER defense-in-depth re-probe routes to Composer
+    # (the audio master / -shortest-cut symptom lives in the assembly).
+    "ENTITY_MISMATCH": ("wrong_entity", "replace_visual"),
+    "AUDIO_TRUNCATED_REVIEWER": ("duration_mismatch", "redo_compose"),
 }
 
 
@@ -62,6 +68,10 @@ def route_repair(patch: dict) -> str:
     _by_reason: dict[str, str] = {
         "broken_source": "visual_director",
         "wrong_event": "visual_director",
+        # FIX-4 (ADR 0030): wrong-entity asset binding → Visual Director
+        # (distinct from wrong_event; the asset must be re-selected, not the
+        # research redone).
+        "wrong_entity": "visual_director",
         "text_collision": "visual_director",
         "black_frame": "composer",
         "freeze_frame": "composer",

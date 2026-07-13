@@ -191,3 +191,123 @@ class TestTemporalMatchDefaultWeightZero:
         assert score_zero.visual_quality == score_one.visual_quality
         # The detail string embeds the combined score; equality proves byte-identity.
         assert score_zero.detail == score_one.detail == score_baseline.detail
+
+
+# ---------------------------------------------------------------------------
+# FIX-4 Slice 2 — Reviewer AUDIO_NOT_TRUNCATED defense-in-depth re-probe
+# ---------------------------------------------------------------------------
+
+
+def _video_info(audio_duration: float | None = 35.0):
+    """Build a minimal VideoInfo for the mocked probe (FIX-4 Slice 2)."""
+    from clipper_agency.core.media_probe import VideoInfo
+
+    return VideoInfo(
+        path="/out/video.mp4",
+        width=1080,
+        height=1920,
+        codec="h264",
+        pix_fmt="yuv420p",
+        duration=35.0,
+        has_audio=True,
+        audio_duration=audio_duration,
+    )
+
+
+class TestAudioNotTruncatedReviewerReprobe:
+    """FIX-4 (ADR 0030): the reviewer re-probes the audio STREAM (not the
+    container duration G10 already checks) so a DEV_RELAX_GATES=G10 bypass or
+    a missing/relaxed gate cannot blind the reviewer to a truncated voiceover
+    (job_18: audio cut ~2.6s short by `-shortest`)."""
+
+    def test_tolerance_constant_is_single_source_with_g10(self):
+        """The reviewer re-probe MUST use the same tolerance as G10."""
+        from clipper_agency.agents import reviewer
+        from clipper_agency.core.media_probe import AUDIO_TRUNC_TOL_SEC
+        from clipper_agency.orchestrator.gates import GateVideoValidation
+
+        assert AUDIO_TRUNC_TOL_SEC == 0.5
+        assert reviewer.AUDIO_TRUNC_TOL_SEC == GateVideoValidation.AUDIO_TRUNC_TOL_SEC
+        assert reviewer.AUDIO_TRUNC_TOL_SEC == AUDIO_TRUNC_TOL_SEC
+
+    def test_audio_within_tolerance_passes(self, mocker):
+        from clipper_agency.agents.reviewer import _check_audio_not_truncated
+
+        mocker.patch(
+            "clipper_agency.agents.reviewer.probe_video",
+            return_value=_video_info(audio_duration=35.2),
+        )
+        result = _check_audio_not_truncated("/out/video.mp4", voiceover_duration_sec=35.3)
+        assert result["status"] == "pass"
+        assert result["check"] == "audio_not_truncated"
+
+    def test_audio_truncated_hard_fails(self, mocker):
+        from clipper_agency.agents.reviewer import _check_audio_not_truncated
+
+        mocker.patch(
+            "clipper_agency.agents.reviewer.probe_video",
+            return_value=_video_info(audio_duration=32.5),
+        )
+        result = _check_audio_not_truncated("/out/video.mp4", voiceover_duration_sec=35.3)
+        assert result["status"] == "fail"
+        assert result["reason"] == "AUDIO_TRUNCATED_REVIEWER"
+        assert result["audio_sec"] == 32.5
+        assert result["voiceover_sec"] == 35.3
+
+    def test_probe_none_warns_not_pass(self, mocker):
+        """Cannot verify != verified good (mirror FIX-2 G10 None->soft_fail)."""
+        from clipper_agency.agents.reviewer import _check_audio_not_truncated
+
+        mocker.patch(
+            "clipper_agency.agents.reviewer.probe_video",
+            return_value=None,
+        )
+        result = _check_audio_not_truncated("/out/video.mp4", voiceover_duration_sec=35.3)
+        assert result["status"] == "warn"
+        assert "unavailable" in result["detail"]
+
+    def test_no_voiceover_duration_skips(self, mocker):
+        """Legacy caller (no voiceover_duration_sec) -> skip, no probe call."""
+        from clipper_agency.agents import reviewer
+
+        spy = mocker.patch("clipper_agency.agents.reviewer.probe_video", return_value=None)
+        result = reviewer._check_audio_not_truncated("/out/video.mp4", 0.0)
+        assert result["status"] == "skip"
+        spy.assert_not_called()
+
+    def test_audio_truncated_hard_fails_in_execute(self, mocker):
+        """Blast-radius: a truncated audio stream hard-fails the reviewer WITHOUT
+        calling the LLM, even though container durations look fine (the exact
+        job_18 shape: -shortest equalized container durations hid the cut)."""
+        mocker.patch(
+            "clipper_agency.agents.reviewer.probe_video",
+            return_value=_video_info(audio_duration=32.5),
+        )
+        chat = mocker.patch(
+            "clipper_agency.llm.client.OpenRouterClient.chat",
+            return_value={
+                "content": '{"verdict":"pass","score":90,"feedback":"x","issues":[]}',
+                "model": "t",
+                "usage": {},
+            },
+        )
+        agent = ReviewerAgent()
+        result = agent.execute(
+            job_id=1,
+            topic="t",
+            script=[],
+            caption="#x",
+            context={
+                "audio_duration_sec": 35.3,  # container durations look fine...
+                "visual_duration_sec": 35.3,  # ...so _check_av_sync passes
+                "voiceover_duration_sec": 35.3,  # but the STREAM is 32.5
+                # The re-probe reads video_path off the rendered manifest.
+                "rendered_scene_manifest": {
+                    "video_path": "/out/video.mp4",
+                    "entries": [],
+                },
+            },
+        )
+        assert result["status"] == "fail"
+        assert result["reason"] == "AUDIO_TRUNCATED_REVIEWER"
+        chat.assert_not_called()

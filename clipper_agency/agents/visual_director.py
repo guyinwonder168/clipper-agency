@@ -755,13 +755,14 @@ class VisualDirectorAgent(BaseAgent):
             scene_id = item.get("scene_number", item.get("beat_id", 0))
             action = item.get("action", {})
             fallback = item.get("fallback")
-            result = self._execute_action(
+            primary_result = self._execute_action(
                 action,
                 scene_id,
                 scenes_dir,
                 pexels,
                 ytdlp,
             )
+            result = primary_result
 
             if result is None and fallback:
                 logger.info("Beat %d: primary failed, using fallback", scene_id)
@@ -778,7 +779,16 @@ class VisualDirectorAgent(BaseAgent):
             else:
                 asset = {"scene": scene_id, "source": "none", "path": ""}
 
-            # Pass through beat metadata for composer compatibility
+            # Pass through beat metadata for composer compatibility.
+            # FIX-4 (ADR 0030): subject_name + asset_id describe the INSPECTED
+            # candidate, so copy them ONLY when the primary action rendered that
+            # exact candidate. On a fallback (primary failed → alternate visual)
+            # or text-card (source:none) beat, the rendered asset depicts
+            # something else / nothing — carrying the failed candidate's
+            # subject_name would let the reviewer per-scene entity gate falsely
+            # PASS an unverified visual. Other fields are beat-level, not
+            # candidate-specific, so always carry.
+            primary_rendered = primary_result is not None
             for field in (
                 "treatment",
                 "target_duration",
@@ -788,9 +798,14 @@ class VisualDirectorAgent(BaseAgent):
                 "role",
                 "start_time",
                 "duration",
+                "subject_name",
+                "asset_id",
             ):
-                if field in item:
-                    asset[field] = item[field]
+                if field not in item:
+                    continue
+                if field in ("subject_name", "asset_id") and not primary_rendered:
+                    continue
+                asset[field] = item[field]
 
             asset = self._apply_default_treatment(asset)
             assets.append(asset)
@@ -1283,6 +1298,18 @@ class VisualDirectorAgent(BaseAgent):
             if matched:
                 cand = matched.get("candidate")
                 plan_item["action"] = self._candidate_to_action(cand, beat)
+                # FIX-4 (ADR 0030, codex round-2 P1): thread the VLM-depicted
+                # subject_name + matched asset_id from the scored-candidate
+                # inspection onto the plan item. _execute_beat_plan then copies
+                # them onto the executed asset dict so the composer's
+                # _asset_subject_name reads a real value (flat path) and the
+                # reviewer's per-scene entity-vs-beat gate can actually fire.
+                # Without this the production audio-first path strips
+                # subject_name at _candidate_to_action and the gate is INERT
+                # (verify-production-path-when-two-impls-exist).
+                matched_inspection = matched.get("inspection") or {}
+                plan_item["subject_name"] = str(matched_inspection.get("subject_name") or "")
+                plan_item["asset_id"] = str(matched.get("asset_id") or "")
                 return
         # All candidates rejected → use fallback text card, not the original
         # LLM action which references a now-rejected asset.

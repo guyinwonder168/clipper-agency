@@ -12,6 +12,14 @@ from clipper_agency.core.safe_paths import resolve_existing_file_under
 logger = logging.getLogger(__name__)
 
 
+# FIX-2 (audio-as-master) / FIX-4 (reviewer re-probe): single-source tolerance
+# for the AUDIO_NOT_TRUNCATED check. The audio stream may be marginally shorter
+# than the source voiceover due to encoder padding/rounding; only flag
+# truncation beyond this half-second gap. Shared by G10 (GateVideoValidation)
+# and the Reviewer defense-in-depth re-probe so definitions cannot diverge.
+AUDIO_TRUNC_TOL_SEC = 0.5
+
+
 @dataclass(frozen=True)
 class VideoInfo:
     """Immutable video metadata extracted via ffprobe."""

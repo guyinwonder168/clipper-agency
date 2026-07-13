@@ -22,6 +22,13 @@ class RenderedSceneEntry(BaseModel):
     source_type: str = ""
     selected_asset_id: str | None = None
     caption_regions: list[dict] = Field(default_factory=list)
+    # FIX-4 (ADR 0030): the VLM-depicted subject of this scene's asset, threaded
+    # from VD inspection.subject_name so the reviewer's per-scene entity-vs-beat
+    # gate can fire on a wrong-entity asset (job_18: a Jennifer Coppen image in a
+    # Sarwendah beat). Defaults to "" so pre-FIX-4 persisted manifests still
+    # deserialize; the entity gate treats "" as "cannot verify" (WARN), never a
+    # silent accept.
+    subject_name: str = ""
 
 
 class RenderedSceneManifest(BaseModel):
@@ -33,10 +40,7 @@ class RenderedSceneManifest(BaseModel):
 
     def scenes_at_timestamp(self, t: float) -> list[RenderedSceneEntry]:
         """Return all scene entries active at timestamp ``t``."""
-        return [
-            e for e in self.entries
-            if e.start_sec <= t <= e.end_sec
-        ]
+        return [e for e in self.entries if e.start_sec <= t <= e.end_sec]
 
     def beat_to_scenes(self, beat_id: str) -> list[RenderedSceneEntry]:
         """Return all scene entries mapped to a given beat ID."""
@@ -63,9 +67,9 @@ def _match_text_regions(
 ) -> list[dict]:
     """Return text regions whose time range overlaps with [start_sec, end_sec]."""
     return [
-        r for r in regions
-        if r["timestamp_start_sec"] <= end_sec
-        and r["timestamp_end_sec"] >= start_sec
+        r
+        for r in regions
+        if r["timestamp_start_sec"] <= end_sec and r["timestamp_end_sec"] >= start_sec
     ]
 
 
@@ -105,16 +109,30 @@ def build_rendered_scene_manifest(
 
         captions = _match_text_regions(text_regions, start, end)
 
-        entries.append(RenderedSceneEntry(
-            scene=str(scene.get("scene", "")),
-            beat_id=str(scene.get("beat_id", "")),
-            start_sec=start,
-            end_sec=end,
-            source_path=str(scene.get("path", "")),
-            source_type=str(scene.get("type", "")),
-            selected_asset_id=scene.get("selected_asset_id"),
-            caption_regions=captions,
-        ))
+        # FIX-4 (ADR 0030): read subject_name defensively. Prefer a flat
+        # scene["subject_name"] (the composer seam copies it there from the VD
+        # asset), falling back to a nested inspection["subject_name"] for scenes
+        # that still carry the full asset dict shape. Missing → "" (entity gate
+        # WARNs rather than silently accepting).
+        subject_name = str(scene.get("subject_name") or "")
+        if not subject_name:
+            nested_insp = scene.get("inspection")
+            if isinstance(nested_insp, dict):
+                subject_name = str(nested_insp.get("subject_name") or "")
+
+        entries.append(
+            RenderedSceneEntry(
+                scene=str(scene.get("scene", "")),
+                beat_id=str(scene.get("beat_id", "")),
+                start_sec=start,
+                end_sec=end,
+                source_path=str(scene.get("path", "")),
+                source_type=str(scene.get("type", "")),
+                selected_asset_id=scene.get("selected_asset_id"),
+                caption_regions=captions,
+                subject_name=subject_name,
+            )
+        )
 
     return RenderedSceneManifest(
         entries=entries,

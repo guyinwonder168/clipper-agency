@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from clipper_agency.core.media_probe import AUDIO_TRUNC_TOL_SEC as _AUDIO_TRUNC_TOL_SEC
 from clipper_agency.core.media_probe import probe_video
 from clipper_agency.core.narrative_coverage import NarrativeCoverageResult
 
@@ -330,10 +331,12 @@ class GateVideoValidation(BaseGate):
     REQUIRED_CODEC = "h264"
     MIN_DURATION = 20
     DEFAULT_MAX_DURATION = 60
-    # FIX-2 (audio-as-master): tolerance for AUDIO_NOT_TRUNCATED. Audio stream
-    # may be marginally shorter than the source voiceover due to encoder
-    # padding/rounding; only flag truncation beyond this half-second gap.
-    AUDIO_TRUNC_TOL_SEC = 0.5
+    # FIX-2 (audio-as-master) / FIX-4: tolerance for AUDIO_NOT_TRUNCATED.
+    # Mirrors the shared media_probe.AUDIO_TRUNC_TOL_SEC constant (single source
+    # for G10 + the Reviewer defense-in-depth re-probe so definitions cannot
+    # diverge). Audio stream may be marginally shorter than the source voiceover
+    # due to encoder padding/rounding; only flag truncation beyond this gap.
+    AUDIO_TRUNC_TOL_SEC = _AUDIO_TRUNC_TOL_SEC
 
     def _check_duration_only(
         self,

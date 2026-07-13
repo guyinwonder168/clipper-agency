@@ -120,6 +120,24 @@ def _word_count_for_coverage(text: str) -> int:
     return len((text or "").split())
 
 
+def _extract_main_entities(research_output: dict[str, Any] | None) -> list[str]:
+    """Project Segment Producer ``entities`` to the flat name list the reviewer consumes.
+
+    The Segment Producer emits ``entities`` as a list of ``{"name", "type"}``
+    dicts (``segment_producer.py``). The reviewer's FIX-4 per-scene entity
+    gate + the package-consistency gate both take a flat ``list[str]`` of names.
+    Returns ``[]`` when research_output is missing or carries no entities, so
+    the gate degrades to its no-op behavior (safe direction — recall loss only,
+    never a bypass; ``derive_expected_entities`` still binds via visual_must_show).
+    Used at BOTH ``_run_reviewer`` call sites so the gate fires on the normal
+    path AND the repair path (blast-radius: a happy-path-only wire is inert).
+    """
+    if not research_output:
+        return []
+    entities = research_output.get("entities") or []
+    return [str(e.get("name", "")) for e in entities if isinstance(e, dict) and e.get("name")]
+
+
 _COMPOSER_FAILED = "Composer failed"
 _PACKAGING_FAILED = "Packaging failed"
 _VOICE_GEN_FAILED = "Voice generation failed"
@@ -622,6 +640,14 @@ class Orchestrator:
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
             diagnostics=compose_output.get("diagnostics", {}),
             beat_timeline=beat_timeline,
+            # FIX-4 (ADR 0030): thread the source voiceover duration so the
+            # reviewer's AUDIO_NOT_TRUNCATED re-probe fires on the repair path
+            # too (blast-radius: a happy-path-only wire is inert in repair).
+            voiceover_duration_sec=voice_output.get("voiceover_duration_sec", 0.0),
+            # FIX-4 (ADR 0030): thread topic-level entities so the per-scene
+            # entity-binding gate + package-consistency gate fire on the repair
+            # path too (was always None → both gates degraded to no-op).
+            main_entities=_extract_main_entities(research_output),
         )
         # Persist reviewer output for debugging in repair cycles too.
         self._persist_agent_output(assets_cache, job_id, "reviewer", after_review)
@@ -2694,6 +2720,17 @@ class Orchestrator:
             rendered_scene_manifest=compose_output.get("rendered_scene_manifest"),
             diagnostics=compose_output.get("diagnostics", {}),
             beat_timeline=beat_timeline,
+            # FIX-4 (ADR 0030): thread voiceover_duration_sec so the reviewer's
+            # AUDIO_NOT_TRUNCATED re-probe fires on the normal path too
+            # (blast-radius: both _run_reviewer call sites must wire it).
+            voiceover_duration_sec=vo.get("voiceover_duration_sec", 0.0),
+            # FIX-4 (ADR 0030): thread topic-level entities so the per-scene
+            # entity-binding (ENTITY_MISMATCH) gate fires on the normal path
+            # (was always None → gate degraded to no-op). NOTE: the separate
+            # package-consistency gate additionally needs story_mode_decision +
+            # thumbnail_text, which remain unthreaded (pre-existing gate
+            # inertness, NOT FIX-4 scope) — do not claim it fires here.
+            main_entities=_extract_main_entities(rp),
         )
         # Persist reviewer output for debugging (deterministic gate results,
         # scores, and verdicts must be on disk even when gates hard-fail).

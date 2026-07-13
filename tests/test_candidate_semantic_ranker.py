@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from clipper_agency.core.candidate_semantic_ranker import (
     RankedCandidate,
     apply_rejection_rules,
@@ -550,6 +552,60 @@ class TestEntityOverlap:
     def test_short_expected_entity_ignored(self) -> None:
         """Expected tokens shorter than 4 chars are skipped (kills 'wen'-style noise)."""
         assert entity_overlap("Jo", ["jo"]) is False
+
+    # --- FIX-4 Slice 5: multi-token phrase-level matching ---
+
+    def test_full_name_phrase_exact_match(self) -> None:
+        """FIX-4 Slice 5: a full-name phrase matches as a single expected entry."""
+        assert entity_overlap("Jennifer Coppen", ["jennifer coppen"]) is True
+
+    def test_alias_substring_tolerance(self) -> None:
+        """Sarwendah/Sarwenda alias tolerance (transliteration)."""
+        assert entity_overlap("Sarwendah", ["sarwenda"]) is True
+
+    def test_different_full_name_no_match(self) -> None:
+        """The load-bearing safety case at the phrase level."""
+        assert entity_overlap("Jennifer Coppen", ["sarwendah"]) is False
+
+
+class TestGenericPlatformWordsFiltered:
+    """FIX-4 Slice 4: platform/format words must never count as entity matches
+    and must never be derived as expected entities (a 'TikTok' asset must not
+    match a beat whose spoken_point merely mentions TikTok)."""
+
+    @pytest.mark.parametrize(
+        "word",
+        [
+            "tiktok",
+            "youtube",
+            "ig",
+            "instagram",
+            "reels",
+            "duet",
+            "stitch",
+            "fyp",
+            "konten",
+            "kreator",
+        ],
+    )
+    def test_platform_word_not_derived_as_entity(self, word: str) -> None:
+        ents = derive_expected_entities(
+            spoken_point=f"{word.capitalize()} viral hari ini",
+            visual_must_show="",
+        )
+        assert word.lower() not in ents, f"{word} should be filtered as generic"
+
+    def test_platform_word_does_not_count_as_overlap(self) -> None:
+        """entity_overlap filters generic words from the expected set so they
+        can never count as a match (defense-in-depth over derivation)."""
+        assert entity_overlap("tiktok", ["tiktok"]) is False
+
+    def test_beat_with_only_platform_words_yields_no_entities(self) -> None:
+        ents = derive_expected_entities(
+            spoken_point="Tiktok viral fyp",
+            visual_must_show="",
+        )
+        assert ents == []
 
 
 class TestDeriveExpectedEntities:

@@ -12,7 +12,6 @@ from clipper_agency.core.rendered_scene_manifest import (
     build_rendered_scene_manifest,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -148,6 +147,99 @@ class TestBuildRenderedSceneManifest:
         manifest = _build_manifest(text_regions=[])
         for entry in manifest.entries:
             assert entry.caption_regions == []
+
+
+# ---------------------------------------------------------------------------
+# FIX-4 Slice 1 — subject_name threading (entity-vs-beat review contract)
+# ---------------------------------------------------------------------------
+
+
+class TestSubjectNameThreading:
+    """FIX-4 Slice 1: VD inspection.subject_name must reach the rendered scene
+    manifest so the reviewer's per-scene entity-vs-beat gate can fire."""
+
+    def test_flat_subject_name_threaded_into_entry(self):
+        """A scene dict carrying a flat subject_name flows into the entry."""
+        scenes = [
+            {
+                "scene": 1,
+                "path": "/assets/clip_a.mp4",
+                "type": "video",
+                "target_duration": 5.0,
+                "beat_id": "beat_0",
+                "selected_asset_id": "asset_001",
+                "subject_name": "Sarwendah",
+            }
+        ]
+        manifest = build_rendered_scene_manifest(scenes, [], 5.0, "/out/video.mp4")
+        assert manifest.entries[0].subject_name == "Sarwendah"
+
+    def test_nested_inspection_subject_name_fallback(self):
+        """When subject_name is nested under inspection (VD asset shape), it is
+        still read — defense for the legacy scene shape that carries the full
+        asset dict."""
+        scenes = [
+            {
+                "scene": 1,
+                "path": "/assets/clip_a.mp4",
+                "type": "video",
+                "target_duration": 5.0,
+                "beat_id": "beat_0",
+                "inspection": {"subject_name": "Jennifer Coppen", "person_match": 0.9},
+            }
+        ]
+        manifest = build_rendered_scene_manifest(scenes, [], 5.0, "/out/video.mp4")
+        assert manifest.entries[0].subject_name == "Jennifer Coppen"
+
+    def test_missing_subject_name_defaults_empty(self):
+        """Backward compat: a scene without subject_name deserializes to '' so
+        existing persisted manifests still load (no KeyError)."""
+        manifest = _build_manifest()
+        for entry in manifest.entries:
+            assert entry.subject_name == ""
+
+    def test_entry_default_subject_name_empty(self):
+        """The model field defaults to '' (entity gate skips empty)."""
+        entry = RenderedSceneEntry(scene="1", start_sec=0.0, end_sec=1.0, source_path="/x")
+        assert entry.subject_name == ""
+
+
+class TestComposerSubjectNameSeam:
+    """FIX-4 Slice 1: the composer _build_scene_manifest seam must thread
+    inspection.subject_name from the VD selected-asset dict onto the scene so
+    build_rendered_scene_manifest can read it (blast-radius: VD output →
+    Reviewer entity gate)."""
+
+    def test_asset_inspection_subject_name_flows_to_manifest(self):
+        from clipper_agency.agents.composer import _build_scene_manifest
+
+        scenes = [
+            {
+                "scene": 1,
+                "path": "/assets/clip_a.mp4",
+                "type": "video",
+                "target_duration": 5.0,
+            }
+        ]
+        # VD selected-asset shape: nested inspection with subject_name.
+        assets = [
+            {
+                "asset_id": "asset_001",
+                "beat_id": "beat_0",
+                "inspection": {"subject_name": "Sarwendah", "person_match": 0.9},
+            }
+        ]
+        manifest = _build_scene_manifest(scenes, [], 5.0, "/out/video.mp4", assets=assets)
+        assert manifest["entries"][0]["subject_name"] == "Sarwendah"
+        assert manifest["entries"][0]["beat_id"] == "beat_0"
+
+    def test_asset_without_subject_name_defaults_empty(self):
+        from clipper_agency.agents.composer import _build_scene_manifest
+
+        scenes = [{"scene": 1, "path": "/a.mp4", "type": "video", "target_duration": 5.0}]
+        assets = [{"asset_id": "a1", "beat_id": "b0", "inspection": {"person_match": 0.2}}]
+        manifest = _build_scene_manifest(scenes, [], 5.0, "/out/video.mp4", assets=assets)
+        assert manifest["entries"][0]["subject_name"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +423,9 @@ class TestEdgeCases:
             },
         ]
         manifest = _build_manifest(
-            scenes=scenes, text_regions=regions, video_duration_sec=5.0,
+            scenes=scenes,
+            text_regions=regions,
+            video_duration_sec=5.0,
         )
         # Scene spans [0, 5], region at exactly 5.0 → included
         assert len(manifest.entries[0].caption_regions) == 1
