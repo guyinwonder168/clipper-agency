@@ -1049,7 +1049,7 @@ class TestStaleCacheReinspectionGuard:
         # Decoration is attached (entity-binding parity). derive_expected_entities
         # binds AUTHORITATIVELY from visual_must_show ("Point N") — spoken_point
         # is a fallback only when visual_must_show yields no entities (FIX-3 r3).
-        assert scored["expected_entities"] == ["point"]
+        assert scored["expected_entities"] == [["point"]]
 
     def test_fresh_cache_skips_reinspection(self, tmp_path: Any) -> None:
         from clipper_agency.core.inspection_cache import store as cache_store

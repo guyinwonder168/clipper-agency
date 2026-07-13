@@ -86,6 +86,14 @@ class VisualDirectorAgent(BaseAgent):
 
     _IMAGE_SOURCES = frozenset({"pexels_image"})
     _VIDEO_SOURCES = frozenset({"tiktok_clip", "pexels_video", "tiktok", "pexels"})
+    # FIX-4 (ADR 0030) Codex P1: render sources that download the INSPECTED
+    # candidate URL verbatim (so the rendered visual IS the inspected visual,
+    # and the VLM subject_name is sound to carry). ``pexels_image``/``pexels_video``
+    # SEARCH Pexels by query — the rendered image is a different asset than the
+    # one the VLM inspected, so carrying the inspected subject would let the
+    # reviewer per-scene entity gate verify a visual that was never inspected.
+    # Those sources degrade to ENTITY_UNVERIFIABLE (subject_name stays "").
+    _URL_FAITHFUL_SOURCES = frozenset({"tiktok_clip"})
 
     def __init__(self, trace_writer: Any | None = None) -> None:
         self._trace_writer = trace_writer
@@ -786,6 +794,16 @@ class VisualDirectorAgent(BaseAgent):
             asset = {"scene": scene_id, "source": "none", "path": ""}
 
         primary_rendered = primary_result is not None
+        # subject_name/asset_id describe the INSPECTED candidate, so carry them
+        # ONLY when the primary action rendered that exact candidate via a
+        # URL-faithful source (tiktok_clip downloads the inspected URL). A
+        # fallback (primary failed), a text-card (source:none), OR a search-based
+        # render (pexels_image/pexels_video return a DIFFERENT asset than the
+        # inspected one) must NOT carry the inspected subject — else the reviewer
+        # per-scene entity gate verifies a visual that was never inspected.
+        rendered_source = str(result.get("source", "")) if result else ""
+        url_faithful = rendered_source in self._URL_FAITHFUL_SOURCES
+        entity_fields_ok = primary_rendered and url_faithful
         for field in (
             "treatment",
             "target_duration",
@@ -800,7 +818,7 @@ class VisualDirectorAgent(BaseAgent):
         ):
             if field not in item:
                 continue
-            if field in ("subject_name", "asset_id") and not primary_rendered:
+            if field in ("subject_name", "asset_id") and not entity_fields_ok:
                 continue
             asset[field] = item[field]
 

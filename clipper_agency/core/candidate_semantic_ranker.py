@@ -222,36 +222,52 @@ def _normalize_token(token: str) -> str:
     return "".join(c for c in token.lower() if c.isalpha())
 
 
-def _entities_from_text(text: str) -> list[str]:
-    """Extract de-duplicated named-entity tokens from a single text field.
+def _entities_from_text(text: str) -> list[list[str]]:
+    """Extract de-duplicated named-entity PHRASES from a single text field.
 
-    A token is kept only when it carries a named-entity signal: a leading
-    capital (proper noun), length >= ``_ENTITY_MIN_TOKEN_LEN`` after
-    normalization, and not in ``_ENTITY_STOPWORDS`` / ``_GENERIC_CONTRACT_WORDS``.
+    Each phrase is a maximal run of consecutive proper-noun tokens (leading
+    capital, length >= ``_ENTITY_MIN_TOKEN_LEN`` after normalization, not in
+    ``_ENTITY_STOPWORDS`` / ``_GENERIC_CONTRACT_WORDS``). Phrase structure is
+    preserved so ``entity_overlap`` can require a multi-token name (e.g.
+    "Raffi Ahmad") to match as a UNIT — a single shared token ("ahmad" between
+    expected "Raffi Ahmad" and subject "Ahmad Doe") must NOT accept a different
+    person (FIX-4 Codex P2). Stopwords / generic terms / lowercase tokens break
+    a phrase run, so "Sarwendah dan Ruben" yields two single-token phrases.
     """
-    entities: list[str] = []
-    seen: set[str] = set()
+    phrases: list[list[str]] = []
+    current: list[str] = []
     for token in (text or "").split():
         norm = _normalize_token(token)
-        if len(norm) < _ENTITY_MIN_TOKEN_LEN:
+        kept = (
+            len(norm) >= _ENTITY_MIN_TOKEN_LEN
+            and norm not in _ENTITY_STOPWORDS
+            and norm not in _GENERIC_CONTRACT_WORDS
+            and token[:1].isupper()
+        )
+        if not kept:
+            if current:
+                phrases.append(current)
+                current = []
             continue
-        if norm in _ENTITY_STOPWORDS or norm in _GENERIC_CONTRACT_WORDS:
-            continue
-        # Named-entity signal: require a leading capital (proper noun) so a
-        # generic lowercase contract yields no entities.
-        if not token[:1].isupper():
-            continue
-        if norm not in seen:
-            seen.add(norm)
-            entities.append(norm)
-    return entities
+        if norm not in current:
+            current.append(norm)
+    if current:
+        phrases.append(current)
+    seen: set[tuple[str, ...]] = set()
+    deduped: list[list[str]] = []
+    for phrase in phrases:
+        key = tuple(phrase)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(phrase)
+    return deduped
 
 
 def derive_expected_entities(
     spoken_point: str,
     visual_must_show: str = "",
-) -> list[str]:
-    """Derive candidate entity-name tokens from a beat's text fields.
+) -> list[list[str]]:
+    """Derive candidate entity-name PHRASES from a beat's text fields.
 
     FIX-3 round-3 (Codex): ``visual_must_show`` is the AUTHORITATIVE
     entity-binding source. When it yields one or more named entities, those are
@@ -269,9 +285,10 @@ def derive_expected_entities(
     drop function words (``_ENTITY_STOPWORDS``) + generic media/category terms
     (``_GENERIC_CONTRACT_WORDS``).
 
-    Tuned for RECALL on the named-entity subset: an extra junk token only gives
-    ``subject_name`` another harmless overlap attempt, while a MISSED true entity
-    causes a false WRONG_ENTITY reject.
+    FIX-4 (Codex P2): returns PHRASES (``list[list[str]]``), not flat tokens, so
+    multi-token names match as a unit. Tuned for RECALL on the named-entity
+    subset: an extra junk phrase only gives ``subject_name`` another harmless
+    overlap attempt, while a MISSED true entity causes a false WRONG_ENTITY.
     """
     binding = _entities_from_text(visual_must_show)
     if binding:
@@ -301,33 +318,47 @@ def _expected_entity_matches(exp: str, subj_tokens: list[str]) -> bool:
     return False
 
 
-def entity_overlap(subject_name: str, expected: list[str]) -> bool:
-    """True if ``subject_name`` plausibly matches any of the ``expected`` entities."""
+def entity_overlap(subject_name: str, expected: list[list[str]]) -> bool:
+    """True if ``subject_name`` plausibly matches any expected entity PHRASE.
+
+    FIX-4 (Codex P2): ``expected`` is a list of phrases (``list[list[str]]``).
+
+    - Single-token phrase: lenient Rules A/B/C via ``_expected_entity_matches``
+      (preserves alias/transliteration tolerance + the Cristiano-Ronaldo/
+      ronaldo single-token case).
+    - Multi-token phrase: require token-set Jaccard >=
+      ``_ENTITY_JACCARD_THRESHOLD`` so a single shared token (e.g. "ahmad"
+      between expected "Raffi Ahmad" and subject "Ahmad Doe") does NOT accept a
+      different person.
+
+    Generic words are filtered out of each phrase (defense-in-depth) so a
+    "TikTok" asset never matches a beat that merely mentions TikTok.
+    """
     if not subject_name or not expected:
-        return False
-    # FIX-4 (ADR 0030) Slice 4: defense-in-depth — filter generic platform/format
-    # words out of the expected set so they can never count as a match, even if
-    # one slipped past derive_expected_entities. A "TikTok" asset must not match
-    # a beat that merely mentions TikTok.
-    filtered_expected = [e for e in expected if _normalize_token(e) not in _GENERIC_CONTRACT_WORDS]
-    if not filtered_expected:
         return False
     subj_tokens = [t for t in (_normalize_token(s) for s in subject_name.split()) if t]
     if not subj_tokens:
         return False
-    # FIX-4 (ADR 0030) Slice 5: phrase-level exact match first. Handles full-name
-    # phrases ("Jennifer Coppen") and aliases as single expected entries by
-    # comparing the FULL normalized subject to the FULL normalized expected
-    # entry, before falling back to the per-token matcher.
-    subj_phrase = _normalize_token(subject_name)
-    for exp_raw in filtered_expected:
-        exp = _normalize_token(exp_raw)
-        if len(exp) < _ENTITY_MIN_TOKEN_LEN:
+    subj_set = set(subj_tokens)
+    for phrase in expected:
+        # Normalize (defensive — production phrases are pre-normalized) + drop
+        # generic words AND tokens shorter than the min length (kills "jo"-style
+        # noise) so they can never count as a match.
+        significant = [
+            t
+            for t in (_normalize_token(tok) for tok in phrase)
+            if len(t) >= _ENTITY_MIN_TOKEN_LEN and t not in _GENERIC_CONTRACT_WORDS
+        ]
+        if not significant:
             continue
-        if exp == subj_phrase and len(subj_phrase) >= _ENTITY_MIN_TOKEN_LEN:
-            return True
-        if _expected_entity_matches(exp, subj_tokens):
-            return True
+        if len(significant) == 1:
+            if _expected_entity_matches(significant[0], subj_tokens):
+                return True
+        else:
+            inter = len(subj_set & set(significant))
+            union = len(subj_set | set(significant))
+            if union and inter / union >= _ENTITY_JACCARD_THRESHOLD:
+                return True
     return False
 
 

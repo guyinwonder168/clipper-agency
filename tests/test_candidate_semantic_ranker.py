@@ -384,20 +384,28 @@ class TestSelectBestCandidate:
 
 def _entity_candidate(
     subject_name: str = "",
-    expected_entities: list[str] | None = None,
+    expected_entities: list[str] | list[list[str]] | None = None,
     person_match: float = 0.9,
     claim_support: float = 0.9,
     misleading_risk: float = 0.1,
     asset_id: str = "asset_1",
 ) -> dict:
-    """Build a scored-candidate dict carrying the FIX-3 entity-binding fields."""
+    """Build a scored-candidate dict carrying the FIX-3 entity-binding fields.
+
+    FIX-4 (Codex P2): ``expected_entities`` is stored as PHRASES
+    (``list[list[str]]``) to match the phrase-aware ``entity_overlap``. Accepts
+    flat tokens (``["sarwendah"]``) for backward-compat and wraps each into a
+    single-token phrase; multi-token phrases (``[["raffi","ahmad"]]``) pass through.
+    """
+    raw = expected_entities or []
+    phrases = [[t] if isinstance(t, str) else list(t) for t in raw]
     return {
         "asset_id": asset_id,
         "beat_id": "b1",
         "role": "evidence",
         "treatment": "picture_in_picture",
         "cleanliness_score": 0.9,
-        "expected_entities": expected_entities if expected_entities is not None else [],
+        "expected_entities": phrases,
         "inspection": {
             "person_match": person_match,
             "event_match": 0.9,
@@ -484,9 +492,9 @@ class TestVisualMustShowAuthoritativeBinding:
             spoken_point="Sarwendah berbeda dengan Jennifer Coppen",
             visual_must_show="Sarwendah",
         )
-        assert "sarwendah" in ents
-        assert "jennifer" not in ents
-        assert "coppen" not in ents
+        assert ["sarwendah"] in ents
+        assert ["jennifer"] not in ents
+        assert ["coppen"] not in ents
 
     def test_wrong_person_from_spoken_point_rejected(self) -> None:
         """End-to-end job_18 case: an asset whose subject_name is the merely-
@@ -522,50 +530,59 @@ class TestVisualMustShowAuthoritativeBinding:
             spoken_point="Sarwendah baru saja update",
             visual_must_show="Thumbnail berita artis",
         )
-        assert "sarwendah" in ents
+        assert ["sarwendah"] in ents
 
 
 class TestEntityOverlap:
     """FIX-3 — entity_overlap pure helper (the alias/fuzzy matching core)."""
 
     def test_exact_token_match(self) -> None:
-        assert entity_overlap("Sarwendah", ["sarwendah"]) is True
+        assert entity_overlap("Sarwendah", [["sarwendah"]]) is True
 
     def test_case_insensitive(self) -> None:
-        assert entity_overlap("sarwendah", ["SARWENDAH"]) is True
+        assert entity_overlap("sarwendah", [["SARWENDAH"]]) is True
 
     def test_substring_alias(self) -> None:
         """sarwenda is a substring of sarwendah (transliteration tolerance)."""
-        assert entity_overlap("Sarwenda", ["sarwendah"]) is True
+        assert entity_overlap("Sarwenda", [["sarwendah"]]) is True
 
     def test_jennifer_not_sarwendah(self) -> None:
         """The load-bearing safety case: different celebrity must NOT match."""
-        assert entity_overlap("Jennifer Coppen", ["sarwendah"]) is False
+        assert entity_overlap("Jennifer Coppen", [["sarwendah"]]) is False
 
     def test_multi_word_subject_token_match(self) -> None:
-        assert entity_overlap("Cristiano Ronaldo", ["ronaldo"]) is True
+        assert entity_overlap("Cristiano Ronaldo", [["ronaldo"]]) is True
 
     def test_empty_inputs(self) -> None:
-        assert entity_overlap("", ["x"]) is False
+        assert entity_overlap("", [["x"]]) is False
         assert entity_overlap("x", []) is False
 
     def test_short_expected_entity_ignored(self) -> None:
         """Expected tokens shorter than 4 chars are skipped (kills 'wen'-style noise)."""
-        assert entity_overlap("Jo", ["jo"]) is False
+        assert entity_overlap("Jo", [["jo"]]) is False
 
     # --- FIX-4 Slice 5: multi-token phrase-level matching ---
 
     def test_full_name_phrase_exact_match(self) -> None:
         """FIX-4 Slice 5: a full-name phrase matches as a single expected entry."""
-        assert entity_overlap("Jennifer Coppen", ["jennifer coppen"]) is True
+        assert entity_overlap("Jennifer Coppen", [["jennifer", "coppen"]]) is True
 
     def test_alias_substring_tolerance(self) -> None:
         """Sarwendah/Sarwenda alias tolerance (transliteration)."""
-        assert entity_overlap("Sarwendah", ["sarwenda"]) is True
+        assert entity_overlap("Sarwendah", [["sarwenda"]]) is True
 
     def test_different_full_name_no_match(self) -> None:
         """The load-bearing safety case at the phrase level."""
-        assert entity_overlap("Jennifer Coppen", ["sarwendah"]) is False
+        assert entity_overlap("Jennifer Coppen", [["sarwendah"]]) is False
+
+    def test_multi_token_shared_token_no_match(self) -> None:
+        """FIX-4 Codex P2: a single shared token of a multi-token name must NOT
+        accept a different person. Subject "Ahmad Doe" shares "ahmad" with the
+        expected full name "Raffi Ahmad" — must be rejected (token-set Jaccard
+        1/3 = 0.33 < 0.75). Before the phrase refactor the flat per-token
+        matcher Rule-A-matched on "ahmad" and false-accepted."""
+        assert entity_overlap("Ahmad Doe", [["raffi", "ahmad"]]) is False
+        assert entity_overlap("Raffi Ahmad", [["raffi", "ahmad"]]) is True
 
 
 class TestGenericPlatformWordsFiltered:
@@ -593,12 +610,12 @@ class TestGenericPlatformWordsFiltered:
             spoken_point=f"{word.capitalize()} viral hari ini",
             visual_must_show="",
         )
-        assert word.lower() not in ents, f"{word} should be filtered as generic"
+        assert not any(word.lower() in p for p in ents), f"{word} should be filtered as generic"
 
     def test_platform_word_does_not_count_as_overlap(self) -> None:
         """entity_overlap filters generic words from the expected set so they
         can never count as a match (defense-in-depth over derivation)."""
-        assert entity_overlap("tiktok", ["tiktok"]) is False
+        assert entity_overlap("tiktok", [["tiktok"]]) is False
 
     def test_beat_with_only_platform_words_yields_no_entities(self) -> None:
         ents = derive_expected_entities(
@@ -615,7 +632,7 @@ class TestDeriveExpectedEntities:
         # Named entities are capitalized (proper nouns); a lowercase token is
         # treated as a generic contract word, not an entity.
         ents = derive_expected_entities(spoken_point="", visual_must_show="Sarwendah")
-        assert "sarwendah" in ents
+        assert ["sarwendah"] in ents
 
     def test_generic_visual_must_show_yields_no_entity(self) -> None:
         # Codex P2 #1: a generic contract (Job 8 "Thumbnail berita artis dengan
@@ -647,8 +664,8 @@ class TestDeriveExpectedEntities:
 
     def test_capitalized_spoken_token_kept(self) -> None:
         ents = derive_expected_entities(spoken_point="Sarwendah baru saja update")
-        assert "sarwendah" in ents
-        assert "baru" not in ents
+        assert ["sarwendah"] in ents
+        assert ["baru"] not in ents
 
     def test_stopwords_dropped(self) -> None:
         ents = derive_expected_entities(spoken_point="Yang Dari Dengan")
@@ -656,12 +673,12 @@ class TestDeriveExpectedEntities:
 
     def test_dedup_across_fields(self) -> None:
         ents = derive_expected_entities(spoken_point="Sarwendah", visual_must_show="sarwendah")
-        assert ents.count("sarwendah") == 1
+        assert sum(1 for p in ents if "sarwendah" in p) == 1
 
     def test_duplicate_token_within_field_deduped(self) -> None:
         """A repeated capitalized token within ONE field is de-duplicated."""
         ents = derive_expected_entities(spoken_point="", visual_must_show="Sarwendah Sarwendah")
-        assert ents == ["sarwendah"]
+        assert ents == [["sarwendah"]]
 
     def test_empty_inputs(self) -> None:
         assert derive_expected_entities("", "") == []

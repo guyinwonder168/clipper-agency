@@ -746,9 +746,9 @@ class TestRunEntityBindingReviewPure:
         }
         # Beat-local derivation is authoritative → globals must NOT widen it.
         expected = _entity_expected_for_beat(beat)
-        assert "sarwendah" in expected
-        assert "ruben" not in expected
-        assert "onsu" not in expected
+        assert ["sarwendah"] in expected
+        assert ["ruben"] not in expected
+        assert ["onsu"] not in expected
 
         mappings = [
             SceneBeatMapping(
@@ -787,7 +787,7 @@ class TestRunEntityBindingReviewPure:
         expected = _entity_expected_for_beat(beat)
         # Globals are NOT appended → non-entity beat has no expectation.
         assert expected == []
-        assert "sarwendah" not in expected
+        assert ["sarwendah"] not in expected
 
         mappings = [
             SceneBeatMapping(

@@ -298,7 +298,7 @@ def _run_programmatic_scene_reviews(
     return [_evaluate_scene_semantic(m) for m in mappings]
 
 
-def _entity_expected_for_beat(beat: dict) -> list[str]:
+def _entity_expected_for_beat(beat: dict) -> list[list[str]]:
     """FIX-4 (ADR 0030): expected named entities for one beat.
 
     Reuses FIX-3's ``derive_expected_entities`` (DRY — single source for the
@@ -335,8 +335,8 @@ def _entity_review_for_mapping(
     """
     if not m.matched_beat_ids:
         return None
-    # Collect expected entities across all matched beats for this scene.
-    expected: list[str] = []
+    # Collect expected entity phrases across all matched beats for this scene.
+    expected: list[list[str]] = []
     for bid in m.matched_beat_ids:
         beat = beats_by_id.get(bid)
         if beat:
