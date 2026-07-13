@@ -2,7 +2,6 @@
 
 from clipper_agency.rendering.audio_sequencer import build_audio_video_concat
 
-
 # ---------------------------------------------------------------------------
 # Mode A: audio+video paired concat
 # ---------------------------------------------------------------------------
@@ -18,7 +17,7 @@ def test_pairs_audio_to_video_mode_a():
 
     # Assert
     filter_str, outv, outa = result
-    assert "[t0][3:a][t1][4:a][t2][5:a]concat=n=3:v=1:a=1[outv][outa]" == filter_str
+    assert filter_str == "[t0][3:a][t1][4:a][t2][5:a]concat=n=3:v=1:a=1[outv][outa]"
     assert outv == "outv"
     assert outa == "outa"
 
@@ -40,7 +39,7 @@ def test_audio_only_concat_mode_b():
 
     # Assert
     filter_str, outv, outa = result
-    assert "[3:a][4:a][5:a]concat=n=3:v=0:a=1[outa]" == filter_str
+    assert filter_str == "[3:a][4:a][5:a]concat=n=3:v=0:a=1[outa]"
     assert outv == ""
     assert outa == "outa"
 
@@ -104,7 +103,7 @@ def test_more_audio_truncates():
 
     # Assert
     filter_str, outv, outa = result
-    assert "[t0][2:a][t1][3:a]concat=n=2:v=1:a=1[outv][outa]" == filter_str
+    assert filter_str == "[t0][2:a][t1][3:a]concat=n=2:v=1:a=1[outv][outa]"
     assert outv == "outv"
     assert outa == "outa"
 
@@ -124,7 +123,7 @@ def test_single_scene_mode_a():
 
     # Assert
     filter_str, outv, outa = result
-    assert "[t0][1:a]concat=n=1:v=1:a=1[outv][outa]" == filter_str
+    assert filter_str == "[t0][1:a]concat=n=1:v=1:a=1[outv][outa]"
     assert outv == "outv"
     assert outa == "outa"
 

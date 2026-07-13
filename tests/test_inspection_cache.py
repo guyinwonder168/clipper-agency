@@ -191,7 +191,8 @@ class TestContentHashInvalidatesCacheKey:
 
     def test_identical_candidate_keeps_cache_key_resume_safe(self) -> None:
         a = AssetCandidate(type="tiktok_clip", url="https://x/a", reason="r", source_type="s")
-        assert self._key(a) == self._key(a)
+        twin = AssetCandidate(type="tiktok_clip", url="https://x/a", reason="r", source_type="s")
+        assert self._key(a) == self._key(twin)
 
 
 # ---------------------------------------------------------------------------

@@ -99,10 +99,11 @@ def test_generate_voice(tmp_path):
 
 
 def test_generate_voice_no_key(tmp_path):
+    out = str(tmp_path / "v.mp3")
     with patch.dict("os.environ", {}, clear=True):
         svc = ElevenLabsService()
         with pytest.raises(ValueError, match="ELEVENLABS_API_KEY"):
-            svc.generate_voice("test", "voice", str(tmp_path / "v.mp3"))
+            svc.generate_voice("test", "voice", out)
 
 
 # ---------------------------------------------------------------------------

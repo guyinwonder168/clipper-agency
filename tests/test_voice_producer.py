@@ -484,12 +484,13 @@ class TestChunkedVoiceoverPerChunkResilience:
             ),
         ):
             # Chunk 2 failure aborts the chunked voiceover (raise) — no partial.
+            cache = str(tmp_path)
             with pytest.raises(RuntimeError, match="transient chunk 2 failure"):
                 agent._generate_chunked_voiceover(
                     text,
                     "voice-x",
                     job_id=99,
-                    assets_cache=str(tmp_path),
+                    assets_cache=cache,
                     provider="elevenlabs",
                 )
 

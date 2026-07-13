@@ -117,11 +117,13 @@ def test_gemini_tts_raises_after_max_retries(mock_httpx, mock_sleep, tmp_path):
 
     with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}, clear=True):
         output_path = tmp_path / "voice.wav"
+        svc = GeminiTTSService()
+        out = str(output_path)
         with pytest.raises(httpx.HTTPStatusError):
-            GeminiTTSService().generate_voice(
+            svc.generate_voice(
                 text="Tes max retry.",
                 voice_id="Kore",
-                output_path=str(output_path),
+                output_path=out,
             )
 
     assert mock_client.post.call_count == 4
