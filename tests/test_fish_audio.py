@@ -24,8 +24,9 @@ def test_init_no_api_key():
 def test_generate_voice_no_key_raises(tmp_path):
     with patch.dict("os.environ", {}, clear=True):
         svc = FishAudioService()
+    out = str(tmp_path / "out.mp3")
     with pytest.raises(ValueError, match="FISHAUDIO_API_KEY not set"):
-        svc.generate_voice("hello", "voice-1", str(tmp_path / "out.mp3"))
+        svc.generate_voice("hello", "voice-1", out)
 
 
 @patch("httpx.Client")
@@ -75,11 +76,13 @@ def test_generate_voice_http_error(mock_httpx, tmp_path):
     mock_httpx.return_value.__exit__ = MagicMock(return_value=False)
 
     with patch.dict("os.environ", {"FISHAUDIO_API_KEY": "test-key"}, clear=True):
+        svc = FishAudioService()
+        out = str(tmp_path / "voice.mp3")
         with pytest.raises(httpx.HTTPStatusError, match="Payment Required"):
-            FishAudioService().generate_voice(
+            svc.generate_voice(
                 text="Hello",
                 voice_id="v1",
-                output_path=str(tmp_path / "voice.mp3"),
+                output_path=out,
             )
 
 

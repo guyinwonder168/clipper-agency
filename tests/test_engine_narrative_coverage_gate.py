@@ -398,11 +398,12 @@ def test_enforce_narrative_coverage_atomic_rollback_on_agent_write_failure(tmp_p
         raising=False,
     )
 
+    script = _job18_uncovered_script_output()
     with pytest.raises(sqlite3.OperationalError, match="database is locked"):
         orch._enforce_narrative_coverage(
             conn,
             job_id=job_id,
-            script_output=_job18_uncovered_script_output(),
+            script_output=script,
             assets_cache="",
         )
 

@@ -166,8 +166,9 @@ class TestEnforceTimelineContract:
 
             monkeypatch.setattr(engine_mod, "_update_agent_state_inner", boom)
 
+            cache = str(tmp_path)
             with pytest.raises(sqlite3.OperationalError):
-                orch._enforce_timeline_contract(conn, job_id, str(tmp_path), narrative, ts)
+                orch._enforce_timeline_contract(conn, job_id, cache, narrative, ts)
             # rollback() reverted the whole transaction: the job row is NOT
             # left in the half-committed FAILED state (the Codex P2 regression).
             job = get_job(conn, job_id)

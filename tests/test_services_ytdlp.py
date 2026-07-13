@@ -1,11 +1,11 @@
 """Tests for yt-dlp media download service."""
 
 import subprocess
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clipper_agency.services.ytdlp import YtDlpService, DownloadResult
+from clipper_agency.services.ytdlp import DownloadResult, YtDlpService
 
 
 def test_download_result_model():
@@ -50,9 +50,10 @@ def test_download_delimits_url_operand_from_options(mock_run, tmp_path):
 )
 def test_download_rejects_unsafe_urls(url, tmp_path):
     svc = YtDlpService()
+    out = str(tmp_path / "video.mp4")
 
     with pytest.raises(ValueError):
-        svc.download(url, str(tmp_path / "video.mp4"))
+        svc.download(url, out)
 
 
 @patch("subprocess.run")
