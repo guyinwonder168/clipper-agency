@@ -53,9 +53,7 @@ def _resolve_relative_candidate(base: Path, candidate_path: Path) -> Path | None
 
     # Fallback: CWD-resolution for full relative paths like
     # "data/outputs/job_N/video.mp4".
-    from_cwd = (
-        candidate_path.resolve()
-    )  # NOSONAR — pipeline-internal path; containment checked below
+    from_cwd = candidate_path.resolve()  # NOSONAR: FP — see module docstring
     if not _within_base(base, from_cwd):
         return None
 
@@ -79,9 +77,7 @@ def resolve_existing_file_under(
         base = Path(base_dir).resolve()
         candidate_path = Path(candidate)
         if candidate_path.is_absolute():
-            resolved = (
-                candidate_path.resolve()
-            )  # NOSONAR — pipeline-internal path; containment checked below
+            resolved = candidate_path.resolve()  # NOSONAR: FP — see module docstring
         else:
             resolved = _resolve_relative_candidate(base, candidate_path)
             if resolved is None:
