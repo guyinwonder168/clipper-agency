@@ -206,6 +206,10 @@ def mock_probe_video_ok(mocker):
         duration = 30.0
         has_audio = True
         file_size = 1000000
+        # FIX-2 (audio-as-master) / FIX-4: reflect the real VideoInfo schema so
+        # G10's AUDIO_NOT_TRUNCATED branch (and any truthy voiceover_duration_sec)
+        # doesn't AttributeError on a stale mock.
+        audio_duration = 30.0
 
     mocker.patch(
         "clipper_agency.orchestrator.gates.probe_video",
@@ -457,6 +461,169 @@ class TestOrchestratorRunPipeline:
         mock_composer.assert_called_once()
         mock_reviewer.assert_called_once()
         mock_pkg.assert_called_once()
+
+    def test_reviewer_receives_voiceover_duration_sec_normal_path(self, db_initialized, tmp_path):
+        """FIX-4 (ADR 0030) blast-radius: voiceover_duration_sec MUST reach the
+        reviewer on the normal pipeline path so the AUDIO_NOT_TRUNCATED re-probe
+        fires (a happy-path-only wire is inert — the FIX-2 PR #91 lesson)."""
+        orch = Orchestrator(db_path=db_initialized)
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
+            mock_safety.return_value = {"status": "pass", "reason": "Safe"}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+                # Aligned with mock_probe_video_ok.audio_duration (30.0) so G10's
+                # AUDIO_NOT_TRUNCATED branch passes and the reviewer is reached.
+                "voiceover_duration_sec": 30.0,
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
+                "rendered_scene_manifest": {"entries": []},
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
+
+            orch.run_pipeline(topic="Test", niche="test_niche")
+
+        # The reviewer must receive voiceover_duration_sec (FIX-4 blast-radius).
+        reviewer_kwargs = mock_reviewer.call_args.kwargs
+        assert reviewer_kwargs.get("voiceover_duration_sec") == 30.0
+
+    def test_reviewer_receives_main_entities_normal_path(self, db_initialized, tmp_path):
+        """FIX-4 (ADR 0030) blast-radius: main_entities MUST reach the reviewer
+        on the normal pipeline path. The Segment Producer emits ``entities`` as a
+        list of ``{"name","type"}`` dicts; the reviewer's per-scene entity gate
+        + package-consistency gate consume a flat name list. Without this wire
+        both gates degraded to a no-op (main_entities was always None)."""
+        orch = Orchestrator(db_path=db_initialized)
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x")
+        asset = tmp_path / "v.mp4"
+        asset.write_bytes(b"x")
+        video = tmp_path / "out.mp4"
+        video.write_bytes(b"X" * 2048)
+        with (
+            patch.object(Orchestrator, "_run_safety") as mock_safety,
+            patch.object(Orchestrator, "_run_researcher") as mock_researcher,
+            patch.object(Orchestrator, "_run_scriptwriter") as mock_scriptwriter,
+            patch.object(Orchestrator, "_run_voice_producer") as mock_voice,
+            patch.object(Orchestrator, "_run_visual_director") as mock_visual,
+            patch.object(Orchestrator, "_run_composer") as mock_composer,
+            patch.object(Orchestrator, "_run_reviewer") as mock_reviewer,
+            patch.object(Orchestrator, "_package_output") as mock_pkg,
+        ):
+            mock_safety.return_value = {"status": "pass", "reason": "Safe"}
+            mock_researcher.return_value = {
+                "status": "completed",
+                "research_brief": "ok",
+                "sources": ["https://a.com", "https://b.com"],
+                # Segment Producer emits {name,type} entity dicts.
+                "entities": [
+                    {"name": "Sarwendah", "type": "person"},
+                    {"name": "Ruben Onsu", "type": "person"},
+                ],
+            }
+            mock_scriptwriter.return_value = {
+                "status": "completed",
+                "script": [],
+                "caption": "",
+                "hashtags": [],
+                "estimated_duration": 0,
+                "voiceover_text": "one two three four five",
+                "narrative_structure": [{"beat_id": 1, "word_range": [0, 4]}],
+            }
+            mock_voice.return_value = {
+                "status": "completed",
+                "audio_files": [str(audio)],
+                "voiceover_path": str(audio),
+                # Align with mock_probe_video_ok.audio_duration (30.0) so G10's
+                # AUDIO_NOT_TRUNCATED branch passes and the reviewer is reached.
+                "voiceover_duration_sec": 30.0,
+            }
+            mock_visual.return_value = {
+                "status": "completed",
+                "assets": [{"scene": 1, "source": "pexels", "path": str(asset)}],
+            }
+            mock_composer.return_value = {
+                "status": "completed",
+                "video_path": str(video),
+                "thumbnail_path": "/tmp/thumb.png",
+                "rendered_scene_manifest": {"entries": []},
+            }
+            mock_reviewer.return_value = {
+                "status": "pass",
+                "score": 80,
+                "feedback": "ok",
+                "issues": [],
+            }
+            mock_pkg.return_value = {
+                "status": "completed",
+                "output_dir": "/tmp",
+                "video_path": "",
+                "caption_path": "",
+                "thumbnail_path": "",
+                "metadata_path": "",
+            }
+
+            orch.run_pipeline(topic="Test", niche="test_niche")
+
+        # The reviewer must receive a non-empty flat name list (FIX-4
+        # blast-radius), projected from the {name,type} entity dicts.
+        reviewer_kwargs = mock_reviewer.call_args.kwargs
+        main_entities = reviewer_kwargs.get("main_entities")
+        assert main_entities is not None
+        assert "Sarwendah" in main_entities
+        assert "Ruben Onsu" in main_entities
+        # Projection drops the type field — values are names only.
+        assert all(isinstance(e, str) for e in main_entities)
 
     def test_passes_research_to_scriptwriter(self, db_initialized):
         """Orchestrator should pass research output to scriptwriter."""

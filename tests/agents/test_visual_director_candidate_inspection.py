@@ -763,3 +763,177 @@ class TestStaleCacheReinspectionGuard:
         assert result is not None
         mock_run.assert_not_called()
         assert result["inspection_diag"]["from_cache"] is True
+
+
+# ---------------------------------------------------------------------------
+# FIX-4 (ADR 0030) codex round-2 P1: subject_name must survive the FULL
+# production audio-first chain VD._apply_best_candidate -> _execute_beat_plan
+# -> Composer._build_scene_manifest -> RenderedSceneManifest. Before the fix
+# _candidate_to_action stripped the matched candidate to {type, source_url} and
+# _execute_beat_plan only forwarded treatment/duration fields, so the executed
+# asset never carried subject_name -> _asset_subject_name always returned "" ->
+# the reviewer per-scene ENTITY_MISMATCH branch was UNREACHABLE in production
+# (tests passed only because they hand-injected subject_name into a mocked
+# assets dict). This test drives the REAL execute seam with a real scored
+# candidate (only the VLM inspection + the download are mocked) and asserts
+# subject_name lands in the manifest, then that a wrong entity is rejected.
+# ---------------------------------------------------------------------------
+
+
+class TestSubjectNameThreadedThroughExecuteChain:
+    """Codex round-2 P1 regression: subject_name flows end-to-end."""
+
+    @patch("clipper_agency.agents.visual_director.lookup", return_value=None)
+    @patch("clipper_agency.agents.visual_director.store")
+    def test_subject_name_reaches_manifest_and_gate_fires(
+        self,
+        mock_store: MagicMock,
+        mock_lookup: MagicMock,
+        tmp_path: Any,
+    ) -> None:
+        from clipper_agency.agents.composer import (
+            _asset_subject_name,
+            _build_scene_manifest,
+        )
+        from clipper_agency.agents.reviewer import _run_entity_binding_review
+        from clipper_agency.core.reviewer_context import SceneBeatMapping
+
+        # Arrange — a Sarwendah beat with one tiktok_clip candidate.
+        agent = _make_agent()
+        cand = _make_candidate("tiktok_clip", "https://a.com/sarwendah.mp4")
+        beat = _make_beat(
+            beat_id=1,
+            spoken_point="Sarwendah update terbaru",
+            visual_must_show="Sarwendah",
+            candidates=[cand],
+        )
+        plan = [_make_plan_item(beat_id=1)]
+        sarwendah_inspection = {**_high_inspection(), "subject_name": "Sarwendah"}
+
+        # Act 1 — real candidate inspection + selection seam.
+        with patch.object(
+            agent,
+            "_run_multimodal_inspection",
+            return_value=sarwendah_inspection,
+        ):
+            updated_plan, _inspections = agent._do_inspect_and_select(
+                plan,
+                [beat],
+                1,
+                str(tmp_path / "agent"),
+            )
+
+        # Assert 1 — subject_name + asset_id stashed on the plan item by
+        # _apply_best_candidate (the seam that was missing before the fix).
+        assert updated_plan[0]["subject_name"] == "Sarwendah"
+        assert updated_plan[0]["asset_id"]
+
+        # Act 2 — real _execute_beat_plan seam (mock only the download + the
+        # service constructors so no network/keys are required).
+        fake_result = {"source": "tiktok_clip", "path": str(tmp_path / "scene_1.mp4")}
+        with (
+            patch("clipper_agency.agents.visual_director.PexelsService"),
+            patch("clipper_agency.agents.visual_director.YtDlpService"),
+            patch.object(
+                agent,
+                "_execute_action",
+                return_value=fake_result,
+            ),
+        ):
+            assets = agent._execute_beat_plan(updated_plan, str(tmp_path / "scenes"))
+
+        # Assert 2 — the EXECUTED asset (not a hand-crafted dict) carries
+        # subject_name flat. This is the production shape the composer receives.
+        assert len(assets) == 1
+        assert assets[0]["subject_name"] == "Sarwendah"
+        # The composer's reader returns the real value on this asset shape.
+        assert _asset_subject_name(assets[0]) == "Sarwendah"
+
+        # Act 3 — composer manifest seam (the audio-first path passes the VD
+        # executed assets to _build_scene_manifest).
+        scenes = [
+            {
+                "scene": "1",
+                "target_duration": 5.0,
+                "path": str(tmp_path / "scene_1.mp4"),
+                "type": "tiktok_clip",
+                "beat_id": 1,
+            }
+        ]
+        manifest = _build_scene_manifest(
+            scenes, [], 5.0, str(tmp_path / "video.mp4"), assets=assets
+        )
+
+        # Assert 3 — subject_name is non-empty in the rendered scene manifest.
+        manifest_entries = manifest["entries"]
+        assert len(manifest_entries) == 1
+        assert manifest_entries[0]["subject_name"] == "Sarwendah"
+
+        # Assert 4 — the per-scene entity gate now REJECTS a wrong-entity asset
+        # (this branch was unreachable in production before the fix because
+        # subject_name was always ""). A Jennifer Coppen asset on a Sarwendah
+        # beat is the job_18 defect this gate exists to catch.
+        beat_dict = {
+            "beat_id": 1,
+            "spoken_point": "Sarwendah update terbaru",
+            "visual_must_show": "Sarwendah",
+        }
+        wrong_entity_mapping = SceneBeatMapping(
+            scene_index=0,
+            scene_start_sec=0.0,
+            scene_end_sec=5.0,
+            matched_beat_ids=[1],
+            subject_name="Jennifer Coppen",
+        )
+        reviews = _run_entity_binding_review([wrong_entity_mapping], [beat_dict])
+        assert len(reviews) == 1
+        assert reviews[0].decision == "reject"
+        assert "ENTITY_MISMATCH" in reviews[0].reason
+
+    @patch("clipper_agency.agents.visual_director.lookup", return_value=None)
+    @patch("clipper_agency.agents.visual_director.store")
+    def test_fallback_asset_does_not_carry_failed_candidate_subject(
+        self,
+        mock_store: MagicMock,
+        mock_lookup: MagicMock,
+        tmp_path: Any,
+    ) -> None:
+        """Codex round-3 P2: subject_name/asset_id describe the INSPECTED
+        candidate, so they must NOT carry onto a fallback asset (primary
+        failed -> alternate visual) or a text-card (source:none). Otherwise
+        the reviewer per-scene entity gate would falsely PASS an unverified
+        visual that was never inspected as that subject. The same guard
+        (``primary_rendered``) covers both the fallback and source:none paths.
+        """
+        agent = _make_agent()
+        # Plan item carries the primary candidate's subject_name (as
+        # _apply_best_candidate stashes it) + the default fallback action.
+        plan = [
+            {
+                **_make_plan_item(beat_id=1),
+                "subject_name": "Sarwendah",
+                "asset_id": "cand-1",
+            }
+        ]
+        fake_fallback_result = {
+            "source": "text_card",
+            "path": str(tmp_path / "fallback_card.png"),
+        }
+        with (
+            patch("clipper_agency.agents.visual_director.PexelsService"),
+            patch("clipper_agency.agents.visual_director.YtDlpService"),
+            patch.object(
+                agent,
+                "_execute_action",
+                side_effect=[None, fake_fallback_result],  # primary fails, fallback renders
+            ),
+        ):
+            assets = agent._execute_beat_plan(plan, str(tmp_path / "scenes"))
+
+        assert len(assets) == 1
+        # Fallback asset must NOT claim the failed primary candidate's subject.
+        assert assets[0].get("subject_name", "") == ""
+        assert assets[0].get("asset_id", "") == ""
+        # Beat-level (non-candidate) fields still carry through.
+        assert assets[0]["beat_id"] == 1
+        assert assets[0]["role"] == "evidence"

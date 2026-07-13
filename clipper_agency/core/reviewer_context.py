@@ -24,6 +24,10 @@ class SceneBeatMapping(BaseModel):
     scene_end_sec: float
     matched_beat_ids: list[int] = Field(default_factory=list)
     overlap_type: str = "none"  # "midpoint" | "range_overlap" | "none" | "mixed"
+    # FIX-4 (ADR 0030): the VLM-depicted subject_name for this scene's asset,
+    # threaded from the rendered scene manifest entry so the reviewer's per-scene
+    # entity-vs-beat gate can fire without zipping mappings against entries.
+    subject_name: str = ""
 
 
 class ReviewContextBundle(BaseModel):
@@ -207,6 +211,9 @@ def map_scenes_to_beats(
                 scene_end_sec=scene_end,
                 matched_beat_ids=matched,
                 overlap_type=overlap_type,
+                # FIX-4 (ADR 0030): carry the rendered scene's subject_name so the
+                # reviewer's entity-vs-beat gate has it without a parallel zip.
+                subject_name=str(entry.get("subject_name") or ""),
             )
         )
 

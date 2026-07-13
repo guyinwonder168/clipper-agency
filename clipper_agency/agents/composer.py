@@ -268,6 +268,23 @@ def _compute_scene_segments(
     return [(i * seg_len, (i + 1) * seg_len) for i in range(scene_count)]
 
 
+def _asset_subject_name(asset: dict) -> str:
+    """Return the VLM-depicted subject_name from a VD selected-asset dict.
+
+    FIX-4 (ADR 0030): reads defensively — VD assets carry ``subject_name``
+    nested under ``inspection`` (the scored-candidate shape); some normalized
+    variants carry it flat. Returns ``""`` when absent (the entity gate WARNs
+    rather than silently accepting an unverifiable person asset).
+    """
+    flat = str(asset.get("subject_name") or "")
+    if flat:
+        return flat
+    insp = asset.get("inspection")
+    if isinstance(insp, dict):
+        return str(insp.get("subject_name") or "")
+    return ""
+
+
 def _build_scene_manifest(
     scenes: list[dict],
     text_regions: list[dict],
@@ -291,6 +308,13 @@ def _build_scene_manifest(
                 **{
                     "beat_id": assets[i].get("beat_id", s.get("beat_id", i + 1)),
                     "selected_asset_id": assets[i].get("asset_id", ""),
+                    # FIX-4 (ADR 0030): thread the VLM-depicted subject_name from
+                    # the selected asset's inspection onto the scene so the
+                    # reviewer's per-scene entity-vs-beat gate can fire. The
+                    # audio-first path passes the VD selected-asset dicts (with
+                    # nested `inspection`) as `assets`; this is the seam that
+                    # carries subject_name into the rendered scene manifest.
+                    "subject_name": _asset_subject_name(assets[i]),
                 },
             }
             if i < len(assets)

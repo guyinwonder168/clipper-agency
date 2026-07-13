@@ -159,6 +159,39 @@ class TestBuildGateFailureRepairPlan:
             assert len(routing["patches"]) >= 1
 
 
+class TestFix4ReviewerGateRouting:
+    """FIX-4 (ADR 0030): the reviewer's per-scene ENTITY_MISMATCH and
+    AUDIO_TRUNCATED_REVIEWER reason tokens must route repair to the correct
+    agent — wrong entity → Visual Director (replace_visual), truncated audio →
+    Composer (redo_compose)."""
+
+    def test_entity_mismatch_routes_to_visual_director(self):
+        review = {"status": "fail", "reason": "ENTITY_MISMATCH"}
+        routing = build_gate_failure_repair_plan(review)
+        assert routing is not None
+        assert routing["target_agent"] == "visual_director"
+        assert routing["patches"][0]["reason"] == "wrong_entity"
+        assert routing["patches"][0]["action"] == "replace_visual"
+        assert routing["patches"][0]["rerun_from"] == "visual_director"
+
+    def test_audio_truncated_reviewer_routes_to_composer(self):
+        review = {"status": "fail", "reason": "AUDIO_TRUNCATED_REVIEWER"}
+        routing = build_gate_failure_repair_plan(review)
+        assert routing is not None
+        assert routing["target_agent"] == "composer"
+        assert routing["patches"][0]["reason"] == "duration_mismatch"
+        assert routing["patches"][0]["action"] == "redo_compose"
+        assert routing["patches"][0]["rerun_from"] == "composer"
+
+    def test_wrong_entity_reason_routes_to_visual_director(self):
+        """The patch reason 'wrong_entity' (distinct from 'wrong_event') routes
+        to Visual Director (the wrong-entity asset must be re-selected)."""
+        assert (
+            route_repair({"reason": "wrong_entity", "action": "replace_visual"})
+            == "visual_director"
+        )
+
+
 class TestCoverageTokenRouting:
     """FIX-5 (ADR 0030): the two stable coverage-failure tokens emitted by
     G7 (_enforce_narrative_coverage -> "narrative_not_covered") and FIX-6

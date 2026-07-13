@@ -86,6 +86,14 @@ class VisualDirectorAgent(BaseAgent):
 
     _IMAGE_SOURCES = frozenset({"pexels_image"})
     _VIDEO_SOURCES = frozenset({"tiktok_clip", "pexels_video", "tiktok", "pexels"})
+    # FIX-4 (ADR 0030) Codex P1: render sources that download the INSPECTED
+    # candidate URL verbatim (so the rendered visual IS the inspected visual,
+    # and the VLM subject_name is sound to carry). ``pexels_image``/``pexels_video``
+    # SEARCH Pexels by query — the rendered image is a different asset than the
+    # one the VLM inspected, so carrying the inspected subject would let the
+    # reviewer per-scene entity gate verify a visual that was never inspected.
+    # Those sources degrade to ENTITY_UNVERIFIABLE (subject_name stays "").
+    _URL_FAITHFUL_SOURCES = frozenset({"tiktok_clip"})
 
     def __init__(self, trace_writer: Any | None = None) -> None:
         self._trace_writer = trace_writer
@@ -749,53 +757,72 @@ class VisualDirectorAgent(BaseAgent):
         pexels = PexelsService()
         ytdlp = YtDlpService()
         Path(scenes_dir).mkdir(parents=True, exist_ok=True)
+        return [self._build_asset_for_item(item, scenes_dir, pexels, ytdlp) for item in plan]
 
-        assets: list[dict] = []
-        for item in plan:
-            scene_id = item.get("scene_number", item.get("beat_id", 0))
-            action = item.get("action", {})
-            fallback = item.get("fallback")
-            result = self._execute_action(
-                action,
-                scene_id,
-                scenes_dir,
-                pexels,
-                ytdlp,
-            )
+    def _build_asset_for_item(
+        self,
+        item: dict,
+        scenes_dir: str,
+        pexels: PexelsService,
+        ytdlp: YtDlpService,
+    ) -> dict:
+        """Execute one plan item's action (+ fallback) and carry beat metadata.
 
-            if result is None and fallback:
-                logger.info("Beat %d: primary failed, using fallback", scene_id)
-                result = self._execute_action(
-                    fallback,
-                    scene_id,
-                    scenes_dir,
-                    pexels,
-                    ytdlp,
-                )
+        Extracted from ``_execute_beat_plan`` to keep cognitive complexity under
+        the gate threshold. FIX-4 (ADR 0030): ``subject_name`` + ``asset_id``
+        describe the INSPECTED candidate, so copy them ONLY when the primary
+        action rendered that exact candidate. On a fallback (primary failed →
+        alternate visual) or text-card (source:none) beat, the rendered asset
+        depicts something else / nothing — carrying the failed candidate's
+        subject_name would let the reviewer per-scene entity gate falsely PASS
+        an unverified visual. Other fields are beat-level, not candidate-specific,
+        so always carry.
+        """
+        scene_id = item.get("scene_number", item.get("beat_id", 0))
+        action = item.get("action", {})
+        fallback = item.get("fallback")
+        primary_result = self._execute_action(action, scene_id, scenes_dir, pexels, ytdlp)
+        result = primary_result
 
-            if result:
-                asset = {"scene": scene_id, **result}
-            else:
-                asset = {"scene": scene_id, "source": "none", "path": ""}
+        if result is None and fallback:
+            logger.info("Beat %d: primary failed, using fallback", scene_id)
+            result = self._execute_action(fallback, scene_id, scenes_dir, pexels, ytdlp)
 
-            # Pass through beat metadata for composer compatibility
-            for field in (
-                "treatment",
-                "target_duration",
-                "transition_in",
-                "transition_out",
-                "beat_id",
-                "role",
-                "start_time",
-                "duration",
-            ):
-                if field in item:
-                    asset[field] = item[field]
+        if result:
+            asset = {"scene": scene_id, **result}
+        else:
+            asset = {"scene": scene_id, "source": "none", "path": ""}
 
-            asset = self._apply_default_treatment(asset)
-            assets.append(asset)
+        primary_rendered = primary_result is not None
+        # subject_name/asset_id describe the INSPECTED candidate, so carry them
+        # ONLY when the primary action rendered that exact candidate via a
+        # URL-faithful source (tiktok_clip downloads the inspected URL). A
+        # fallback (primary failed), a text-card (source:none), OR a search-based
+        # render (pexels_image/pexels_video return a DIFFERENT asset than the
+        # inspected one) must NOT carry the inspected subject — else the reviewer
+        # per-scene entity gate verifies a visual that was never inspected.
+        rendered_source = str(result.get("source", "")) if result else ""
+        url_faithful = rendered_source in self._URL_FAITHFUL_SOURCES
+        entity_fields_ok = primary_rendered and url_faithful
+        for field in (
+            "treatment",
+            "target_duration",
+            "transition_in",
+            "transition_out",
+            "beat_id",
+            "role",
+            "start_time",
+            "duration",
+            "subject_name",
+            "asset_id",
+        ):
+            if field not in item:
+                continue
+            if field in ("subject_name", "asset_id") and not entity_fields_ok:
+                continue
+            asset[field] = item[field]
 
-        return assets
+        return self._apply_default_treatment(asset)
 
     @staticmethod
     def _default_treatment_for_role(role: str) -> str:
@@ -1283,6 +1310,18 @@ class VisualDirectorAgent(BaseAgent):
             if matched:
                 cand = matched.get("candidate")
                 plan_item["action"] = self._candidate_to_action(cand, beat)
+                # FIX-4 (ADR 0030, codex round-2 P1): thread the VLM-depicted
+                # subject_name + matched asset_id from the scored-candidate
+                # inspection onto the plan item. _execute_beat_plan then copies
+                # them onto the executed asset dict so the composer's
+                # _asset_subject_name reads a real value (flat path) and the
+                # reviewer's per-scene entity-vs-beat gate can actually fire.
+                # Without this the production audio-first path strips
+                # subject_name at _candidate_to_action and the gate is INERT
+                # (verify-production-path-when-two-impls-exist).
+                matched_inspection = matched.get("inspection") or {}
+                plan_item["subject_name"] = str(matched_inspection.get("subject_name") or "")
+                plan_item["asset_id"] = str(matched.get("asset_id") or "")
                 return
         # All candidates rejected → use fallback text card, not the original
         # LLM action which references a now-rejected asset.
