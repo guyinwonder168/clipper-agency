@@ -37,7 +37,7 @@ You receive an edit blueprint from the Segment Producer containing:
       "beat_id": 1,
       "section": "hook",
       "description": "Attention-grabbing opening",
-      "word_range": [0, 15],
+      "start_cue": "the first 3-5 words of this beat copied VERBATIM from voiceover_text",
       "overlay_text": "SHORT HOOK TEXT",
       "caption_keywords": ["keyword1", "keyword2"]
     }}
@@ -61,13 +61,15 @@ You receive an edit blueprint from the Segment Producer containing:
 - Target duration: **{target_duration_sec} seconds** (hard limit: {hard_limit_sec}s)
 - Target word count: **~{target_words} words** (range: {min_words}-{max_words} words)
 - Single continuous text — no scene breaks, no labels, no headers
+- NO standalone punctuation tokens — never write `...` or `—` (em-dash) as a separate whitespace-separated word; write clean spoken prose so every whitespace token is a real word
 - Use safe wording from verified_facts and unverified_claims
 - Topic: {topic}
 
 ### Narrative Structure Rules
 - Map each section of the voiceover to a story beat from the edit blueprint
-- word_range: [start_word_index, end_word_index] — 0-indexed word positions in voiceover_text
+- **start_cue (REQUIRED):** the 3-5 FIRST WORDS of this beat, copied VERBATIM from `voiceover_text`. Code derives word indices from each cue — do NOT emit `word_range`.
 - Every story_beat from the blueprint MUST be covered
+- Each `start_cue` MUST appear (fuzzy-tolerated) inside `voiceover_text`, and the cues MUST be in the order the beats are spoken
 - Sections: "hook", "story_1", "story_1_reveal", "story_2", "story_2_reveal", "closing_cta"
 - overlay_text: max 6 words, will appear on screen during this section
 - caption_keywords: 2-4 keywords for subtitle display during this section

@@ -11,13 +11,19 @@ from clipper_agency.agents.scriptwriter import (
     _word_count,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helper: build a valid LLM response for parsing tests
 # ---------------------------------------------------------------------------
 
+
 def _sample_voiceover_response(**overrides) -> dict:
-    """Return a valid voiceover response dict suitable for JSON serialization."""
+    """Return a valid voiceover response dict suitable for JSON serialization.
+
+    FIX-8 (ADR 0030): beats now carry ``start_cue`` (3-5 verbatim first words
+    of each beat) instead of ``word_range``; the latter is backfilled by the
+    normalize step from the cues. The four cues below each anchor in the
+    voiceover text in spoken order, so derivation produces contiguous ranges.
+    """
     base = {
         "voiceover_text": (
             "Halo guys, hari ini ada kabar besar dari dunia seleb Indonesia! "
@@ -35,7 +41,7 @@ def _sample_voiceover_response(**overrides) -> dict:
                 "beat_id": 1,
                 "section": "hook",
                 "description": "Attention-grabbing opening",
-                "word_range": [0, 15],
+                "start_cue": "Halo guys hari ini ada",
                 "overlay_text": "KABAR BESAR SELEB",
                 "caption_keywords": ["gossip", "seleb"],
             },
@@ -43,7 +49,7 @@ def _sample_voiceover_response(**overrides) -> dict:
                 "beat_id": 2,
                 "section": "story_1",
                 "description": "Anji marriage news",
-                "word_range": [15, 35],
+                "start_cue": "Anji ternyata sudah resmi",
                 "overlay_text": "ANJI MENIKAH LAGI",
                 "caption_keywords": ["Anji", "nikah"],
             },
@@ -51,7 +57,7 @@ def _sample_voiceover_response(**overrides) -> dict:
                 "beat_id": 3,
                 "section": "story_1_reveal",
                 "description": "Raffi new project rumor",
-                "word_range": [35, 55],
+                "start_cue": "Terus ada juga gossip tentang",
                 "overlay_text": "RAFFI PROJECT BARU?",
                 "caption_keywords": ["Raffi", "project"],
             },
@@ -59,7 +65,7 @@ def _sample_voiceover_response(**overrides) -> dict:
                 "beat_id": 4,
                 "section": "closing_cta",
                 "description": "Call to action",
-                "word_range": [55, 72],
+                "start_cue": "Jadi tunggu aja kelanjutannya",
                 "overlay_text": "FOLLOW UNTUK UPDATE",
                 "caption_keywords": ["follow", "update"],
             },
@@ -107,10 +113,12 @@ class TestParseScriptResponse:
 
     def test_parse_extracts_all_fields(self):
         agent = ScriptwriterAgent()
-        raw = json.dumps(_sample_voiceover_response(
-            quality_score=9,
-            quality_notes="Excellent",
-        ))
+        raw = json.dumps(
+            _sample_voiceover_response(
+                quality_score=9,
+                quality_notes="Excellent",
+            )
+        )
         parsed = agent._parse_script_response(raw)
         assert parsed["quality_score"] == 9
         assert parsed["quality_notes"] == "Excellent"
@@ -197,8 +205,11 @@ class TestNarrativeStructure:
             assert isinstance(beat["beat_id"], int)
 
     def test_word_range_indices_are_valid(self):
-        """word_range [start, end] must have start < end, both non-negative."""
-        parsed = _sample_voiceover_response()
+        """FIX-8: word_range is now DERIVED from start_cue during parsing.
+        The parsed (post-normalize) structure must carry valid [start, end]
+        ranges with start < end, both non-negative."""
+        agent = ScriptwriterAgent()
+        parsed = agent._parse_script_response(json.dumps(_sample_voiceover_response()))
         for beat in parsed["narrative_structure"]:
             rng = beat["word_range"]
             assert len(rng) == 2
@@ -219,14 +230,16 @@ class TestNarrativeStructure:
         assert result[0]["caption_keywords"] == []
 
     def test_normalize_preserves_existing_values(self):
-        raw = [{
-            "beat_id": 5,
-            "section": "story_2",
-            "description": "Test desc",
-            "word_range": [10, 25],
-            "overlay_text": "TEST",
-            "caption_keywords": ["a", "b"],
-        }]
+        raw = [
+            {
+                "beat_id": 5,
+                "section": "story_2",
+                "description": "Test desc",
+                "word_range": [10, 25],
+                "overlay_text": "TEST",
+                "caption_keywords": ["a", "b"],
+            }
+        ]
         result = _normalize_narrative_structure(raw, None)
         assert result[0]["beat_id"] == 5
         assert result[0]["description"] == "Test desc"
@@ -313,3 +326,29 @@ class TestFullParseValidateFlow:
         parsed = agent._parse_script_response(raw)
         errors = _validate_output(parsed, min_words=75, max_words=120)
         assert len(errors) >= 2  # too short + emoji
+
+
+def test_validate_output_rejects_standalone_punctuation():
+    """FIX-8 codex P1: standalone punctuation tokens (..., em-dash) are forbidden
+    in voiceover_text so beat_anchor tokenization (strips attached punct) and the
+    Voice Producer timestamp builder (whitespace split) agree on word count and
+    word_range indices align 1:1 with timestamps."""
+    agent = ScriptwriterAgent()
+    data = _sample_voiceover_response(
+        voiceover_text="Halo guys ... ternyata Anji menikah — kabar heboh",
+    )
+    parsed = agent._parse_script_response(json.dumps(data))
+    errors = _validate_output(parsed, min_words=3, max_words=9999)
+    assert any("standalone punctuation" in e for e in errors), errors
+
+
+def test_validate_output_accepts_attached_punctuation():
+    """Mirror: attached punctuation (comma, period) is fine — split() and
+    tokenize() produce the same token COUNT, so indices stay aligned."""
+    agent = ScriptwriterAgent()
+    data = _sample_voiceover_response(
+        voiceover_text="Halo guys, ternyata Anji menikah. Kabar heboh sekali.",
+    )
+    parsed = agent._parse_script_response(json.dumps(data))
+    errors = _validate_output(parsed, min_words=3, max_words=9999)
+    assert not any("standalone punctuation" in e for e in errors), errors

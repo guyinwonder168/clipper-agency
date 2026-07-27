@@ -9,7 +9,9 @@ from clipper_agency.agents.base import BaseAgent
 from clipper_agency.agents.prompts import PROMPTS_DIR, load_prompt
 from clipper_agency.config.loader import get_agent_config
 from clipper_agency.core.artifacts import write_json, write_text
+from clipper_agency.core.beat_anchor import count_words, derive_word_ranges, tokenize
 from clipper_agency.core.paths import agent_dir, agent_input_file, agent_output_file
+from clipper_agency.core.repair_router import NARRATIVE_NOT_COVERED
 from clipper_agency.llm.client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
@@ -21,10 +23,21 @@ Write in {{language}} with a {{tone}} style. Content focus: {{content_angle}}.
 
 Write a SINGLE CONTINUOUS voiceover narration ({{min_words}}-{{max_words}} words, no emojis, spoken-word style).
 Target duration: {{target_duration_sec}} seconds. Target words: ~{{target_words}}.
-Map each section to a story beat using narrative_structure with word_range.
+
+For each beat, emit a `start_cue`: the 3-5 FIRST WORDS of that beat, copied
+VERBATIM from the voiceover_text. Code will derive word indices from each cue.
 
 Output JSON:
-{{"voiceover_text": "...", "narrative_structure": [...], "hook_text_onscreen": "...", "caption": "...", "hashtags": [...], "quality_score": 8, "quality_notes": "..."}}
+{{
+  "voiceover_text": "...",
+  "narrative_structure": [
+    {{"beat_id":1, "section":"hook",
+      "start_cue":"<3-5 first words of beat>",
+      "overlay_text":"...", "caption_keywords":[...]}}
+  ],
+  "hook_text_onscreen": "...", "caption": "...",
+  "hashtags": [...], "quality_score": 8, "quality_notes": "..."
+}}
 
 Safety rules:
 {{safety_rules_text}}
@@ -54,6 +67,15 @@ _EMOJI_RE = re.compile(
     re.UNICODE,
 )
 
+# FIX-8 (codex round-5 P1): validation errors that are FATAL on a fresh LLM
+# run (a non-compliant response must not reach Voice Producer). Substring
+# markers keep it decoupled from the exact error wording in _validate_output.
+_CONTRACT_ERROR_MARKERS = (
+    "standalone punctuation",
+    "start_cue",
+    "missing required",
+)
+
 
 def _contains_emoji(text: str) -> bool:
     """Return True if text contains any emoji characters."""
@@ -61,8 +83,8 @@ def _contains_emoji(text: str) -> bool:
 
 
 def _word_count(text: str) -> int:
-    """Return the number of whitespace-separated words in text."""
-    return len(text.split())
+    """Canonical word count via beat_anchor.tokenize (FIX-8 ruler parity)."""
+    return count_words(text)
 
 
 def _extract_blueprint(blueprint: dict[str, Any] | None, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -247,6 +269,29 @@ class ScriptwriterAgent(BaseAgent):
         validation_errors = _validate_output(parsed, min_words=min_words, max_words=max_words)
         if validation_errors:
             logger.warning("Scriptwriter validation issues: %s", validation_errors)
+        # FIX-8 (codex round-5 P1): contract errors (missing/malformed start_cue,
+        # standalone punctuation in voiceover) are FATAL on a fresh LLM run — a
+        # non-compliant response must not reach Voice Producer (where the G7
+        # legacy word_range fallback would otherwise let unreliable LLM indices
+        # slip through). Soft warnings (word count) stay non-fatal. Persisted
+        # legacy artifacts reloaded on resume bypass this (run() not re-called).
+        contract_errors = [
+            e for e in validation_errors if any(m in e for m in _CONTRACT_ERROR_MARKERS)
+        ]
+        if contract_errors:
+            # FIX-8 (codex P2): set BOTH ``error`` (consumed by _fail_agent) and
+            # ``reason`` so the actual cue/voiceover violation propagates to the
+            # persisted job + agent error fields (not a generic default_reason).
+            diagnostic = "scriptwriter_contract_violation: " + "; ".join(contract_errors)
+            return {
+                "status": "failed",
+                "error": diagnostic,
+                "reason": diagnostic,
+                # FIX-8 (codex round-8 P2): stamp the stable coverage token so
+                # the caller routes this through the bounded Scriptwriter regen
+                # loop (same path G7 cue failures take), not terminal-fail.
+                "gate_reason": NARRATIVE_NOT_COVERED,
+            }
 
         voiceover_text = parsed["voiceover_text"]
         word_count = _word_count(voiceover_text)
@@ -290,6 +335,7 @@ class ScriptwriterAgent(BaseAgent):
 
         narrative_structure = _normalize_narrative_structure(
             data.get("narrative_structure", []),
+            voiceover_text,
         )
 
         return {
@@ -308,7 +354,13 @@ def _validate_output(
     min_words: int = 0,
     max_words: int = 9999,
 ) -> list[str]:
-    """Validate parsed output and return list of error strings (empty = valid)."""
+    """Validate parsed output and return list of error strings (empty = valid).
+
+    Per FIX-8 (ADR 0030): the LLM no longer emits ``word_range`` — it emits
+    ``start_cue`` (3-5 first words of each beat, verbatim from voiceover_text).
+    The cue contract is enforced here; word indices are derived in
+    :func:`_normalize_narrative_structure`.
+    """
     errors: list[str] = []
     voiceover_text = parsed.get("voiceover_text", "")
 
@@ -320,30 +372,95 @@ def _validate_output(
     if _contains_emoji(voiceover_text):
         errors.append("voiceover_text contains emojis")
 
+    # FIX-8 (codex round-3 P1): voiceover_text must be clean spoken prose with
+    # NO standalone punctuation tokens (``...`` / ``—`` as whitespace-separated
+    # tokens). Reason: beat_anchor._tokenize strips attached punctuation, but
+    # the Voice Producer timestamp builder (chars_to_words / _approximate) uses
+    # whitespace split — they produce the SAME word count iff no standalone
+    # punctuation, so derived word_range indices align 1:1 with timestamps. A
+    # divergence offsets build_canonical_timeline's beat→audio mapping.
+    if voiceover_text and len(voiceover_text.split()) != count_words(voiceover_text):
+        errors.append(
+            "voiceover_text contains standalone punctuation tokens (e.g. '...' "
+            "or em-dash as separate words) — forbidden; write clean spoken prose"
+        )
+
+    # start_cue contract: each beat MUST carry a non-empty 3-5 token cue. The
+    # G7 gate fuzzy-matches each cue against the voiceover; a missing/short
+    # cue fails the contract before the LLM wastes a TTS call.
+    for beat in parsed.get("narrative_structure", []):
+        cue = beat.get("start_cue", "")
+        if not isinstance(cue, str) or not cue.strip():
+            errors.append(f"beat {beat.get('beat_id', '?')} missing required start_cue")
+            continue
+        cue_tokens = tokenize(cue)
+        if not (3 <= len(cue_tokens) <= 5):
+            errors.append(
+                f"beat {beat.get('beat_id', '?')} start_cue must be 3-5 words "
+                f"(got {len(cue_tokens)})"
+            )
+
     return errors
+
+
+_BEAT_DEFAULTS = {
+    "description": "",
+    "start_cue": "",
+    "overlay_text": "",
+    "caption_keywords": list,  # factory
+    "word_range": lambda: [0, 0],  # legacy default; overwritten on cue derivation
+}
+
+
+def _backfill_beat_defaults(beat: dict[str, Any], i: int) -> dict[str, Any]:
+    """Return a copy of ``beat`` with required fields backfilled (beat_id, section, defaults)."""
+    b = dict(beat)
+    b.setdefault("beat_id", i + 1)
+    b.setdefault("section", f"section_{i + 1}")
+    for field, default in _BEAT_DEFAULTS.items():
+        if field not in b:
+            b[field] = default() if callable(default) else default
+    return b
 
 
 def _normalize_narrative_structure(
     raw_beats: list[dict[str, Any]],
+    voiceover_text: Any = None,
     *_args: Any,
 ) -> list[dict[str, Any]]:
-    """Normalize narrative_structure entries, ensuring required fields exist."""
-    normalized: list[dict[str, Any]] = []
-    for i, beat in enumerate(raw_beats):
-        b = dict(beat)
-        if "beat_id" not in b:
-            b["beat_id"] = i + 1
-        if "section" not in b:
-            b["section"] = f"section_{i + 1}"
-        if "description" not in b:
-            b["description"] = ""
-        if "word_range" not in b:
-            b["word_range"] = [0, 0]
-        if "overlay_text" not in b:
-            b["overlay_text"] = ""
-        if "caption_keywords" not in b:
-            b["caption_keywords"] = []
-        normalized.append(b)
+    """Normalize narrative_structure entries, ensuring required fields exist.
+
+    FIX-8 (ADR 0030): ``word_range`` is now DERIVED from ``start_cue`` (via
+    :func:`clipper_agency.core.beat_anchor.derive_word_ranges`) so downstream
+    consumers (``build_canonical_timeline``, Visual Director, Composer,
+    Reviewer) keep reading the field unchanged. On derivation failure the
+    legacy ``[0, 0]`` sentinel is left in place and the G7 gate catches it —
+    failure routing emits a cue-specific reason (``cue_not_found`` /
+    ``cue_out_of_order``) for the FIX-5 reason-based repair router.
+    """
+    normalized = [_backfill_beat_defaults(beat, i) for i, beat in enumerate(raw_beats)]
+
+    # FIX-8: derive word_range from start_cue so downstream sees a contract-
+    # correct field without any LLM-emitted indices. Only attempt when a
+    # voiceover is available (legacy callers / parse-fallback pass None).
+    cues = [b.get("start_cue", "") for b in normalized]
+    if voiceover_text and any(isinstance(c, str) and c.strip() for c in cues):
+        derived = derive_word_ranges(str(voiceover_text), cues)
+        if derived.ok:
+            for b, rng in zip(normalized, derived.word_ranges, strict=True):
+                b["word_range"] = list(rng)
+        else:
+            # Cue contract failure — surface LOUDLY. The [0,0] sentinel stays
+            # (downstream reads word_range), but G7 re-derives independently
+            # and routes repair via the cue-specific reason. Silent swallow
+            # here would hide the job_18 mega-beat seed (review round-1).
+            logger.warning(
+                "Scriptwriter normalize: cue derivation failed "
+                "(reason=%s, details=%s) — leaving [0,0] sentinel; G7 will "
+                "catch and route to Scriptwriter repair.",
+                derived.reason,
+                derived.details,
+            )
     return normalized
 
 

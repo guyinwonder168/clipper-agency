@@ -399,12 +399,20 @@ class VoiceoverOutput(BaseModel):
 
 
 class NarrativeBeat(BaseModel):
-    """A narrative section mapped to a story beat with word range."""
+    """A narrative section mapped to a story beat.
+
+    FIX-8 (ADR 0030): ``start_cue`` is the authoritative contract field —
+    3-5 first words of the beat, verbatim from the voiceover. ``word_range``
+    is DERIVED from it by
+    :func:`clipper_agency.core.beat_anchor.derive_word_ranges` (the LLM no
+    longer emits word indices; it cannot reliably count its own words).
+    """
 
     beat_id: int
     section: str  # "hook", "story_1", "story_1_reveal", "closing_cta"
     description: str
-    word_range: list[int]  # [start_word_index, end_word_index]
+    start_cue: str = ""  # FIX-8 authoritative; code derives word_range
+    word_range: list[int] = Field(default_factory=list)  # derived from start_cue
     overlay_text: str
     caption_keywords: list[str]
 
