@@ -465,3 +465,285 @@ def test_enforce_narrative_coverage_g7_hard_fail_holds_write_lock(tmp_path, monk
     # BOTH writes fired while the lock was held.
     assert write_observed == [("job", True), ("agent", True)]
     close_connection()
+
+
+# ── FIX-8 (cue-anchor contract): G7 derives word_range from start_cue ──
+
+
+def test_enforce_narrative_coverage_derives_ranges_from_cues(tmp_path, monkeypatch):
+    """FIX-8 plan §7 case 7: when beats carry ``start_cue`` (the new contract),
+    G7 DERIVES ``word_range`` from the cues and records a pass. The on-disk
+    script_output is rewritten with the derived ranges so downstream
+    consumers (Voice Producer, build_canonical_timeline) see the field."""
+    from clipper_agency.core.beat_timeline import build_canonical_timeline
+
+    orch = _helper_orchestrator(monkeypatch, tmp_path)
+    recorded: list[tuple] = []
+    monkeypatch.setattr(
+        orch, "_record_gate", lambda ac, jid, name, res: recorded.append((name, res))
+    )
+    monkeypatch.setattr(orch, "_persist_repaired_narrative", lambda *a, **k: None)
+
+    # 3 beats, cues anchor verbatim in the voiceover in spoken order.
+    voiceover = (
+        "halo guys hari ini gosip terbaru "
+        "kemudian anji menikah lagi dengan wina "
+        "dan terakhir jangan lupa follow update"
+    )
+    script_output = {
+        "voiceover_text": voiceover,
+        # No word_range — only start_cue (the FIX-8 contract).
+        "narrative_structure": [
+            {"beat_id": 1, "start_cue": "halo guys hari ini"},
+            {"beat_id": 2, "start_cue": "kemudian anji menikah lagi"},
+            {"beat_id": 3, "start_cue": "dan terakhir jangan lupa"},
+        ],
+    }
+
+    abort = orch._enforce_narrative_coverage(
+        MagicMock(), job_id=1, script_output=script_output, assets_cache=""
+    )
+
+    assert abort is None  # pass
+    # Derived ranges are written into script_output and fully cover [0, N-1].
+    ranges = [b["word_range"] for b in script_output["narrative_structure"]]
+    n = len(voiceover.split())
+    assert ranges[0][0] == 0
+    assert ranges[-1][1] == n - 1
+    for i in range(len(ranges) - 1):
+        assert ranges[i][1] == ranges[i + 1][0] - 1  # contiguous
+    # The G7 gate recorded a pass with cue_derived provenance.
+    g7 = [r for name, r in recorded if name == "G7_narrative_coverage"]
+    assert len(g7) == 1 and g7[0].passed and g7[0].severity == "pass"
+
+    # Downstream consumer contract: build_canonical_timeline reads the derived
+    # word_range and produces one entry per beat (no mega-beat).
+    timestamps = [
+        {"word": w, "start": i * 1.0, "end": i * 1.0 + 0.5} for i, w in enumerate(voiceover.split())
+    ]
+    timeline = build_canonical_timeline(script_output["narrative_structure"], timestamps)
+    assert len(timeline) == 3
+
+
+def test_enforce_narrative_coverage_cue_not_found_routes_to_scriptwriter(tmp_path, monkeypatch):
+    """FIX-8 plan §3: a start_cue that does not anchor in the voiceover is a
+    cue_not_found failure. It surfaces via the stable narrative_not_covered
+    routing token (FIX-5 router) with the cue-specific reason in details."""
+    from clipper_agency.core.beat_anchor import CUE_NOT_FOUND
+
+    orch = _helper_orchestrator(monkeypatch, tmp_path)
+    recorded: list[tuple] = []
+    monkeypatch.setattr(
+        orch, "_record_gate", lambda ac, jid, name, res: recorded.append((name, res))
+    )
+    monkeypatch.setattr(orch, "_persist_repaired_narrative", lambda *a, **k: None)
+    failed_agents: list[tuple] = []
+    monkeypatch.setattr(
+        "clipper_agency.orchestrator.engine._update_agent_state_inner",
+        lambda *a, **k: failed_agents.append(a),
+        raising=False,
+    )
+
+    voiceover = "satu dua tiga empat lima enam tujuh"
+    script_output = {
+        "voiceover_text": voiceover,
+        "narrative_structure": [
+            {"beat_id": 1, "start_cue": "satu dua tiga"},
+            # Cue that does NOT appear anywhere in the voiceover.
+            {"beat_id": 2, "start_cue": "kosong tidak ada di voiceover"},
+        ],
+    }
+
+    abort = orch._enforce_narrative_coverage(
+        MagicMock(), job_id=1, script_output=script_output, assets_cache=""
+    )
+
+    assert abort is not None
+    assert abort["status"] == "failed"
+    assert abort["failed_at"] == "narrative_coverage"
+    # Stable routing token (FIX-5 router keys on this).
+    assert abort["gate_reason"] == NARRATIVE_NOT_COVERED
+    # Cue-specific reason survives in details for diagnostics.
+    g7 = [r for name, r in recorded if name == "G7_narrative_coverage"]
+    assert len(g7) == 1
+    assert g7[0].data["reason"] == NARRATIVE_NOT_COVERED
+    assert g7[0].data["cue_reason"] == CUE_NOT_FOUND
+    assert g7[0].data["violation_type"] == "cue_not_matched"
+    # G7 hard-fail marks the Scriptwriter failed so job-resume can target it.
+    assert len(failed_agents) == 1
+    assert failed_agents[0][2] == "scriptwriter"
+
+
+def test_enforce_narrative_coverage_cue_out_of_order_routes_to_scriptwriter(tmp_path, monkeypatch):
+    """FIX-8 plan §3: cues whose best-match positions are not monotonically
+    increasing surface as cue_out_of_order (still routes to Scriptwriter
+    regen via the stable narrative_not_covered token)."""
+    from clipper_agency.core.beat_anchor import CUE_OUT_OF_ORDER
+
+    orch = _helper_orchestrator(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch, "_record_gate", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "_persist_repaired_narrative", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "clipper_agency.orchestrator.engine._update_agent_state_inner",
+        lambda *a, **k: None,
+        raising=False,
+    )
+
+    # Cue[0] matches at position 2, cue[1] would match at position 0 → OOO.
+    voiceover = "alpha beta gamma delta"
+    script_output = {
+        "voiceover_text": voiceover,
+        "narrative_structure": [
+            {"beat_id": 1, "start_cue": "gamma delta"},
+            {"beat_id": 2, "start_cue": "alpha beta"},
+        ],
+    }
+
+    abort = orch._enforce_narrative_coverage(
+        MagicMock(), job_id=1, script_output=script_output, assets_cache=""
+    )
+    assert abort is not None
+    assert abort["gate_reason"] == NARRATIVE_NOT_COVERED
+    # Re-derive to confirm the violation_type is cue_out_of_order (the engine
+    # surfaces the same stable cue token via details["cue_reason"]).
+    from clipper_agency.core.beat_anchor import derive_word_ranges
+
+    res = derive_word_ranges(voiceover, ["gamma delta", "alpha beta"])
+    assert res.ok is False
+    assert res.reason == CUE_OUT_OF_ORDER
+
+
+# ── Review round-1 regression tests (pr-test-analyzer + codex) ──
+
+
+def test_derived_ranges_ignore_stale_llm_word_range(tmp_path, monkeypatch):
+    """job_20 regression (root cause): beats carrying BOTH a deliberately-wrong
+    LLM ``word_range=[0,94]`` AND correct ``start_cue``s MUST derive from the
+    cues and pass — the stale LLM word_range is ignored. Proves the contract
+    shift (LLM no longer authoritative for word indices)."""
+    from clipper_agency.core.beat_anchor import count_words
+
+    orch = _helper_orchestrator(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch, "_record_gate", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "_persist_repaired_narrative", lambda *a, **k: None)
+
+    voiceover = (
+        "halo guys hari ini gosip terbaru "
+        "kemudian anji menikah lagi dengan wina "
+        "dan terakhir jangan lupa follow update"
+    )
+    n = count_words(voiceover)
+    bad_end = 94  # job_20-style under-index (claims 0..94 of a shorter voiceover)
+    script_output = {
+        "voiceover_text": voiceover,
+        "narrative_structure": [
+            {"beat_id": 1, "start_cue": "halo guys hari ini", "word_range": [0, bad_end]},
+            {"beat_id": 2, "start_cue": "kemudian anji menikah lagi", "word_range": [0, bad_end]},
+            {"beat_id": 3, "start_cue": "dan terakhir jangan lupa", "word_range": [0, bad_end]},
+        ],
+    }
+
+    abort = orch._enforce_narrative_coverage(
+        MagicMock(), job_id=1, script_output=script_output, assets_cache=""
+    )
+    assert abort is None  # derived from cues → pass despite stale word_range
+    ranges = [b["word_range"] for b in script_output["narrative_structure"]]
+    # Derived ranges fully cover [0, n-1] — the bad [0,94] was overwritten.
+    assert ranges[0][0] == 0
+    assert ranges[-1][1] == n - 1
+    assert all(r[1] <= n - 1 for r in ranges)
+
+
+def test_g7_rejects_voiceover_with_standalone_punctuation(tmp_path, monkeypatch):
+    """FIX-8 codex round-4 P1: a voiceover whose whitespace-split count diverges
+    from beat_anchor.tokenize (standalone ``...`` / ``—`` tokens) is a CONTRACT
+    violation — the Voice Producer timestamps are whitespace-split, so derived
+    word_range indices would offset. G7 rejects it (routes to Scriptwriter
+    regen) instead of letting the divergent voiceover reach TTS."""
+    from clipper_agency.core.beat_anchor import count_words
+
+    orch = _helper_orchestrator(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch, "_record_gate", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "_persist_repaired_narrative", lambda *a, **k: None)
+
+    voiceover = "halo guys ... ternyata anji menikah — lalu raffi punya project besar"
+    n = count_words(voiceover)
+    # The standalone ``...`` and ``—`` make split() over-count tokenize().
+    assert len(voiceover.split()) > n
+    script_output = {
+        "voiceover_text": voiceover,
+        "narrative_structure": [
+            {"beat_id": 1, "start_cue": "halo guys ternyata"},
+            {"beat_id": 2, "start_cue": "lalu raffi punya"},
+        ],
+    }
+
+    abort = orch._enforce_narrative_coverage(
+        MagicMock(), job_id=1, script_output=script_output, assets_cache=""
+    )
+    # Rejected pre-derivation as a voiceover-tokenizer divergence.
+    assert abort is not None
+    assert abort["gate_reason"] == NARRATIVE_NOT_COVERED
+
+
+def test_g7_accepts_hyphenated_reduplication(tmp_path, monkeypatch):
+    """FIX-8 codex round-4 P1 (mirror): Indonesian reduplication (``kata-kata``,
+    ``anak-anak``) and possessives (``jang'an``) are valid single tokens — the
+    tokenizer preserves INTERNAL hyphens/apostrophes, so split() == tokenize()
+    and the contract check passes (no spurious rejection of correct Indonesian)."""
+    orch = _helper_orchestrator(monkeypatch, tmp_path)
+    monkeypatch.setattr(orch, "_record_gate", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "_persist_repaired_narrative", lambda *a, **k: None)
+
+    voiceover = "kata-kata ini tentang anak-anak yang jang'an hidup tenang saja"
+    # Internal hyphens preserved → split count == tokenize count (no divergence).
+    assert len(voiceover.split()) == len(
+        __import__("clipper_agency.core.beat_anchor", fromlist=["tokenize"]).tokenize(voiceover)
+    )
+    script_output = {
+        "voiceover_text": voiceover,
+        "narrative_structure": [
+            {"beat_id": 1, "start_cue": "kata-kata ini tentang"},
+            {"beat_id": 2, "start_cue": "yang jang'an hidup"},
+        ],
+    }
+
+    abort = orch._enforce_narrative_coverage(
+        MagicMock(), job_id=1, script_output=script_output, assets_cache=""
+    )
+    assert abort is None  # contract OK → derivation proceeds
+
+
+def test_scriptwriter_normalize_through_g7_and_timeline_e2e(tmp_path, monkeypatch):
+    """Plan §7 case 7 (full chain): Scriptwriter _normalize_narrative_structure
+    derives word_range from start_cue → G7 passes → build_canonical_timeline
+    produces one entry per beat (no mega-beat). Exercises the real normalize
+    path, not a hand-built script_output."""
+    from clipper_agency.agents.scriptwriter import _normalize_narrative_structure
+    from clipper_agency.core.beat_anchor import count_words
+    from clipper_agency.core.beat_timeline import build_canonical_timeline
+
+    voiceover = (
+        "halo guys hari ini gosip terbaru "
+        "kemudian anji menikah lagi dengan wina natalia "
+        "dan terakhir jangan lupa follow update gosip setiap hari"
+    )
+    raw_beats = [
+        {"beat_id": 1, "section": "hook", "start_cue": "halo guys hari ini"},
+        {"beat_id": 2, "section": "story_1", "start_cue": "kemudian anji menikah lagi"},
+        {"beat_id": 3, "section": "closing_cta", "start_cue": "dan terakhir jangan lupa"},
+    ]
+    normalized = _normalize_narrative_structure(raw_beats, voiceover_text=voiceover)
+
+    # Normalize backfilled word_range from cues, fully covering [0, n-1].
+    n = count_words(voiceover)
+    ranges = [b["word_range"] for b in normalized]
+    assert ranges[0][0] == 0
+    assert ranges[-1][1] == n - 1
+
+    # build_canonical_timeline (downstream consumer) sees one beat per range.
+    timestamps = [
+        {"word": w, "start": i * 1.0, "end": i * 1.0 + 0.5} for i, w in enumerate(voiceover.split())
+    ]
+    timeline = build_canonical_timeline(normalized, timestamps)
+    assert len(timeline) == 3  # no mega-beat

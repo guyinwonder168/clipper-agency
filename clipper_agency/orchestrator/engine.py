@@ -29,6 +29,7 @@ from clipper_agency.config.loader import (
 from clipper_agency.config.preflight import preflight_agent_models
 from clipper_agency.config.schema import RepairPatch, RepairPlan
 from clipper_agency.core.artifacts import write_json
+from clipper_agency.core.beat_anchor import count_words, derive_word_ranges, tokenize
 from clipper_agency.core.beat_timeline import (
     TimelineContractError,
     build_canonical_timeline,
@@ -40,7 +41,10 @@ from clipper_agency.core.manifest import (
     update_manifest_final,
     update_manifest_gate,
 )
-from clipper_agency.core.narrative_coverage import validate_narrative_coverage
+from clipper_agency.core.narrative_coverage import (
+    NarrativeCoverageResult,
+    validate_narrative_coverage,
+)
 from clipper_agency.core.paths import gate_result_file
 from clipper_agency.core.repair_metrics import (
     compute_repair_cycle_record,
@@ -112,12 +116,15 @@ def _sanitize_for_log(text: str) -> str:
 
 
 def _word_count_for_coverage(text: str) -> int:
-    """Whitespace-separated word count for the G7 coverage gate.
+    """Canonical word count for the G7 coverage gate.
 
-    Local twin of ``agents.scriptwriter._word_count`` so the orchestrator
-    stays decoupled from the agents layer (no orchestrator->agents import).
+    Delegates to :func:`clipper_agency.core.beat_anchor.count_words` so the
+    gate's ruler is IDENTICAL to ``derive_word_ranges`` (M == N end-to-end).
+    A ``text.split()`` twin diverges on Indonesian ``...``/``—``/hyphenated
+    tokens and causes spurious ``out_of_bounds`` / ``uncovered_tail`` fails
+    on correct voiceovers (review round-1 CRITICAL).
     """
-    return len((text or "").split())
+    return count_words(text or "")
 
 
 def _extract_main_entities(research_output: dict[str, Any] | None) -> list[str]:
@@ -168,11 +175,13 @@ _COVERAGE_MAX_REPAIR_CYCLES = 1
 # same under-covered narrative_structure until MAX_REPAIR_CYCLES exhausts.
 _COVERAGE_REGEN_DIRECTIVE = (
     "COVERAGE CONTRACT (regeneration): your previous narrative_structure's "
-    "word_range indices did NOT cover the full voiceover. You MUST emit "
-    "narrative_structure whose word_range union is exactly [0, word_count-1] "
-    "- contiguous, in-bounds, no gaps, no overlaps, starting at 0 and ending "
-    "at the last word. Every word of voiceover_text must fall inside exactly "
-    "one beat's word_range. Re-check the union before returning."
+    "start_cue anchors did NOT map onto the full voiceover. You MUST emit "
+    "narrative_structure where EVERY beat carries a `start_cue` = the 3-5 "
+    "FIRST words of that beat copied VERBATIM from voiceover_text. The cues "
+    "must appear in voiceover_text in the order the beats are spoken, the "
+    "first cue must open the voiceover, and the last beat must reach the "
+    "final word. Do NOT emit word_range — code derives it from your "
+    "start_cues. Re-check every cue is present verbatim before returning."
 )
 
 
@@ -1163,9 +1172,16 @@ class Orchestrator:
         script_output: dict[str, Any],
         assets_cache: str,
     ) -> dict[str, Any] | None:
-        """G7 (ADR 0030 / FIX-1): assert narrative_structure word_range
-        covers [0, word_count-1] before any consumer (Voice Producer, the
-        canonical timeline, or Visual Director) touches it.
+        """G7 (ADR 0030 / FIX-1 + FIX-8): assert narrative_structure
+        word_range covers [0, word_count-1] before any consumer (Voice
+        Producer, the canonical timeline, or Visual Director) touches it.
+
+        FIX-8 (cue-anchor contract): when beats carry ``start_cue``,
+        word_range is DERIVED from the cues (LLM cannot count words —
+        job_19/job_20 root cause). Cue failures route to the same
+        Scriptwriter-regen loop FIX-5 already routes
+        ``narrative_not_covered`` to. The FIX-1 in-place tail repair stays
+        as defense-in-depth.
 
         Applies eligible in-place tail repair to script_output first, records
         the gate, and returns an ``_enforce_gate`` abort dict on hard_fail
@@ -1176,7 +1192,9 @@ class Orchestrator:
         """
         voiceover_text = script_output.get("voiceover_text", "")
         narrative = script_output.get("narrative_structure", [])
-        coverage = validate_narrative_coverage(narrative, _word_count_for_coverage(voiceover_text))
+        coverage = self._derive_or_validate_coverage(
+            voiceover_text, narrative, _word_count_for_coverage(voiceover_text)
+        )
         if coverage.repaired_structure is not None:
             script_output["narrative_structure"] = coverage.repaired_structure
             self._persist_repaired_narrative(assets_cache, job_id, script_output)
@@ -1236,6 +1254,116 @@ class Orchestrator:
                 # unreachable from a real uncovered-narrative run).
                 abort["gate_reason"] = NARRATIVE_NOT_COVERED
         return abort
+
+    def _derive_or_validate_coverage(
+        self,
+        voiceover_text: str,
+        narrative: list[dict[str, Any]],
+        word_count: int,
+    ) -> NarrativeCoverageResult:
+        """FIX-8 (ADR 0030): pick the authoritative coverage path.
+
+        - ``start_cue`` present on any beat → DERIVE word_range from the cues
+          via :func:`derive_word_ranges`. The LLM cannot reliably count its
+          own words (job_19 over-index, job_20 under-index root cause), so
+          the cue → index derivation is the source of truth. Cue failures
+          (``cue_not_found`` / ``cue_out_of_order``) are mapped to the stable
+          ``narrative_not_covered`` routing token so the existing FIX-5
+          router sends them to Scriptwriter regen; the cue-specific reason
+          survives in ``details`` for diagnostics.
+        - No ``start_cue`` on any beat (legacy / pre-FIX-8 fixture) → keep
+          the FIX-1 ``word_range`` validator path unchanged.
+
+        On cue-success the derived ranges are written through
+        ``repaired_structure`` (so the engine's single mutation path applies
+        them to ``script_output``), and the FIX-1 validator runs as
+        defense-in-depth — the derived union is mathematically
+        ``[0, word_count-1]`` so this is a no-op safety net in the common
+        case. Inputs are never mutated.
+        """
+        cues = [b.get("start_cue", "") for b in narrative if isinstance(b, dict)]
+        has_cues = any(isinstance(c, str) and c.strip() for c in cues)
+        if not has_cues:
+            return validate_narrative_coverage(narrative, word_count)
+
+        # FIX-8 (codex round-4 P1): enforce the voiceover + cue contract BEFORE
+        # derivation so (a) a voiceover whose whitespace-split count diverges
+        # from beat_anchor.tokenize (standalone punctuation — forbidden, since
+        # the Voice Producer timestamps are whitespace-split and would offset
+        # the derived word_range) and (b) a malformed cue (fewer than 3 tokens,
+        # which fuzzy-matching could still "find" and let slip) cannot reach
+        # TTS. Both route to Scriptwriter regen via the stable token.
+        vo_split = len((voiceover_text or "").split())
+        vo_tokens = count_words(voiceover_text or "")
+        if vo_split != vo_tokens:
+            return NarrativeCoverageResult(
+                ok=False,
+                reason=NARRATIVE_NOT_COVERED,
+                details={
+                    "violation_type": "voiceover_tokenizer_divergence",
+                    "split_count": vo_split,
+                    "tokenize_count": vo_tokens,
+                    "cue_reason": "voiceover_contract_violation",
+                    "word_count": word_count,
+                },
+            )
+        for cue_idx, cue in enumerate(cues):
+            cue_len = len(tokenize(cue)) if isinstance(cue, str) else 0
+            if cue_len and not (3 <= cue_len <= 5):
+                return NarrativeCoverageResult(
+                    ok=False,
+                    reason=NARRATIVE_NOT_COVERED,
+                    details={
+                        "violation_type": "cue_length_violation",
+                        "cue_index": cue_idx,
+                        "cue_token_count": cue_len,
+                        "cue_reason": "cue_contract_violation",
+                        "word_count": word_count,
+                    },
+                )
+
+        derived = derive_word_ranges(voiceover_text, cues)
+        if not derived.ok:
+            # Cue contract failure → surface via the stable routing token so
+            # GATE_FAILURE_REPAIR_MAP routes to Scriptwriter regen. The
+            # cue-specific kind (cue_not_matched / empty_cue / out_of_order)
+            # survives in details["violation_type"]; the stable cue token
+            # (cue_not_found / cue_out_of_order) lives in details["cue_reason"].
+            return NarrativeCoverageResult(
+                ok=False,
+                reason=NARRATIVE_NOT_COVERED,
+                details={
+                    **derived.details,
+                    "word_count": word_count,
+                    "cue_reason": derived.reason,
+                },
+            )
+
+        # Build a NEW structure with derived ranges (immutability — caller
+        # inputs are never mutated in place). Zip against the SAME filtered
+        # dict-beat sequence used to build ``cues`` with strict=True so a
+        # length mismatch fails loudly instead of silently mis-aligning ranges.
+        dict_beats = [b for b in narrative if isinstance(b, dict)]
+        derived_structure = [
+            {**b, "word_range": list(rng)}
+            for b, rng in zip(dict_beats, derived.word_ranges, strict=True)
+        ]
+        # Defense-in-depth: the FIX-1 validator also normalizes beat order
+        # for the Composer (which iterates narrative_structure as given).
+        coverage = validate_narrative_coverage(derived_structure, word_count)
+        if not coverage.ok:
+            return coverage
+        final = coverage.repaired_structure or derived_structure
+        return NarrativeCoverageResult(
+            ok=True,
+            reason="cue_derived",
+            repaired_structure=final,
+            details={
+                **coverage.details,
+                "cue_derived": True,
+                "cue_positions": derived.details.get("positions", []),
+            },
+        )
 
     def _persist_repaired_narrative(
         self, assets_cache: str, job_id: int, script_output: dict[str, Any]

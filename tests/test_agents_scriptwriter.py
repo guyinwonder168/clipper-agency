@@ -1,57 +1,55 @@
 """Tests for ScriptwriterAgent — continuous voiceover contract."""
 
 import json
-from unittest.mock import MagicMock
-
-import pytest
 
 from clipper_agency.agents.scriptwriter import ScriptwriterAgent
 
-
-MOCK_VOICEOVER_RESPONSE = json.dumps({
-    "voiceover_text": (
-        "Halo guys, hari ini ada kabar besar dari dunia seleb Indonesia! "
-        "Anji ternyata sudah resmi menikah lagi dengan Wina Natalia, "
-        "dan ini bikin heboh banget karena nggak ada yang nyangka. "
-        "Terus ada juga gossip tentang Raffi Ahmad yang katanya lagi punya "
-        "project baru bareng Nagita Slavina, tapi ini belum bisa dipastikan. "
-        "Dan yang paling bikin penasaran, ternyata ada artis lain yang juga "
-        "lagi proses pernikahan rahasia nih, tapi namanya masih dirahasiakan. "
-        "Jadi tunggu aja kelanjutannya ya, jangan lupa follow buat update "
-        "gossip terbaru setiap hari!"
-    ),
-    "narrative_structure": [
-        {
-            "beat_id": 1,
-            "section": "hook",
-            "description": "Attention-grabbing opening",
-            "word_range": [0, 15],
-            "overlay_text": "KABAR BESAR SELEB",
-            "caption_keywords": ["gossip", "seleb"],
-        },
-        {
-            "beat_id": 2,
-            "section": "story_1",
-            "description": "Main story",
-            "word_range": [15, 50],
-            "overlay_text": "STORY ONE",
-            "caption_keywords": ["story"],
-        },
-        {
-            "beat_id": 3,
-            "section": "closing_cta",
-            "description": "Call to action",
-            "word_range": [50, 75],
-            "overlay_text": "FOLLOW",
-            "caption_keywords": ["follow"],
-        },
-    ],
-    "hook_text_onscreen": "KABAR BESAR!",
-    "caption": "Check this out! #viral",
-    "hashtags": ["#viral", "#trending"],
-    "quality_score": 8,
-    "quality_notes": "Good flow",
-})
+MOCK_VOICEOVER_RESPONSE = json.dumps(
+    {
+        "voiceover_text": (
+            "Halo guys, hari ini ada kabar besar dari dunia seleb Indonesia! "
+            "Anji ternyata sudah resmi menikah lagi dengan Wina Natalia, "
+            "dan ini bikin heboh banget karena nggak ada yang nyangka. "
+            "Terus ada juga gossip tentang Raffi Ahmad yang katanya lagi punya "
+            "project baru bareng Nagita Slavina, tapi ini belum bisa dipastikan. "
+            "Dan yang paling bikin penasaran, ternyata ada artis lain yang juga "
+            "lagi proses pernikahan rahasia nih, tapi namanya masih dirahasiakan. "
+            "Jadi tunggu aja kelanjutannya ya, jangan lupa follow buat update "
+            "gossip terbaru setiap hari!"
+        ),
+        "narrative_structure": [
+            {
+                "beat_id": 1,
+                "section": "hook",
+                "description": "Attention-grabbing opening",
+                "start_cue": "Halo guys hari ini ada",
+                "overlay_text": "KABAR BESAR SELEB",
+                "caption_keywords": ["gossip", "seleb"],
+            },
+            {
+                "beat_id": 2,
+                "section": "story_1",
+                "description": "Main story",
+                "start_cue": "Anji ternyata sudah resmi",
+                "overlay_text": "STORY ONE",
+                "caption_keywords": ["story"],
+            },
+            {
+                "beat_id": 3,
+                "section": "closing_cta",
+                "description": "Call to action",
+                "start_cue": "Jadi tunggu aja kelanjutannya",
+                "overlay_text": "FOLLOW",
+                "caption_keywords": ["follow"],
+            },
+        ],
+        "hook_text_onscreen": "KABAR BESAR!",
+        "caption": "Check this out! #viral",
+        "hashtags": ["#viral", "#trending"],
+        "quality_score": 8,
+        "quality_notes": "Good flow",
+    }
+)
 
 
 class TestScriptwriterName:
