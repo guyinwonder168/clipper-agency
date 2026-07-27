@@ -219,6 +219,37 @@ def _resolve_cue(
     return any_pos, max(fwd_score, any_score), "cue_not_matched"
 
 
+def _next_position_or_fail(
+    tokens: list[str], cue: Any, i: int, positions: list[int]
+) -> int | DeriveResult:
+    """Resolve one cue to its anchor position, or return a failure ``DeriveResult``."""
+    cue_tokens = _tokenize(_coerce_cue(cue))
+    if not cue_tokens:
+        return _cue_fail(CUE_NOT_FOUND, "empty_cue", cue_index=i, word_count=len(tokens))
+    prev = positions[-1] if positions else -1
+    pos, score, failure = _resolve_cue(tokens, cue_tokens, prev)
+    if failure == "out_of_order":
+        return _cue_fail(
+            CUE_OUT_OF_ORDER,
+            "out_of_order",
+            cue_index=i,
+            prev_pos=prev,
+            this_pos=pos,
+            word_count=len(tokens),
+        )
+    if failure == "cue_not_matched":
+        return _cue_fail(
+            CUE_NOT_FOUND,
+            "cue_not_matched",
+            cue_index=i,
+            cue=cue,
+            best_score=round(score, 4),
+            threshold=MATCH_THRESHOLD,
+            word_count=len(tokens),
+        )
+    return pos
+
+
 def derive_word_ranges(voiceover_text: str, cues: list[str]) -> DeriveResult:
     """Derive contiguous ``[start, end]`` word ranges for each beat from its
     ``start_cue``.
@@ -266,31 +297,10 @@ def derive_word_ranges(voiceover_text: str, cues: list[str]) -> DeriveResult:
     #    anchor) from cue_not_found (phrase genuinely absent).
     positions: list[int] = []
     for i, cue in enumerate(cues):
-        cue_tokens = _tokenize(_coerce_cue(cue))
-        if not cue_tokens:
-            return _cue_fail(CUE_NOT_FOUND, "empty_cue", cue_index=i, word_count=len(tokens))
-        prev = positions[-1] if positions else -1
-        pos, score, failure = _resolve_cue(tokens, cue_tokens, prev)
-        if failure == "out_of_order":
-            return _cue_fail(
-                CUE_OUT_OF_ORDER,
-                "out_of_order",
-                cue_index=i,
-                prev_pos=prev,
-                this_pos=pos,
-                word_count=len(tokens),
-            )
-        if failure == "cue_not_matched":
-            return _cue_fail(
-                CUE_NOT_FOUND,
-                "cue_not_matched",
-                cue_index=i,
-                cue=cue,
-                best_score=round(score, 4),
-                threshold=MATCH_THRESHOLD,
-                word_count=len(tokens),
-            )
-        positions.append(pos)
+        result = _next_position_or_fail(tokens, cue, i, positions)
+        if isinstance(result, DeriveResult):
+            return result
+        positions.append(result)
 
     # 4. Derive word_ranges. beat[0].start=0 (per plan §2 — intro words
     #    before the first cue are absorbed into beat 0); beat[i].end =
