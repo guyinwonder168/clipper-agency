@@ -286,6 +286,16 @@ def test_verbatim_match_outranks_shuffled_same_token_set():
     assert score >= 0.99
 
 
+def test_overlapping_cues_rejected_as_out_of_order():
+    """codex round-7 P1: a cue that begins INSIDE the previous cue's span
+    (overlap) must be rejected as cue_out_of_order, not silently produce
+    corrupted ranges. Forward search starts AFTER the previous cue's span."""
+    voiceover = "alpha beta gamma delta epsilon"
+    res = derive_word_ranges(voiceover, ["alpha beta gamma", "beta gamma delta"])
+    assert res.ok is False
+    assert res.reason == "cue_out_of_order"
+
+
 def test_case_insensitive_cue_matching():
     """_tokenize lowercases both sides; mixed-case cues must match."""
     voiceover = "halo guys selamat datang di channel gosip"

@@ -200,17 +200,18 @@ def _cue_fail(reason: str, violation_type: str, **details: Any) -> DeriveResult:
 
 
 def _resolve_cue(
-    tokens: list[str], cue_tokens: list[str], prev: int
+    tokens: list[str], cue_tokens: list[str], min_start: int
 ) -> tuple[int, float, str | None]:
     """Resolve one cue's anchor position.
 
-    Forward-search from ``prev + 1`` (so a recurring phrase anchors on its next
-    occurrence). On forward-search failure, re-search the whole voiceover to
-    distinguish ``out_of_order`` (phrase exists at/before the prev anchor) from
-    ``cue_not_matched`` (phrase genuinely absent). Returns
+    Forward-search from ``min_start`` (the position AFTER the previous cue's
+    span, so overlapping cues are rejected, not silently accepted as corrupted
+    ranges — codex round-7 P1). On forward-search failure, re-search the whole
+    voiceover to distinguish ``out_of_order`` (phrase exists at/before the prev
+    anchor) from ``cue_not_matched`` (phrase genuinely absent). Returns
     ``(position, score, failure_kind)`` where ``failure_kind`` is None on success.
     """
-    fwd_pos, fwd_score = _find_best_position(tokens, cue_tokens, start_from=prev + 1)
+    fwd_pos, fwd_score = _find_best_position(tokens, cue_tokens, start_from=min_start)
     if fwd_score >= MATCH_THRESHOLD:
         return fwd_pos, fwd_score, None
     any_pos, any_score = _find_best_position(tokens, cue_tokens, start_from=0)
@@ -220,14 +221,20 @@ def _resolve_cue(
 
 
 def _next_position_or_fail(
-    tokens: list[str], cue: Any, i: int, positions: list[int]
+    tokens: list[str], cue: Any, i: int, positions: list[int], prev_end: int
 ) -> int | DeriveResult:
-    """Resolve one cue to its anchor position, or return a failure ``DeriveResult``."""
+    """Resolve one cue to its anchor position, or return a failure ``DeriveResult``.
+
+    ``prev_end`` = the index AFTER the previous cue's span (its anchor + its
+    token length); the forward search starts here so a cue that OVERLAPS the
+    previous one (begins inside its span) is rejected as ``cue_out_of_order``
+    instead of silently producing corrupted ranges (codex round-7 P1).
+    """
     cue_tokens = _tokenize(_coerce_cue(cue))
     if not cue_tokens:
         return _cue_fail(CUE_NOT_FOUND, "empty_cue", cue_index=i, word_count=len(tokens))
     prev = positions[-1] if positions else -1
-    pos, score, failure = _resolve_cue(tokens, cue_tokens, prev)
+    pos, score, failure = _resolve_cue(tokens, cue_tokens, max(0, prev_end))
     if failure == "out_of_order":
         return _cue_fail(
             CUE_OUT_OF_ORDER,
@@ -296,11 +303,13 @@ def derive_word_ranges(voiceover_text: str, cues: list[str]) -> DeriveResult:
     #    distinguish cue_out_of_order (phrase exists but at/before the prev
     #    anchor) from cue_not_found (phrase genuinely absent).
     positions: list[int] = []
+    prev_end = -1  # index AFTER the previous cue's span; next cue must start ≥ this
     for i, cue in enumerate(cues):
-        result = _next_position_or_fail(tokens, cue, i, positions)
+        result = _next_position_or_fail(tokens, cue, i, positions, prev_end)
         if isinstance(result, DeriveResult):
             return result
         positions.append(result)
+        prev_end = result + len(_tokenize(_coerce_cue(cue)))
 
     # 4. Derive word_ranges. beat[0].start=0 (per plan §2 — intro words
     #    before the first cue are absorbed into beat 0); beat[i].end =

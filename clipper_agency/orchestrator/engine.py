@@ -3486,20 +3486,15 @@ class Orchestrator:
             if repair_hint == REGEN_NARRATIVE_ACTION
             else "",
         )
-        # FIX-8 (codex P1): a fresh LLM response that violates the cue/voiceover
-        # contract returns status=failed from Scriptwriter.run(). Fail the agent
-        # BEFORE _complete_agent writes a completed manifest entry — otherwise
-        # the manifest would permanently report Scriptwriter completed on a
-        # contract-failed job (repetitive-failure-pattern #1: check status before
-        # _complete_agent). _fail_agent reads output["error"] (codex P2).
+        # FIX-8 (codex P1+P2 round-7): a fresh LLM response that violates the
+        # cue/voiceover contract returns status=failed (with the diagnostic in
+        # ``error``) from Scriptwriter.run(). SKIP _complete_agent (it would mark
+        # Scriptwriter completed in the manifest on a failed job) and return the
+        # failed output for the CALLER's single _fail_agent handling — calling
+        # _fail_agent here too would let the caller's _fail_agent run a second
+        # time and overwrite the real diagnostic with default_reason.
         if script_output.get("status") == "failed":
-            return self._fail_agent(
-                conn,
-                job_id,
-                "scriptwriter",
-                script_output,
-                default_reason="scriptwriter contract violation",
-            )
+            return script_output
         self._complete_agent(conn, assets_cache, job_id, "scriptwriter")
 
         g7 = GateScriptValidation()
