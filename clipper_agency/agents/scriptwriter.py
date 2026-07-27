@@ -278,10 +278,11 @@ class ScriptwriterAgent(BaseAgent):
             e for e in validation_errors if any(m in e for m in _CONTRACT_ERROR_MARKERS)
         ]
         if contract_errors:
-            return {
-                "status": "failed",
-                "reason": "scriptwriter_contract_violation: " + "; ".join(contract_errors),
-            }
+            # FIX-8 (codex P2): set BOTH ``error`` (consumed by _fail_agent) and
+            # ``reason`` so the actual cue/voiceover violation propagates to the
+            # persisted job + agent error fields (not a generic default_reason).
+            diagnostic = "scriptwriter_contract_violation: " + "; ".join(contract_errors)
+            return {"status": "failed", "error": diagnostic, "reason": diagnostic}
 
         voiceover_text = parsed["voiceover_text"]
         word_count = _word_count(voiceover_text)
