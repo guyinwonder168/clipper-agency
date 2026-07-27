@@ -923,12 +923,17 @@ class Orchestrator:
             repair_hint=ctx.repair_hint,
         )
         if script_output.get("status") == "failed":
-            return (
-                {},
-                self._fail_agent(
-                    ctx.conn, ctx.job_id, "scriptwriter", script_output, _SCRIPT_BUDGET_FAILED
-                ),
+            fail = self._fail_agent(
+                ctx.conn, ctx.job_id, "scriptwriter", script_output, _SCRIPT_BUDGET_FAILED
             )
+            # FIX-8 (codex round-8 P2): route a fresh cue-contract failure
+            # through the same bounded Scriptwriter regen loop G7 cue failures
+            # get (not terminal-fail). The Scriptwriter stamps gate_reason on
+            # its failed output; propagate it so _route_repairable_abort
+            # recognizes narrative_not_covered.
+            if script_output.get("gate_reason"):
+                fail["gate_reason"] = script_output["gate_reason"]
+            return ({}, fail)
 
         # G7 (ADR 0030 / FIX-1): enforce coverage on the repair-rerun path too.
         if abort := self._enforce_narrative_coverage(
@@ -1284,7 +1289,13 @@ class Orchestrator:
         cues = [b.get("start_cue", "") for b in narrative if isinstance(b, dict)]
         has_cues = any(isinstance(c, str) and c.strip() for c in cues)
         if not has_cues:
-            return validate_narrative_coverage(narrative, word_count)
+            # Legacy (pre-FIX-8) path: word_range indices were emitted against
+            # whitespace split (incl standalone punctuation), so validate against
+            # THAT count — the punctuation-stripping tokenizer would make a
+            # valid legacy range like [0,3] on 4 split tokens appear out-of-bounds
+            # and hard-fail before the documented fallback works (codex round-8 P2).
+            legacy_wc = len((voiceover_text or "").split())
+            return validate_narrative_coverage(narrative, legacy_wc)
 
         # FIX-8 (codex round-4 P1): enforce the voiceover + cue contract BEFORE
         # derivation so (a) a voiceover whose whitespace-split count diverges

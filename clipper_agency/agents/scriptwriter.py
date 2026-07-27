@@ -11,6 +11,7 @@ from clipper_agency.config.loader import get_agent_config
 from clipper_agency.core.artifacts import write_json, write_text
 from clipper_agency.core.beat_anchor import count_words, derive_word_ranges, tokenize
 from clipper_agency.core.paths import agent_dir, agent_input_file, agent_output_file
+from clipper_agency.core.repair_router import NARRATIVE_NOT_COVERED
 from clipper_agency.llm.client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
@@ -282,7 +283,15 @@ class ScriptwriterAgent(BaseAgent):
             # ``reason`` so the actual cue/voiceover violation propagates to the
             # persisted job + agent error fields (not a generic default_reason).
             diagnostic = "scriptwriter_contract_violation: " + "; ".join(contract_errors)
-            return {"status": "failed", "error": diagnostic, "reason": diagnostic}
+            return {
+                "status": "failed",
+                "error": diagnostic,
+                "reason": diagnostic,
+                # FIX-8 (codex round-8 P2): stamp the stable coverage token so
+                # the caller routes this through the bounded Scriptwriter regen
+                # loop (same path G7 cue failures take), not terminal-fail.
+                "gate_reason": NARRATIVE_NOT_COVERED,
+            }
 
         voiceover_text = parsed["voiceover_text"]
         word_count = _word_count(voiceover_text)
