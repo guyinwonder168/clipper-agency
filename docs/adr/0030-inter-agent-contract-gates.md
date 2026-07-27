@@ -63,3 +63,20 @@ The gates (full spec in the implementation plan; new SRS FR-74..FR-80, PRD PR-38
 ## Compliance
 
 This ADR amends ADR 0026 for output-quality work only: the product owner has authorized deterministic **new gates** (GateNarrativeCoverage, G9.5 visual-coverage, engagement gates) and **new rejection rules** (entity binding) — items ADR 0026 would otherwise have classed as "rebuild." It does **not** add a new agent, change the state machine, or alter the audio-first beat-driven topology. ADR 0026 still governs non-quality contract work.
+
+---
+
+## Amendment (2026-07-28): FIX-8 — Cue-Derived `word_range`
+
+**Problem.** G7 (FIX-1) validated the *shape* of `word_range` indices the Scriptwriter LLM emitted, but the LLM cannot reliably count its own words. Empirically validated twice on the production niche: job_19 (`qwen/qwen3-32b`) over-indexed `word_range[52,64]` on a 60-word voiceover; job_20 (`qwen/qwen3-30b-a3b-instruct-2507`) under-indexed a `[0,94]` union on 101 words (6-word uncovered tail). Both slipped past the validator's shape check and terminally failed G7 — confirming the contract was *adversarial* to the model, not a model-selection problem.
+
+**Decision.** Shift the contract from adversarial (LLM emits `word_range`) to **deterministic** (LLM emits `start_cue` = the 3-5 first words of each beat, copied verbatim from `voiceover_text`; **code derives** the indices). This is the HeyGen HyperFrames industry pattern — TTS word timestamps are the source of truth; the LLM identifies *semantic* boundaries, code computes the indices.
+
+**Implementation (`clipper_agency/core/beat_anchor.py`).**
+- New pure helper `derive_word_ranges(voiceover_text, cues) -> DeriveResult`: Indonesian tokenizer (lowercase, strip punctuation, keep enclitics `nya/kah/lah` attached, preserve internal hyphens for reduplication like `kata-kata`), fuzzy position via `max(Jaccard, LCS)` with an ordered-match `(max, LCS)` tuple tiebreak, forward-search from `prev_anchor + prev_cue_len` so recurring phrases anchor on distinct occurrences and overlapping cues are rejected as `cue_out_of_order`. Deterministic + immutable (cache-key parity). Fail-loud `cue_not_found` / `cue_out_of_order`.
+- Canonical tokenizer exposed as `beat_anchor.tokenize` / `count_words`; the G7 word-count ruler, Scriptwriter `_word_count`, and `_validate_output` cue-length all delegate to it (M == N end-to-end). The voiceover contract forbids standalone punctuation (`...`, `—`) so `split() == tokenize()` and derived indices align 1:1 with Voice Producer timestamps.
+- G7 `GateNarrativeCoverage` (engine `_derive_or_validate_coverage`): derivation is authoritative when cues are present; cue-contract failures (missing/malformed cue, divergent voiceover) route to the bounded Scriptwriter regen loop via the stable `narrative_not_covered` token (FIX-5 router). FIX-1 `word_range` validator kept as defense-in-depth + for legacy persisted artifacts (no-cue path uses whitespace count). Cue-contract failures detected in `Scriptwriter.run()` fail the agent before `_complete_agent` + stamp `gate_reason` so both the initial `run_pipeline` path and the repair-rerun path route to regen.
+
+**Alternatives rejected.** (1) Model swap — rejected: qwen3-32b and qwen3-30b-a3b-instruct both failed, confirming a contract problem not a model problem. (2) Auto-repair LLM indices in G7 — rejected: would only fix edges, not middle-beat mis-alignment. (3) Constrained decoding — rejected: requires self-hosting; OpenRouter API can't enforce. (4) Two-pass count injection — rejected: still not guaranteed; 2× cost.
+
+**Consequence.** The job_18/19/20 coverage class is killed at the source: unreliable LLM word indices never leave Scriptwriter. Downstream consumers (`build_canonical_timeline`, Visual Director, Composer, Reviewer) read `word_range` unchanged (now derived). Backward-compat: legacy pre-FIX-8 persisted artifacts replay through the FIX-1 path. Reviewed via a 5-lane ECC workflow + 9 codex rounds (all P1/P2 resolved).

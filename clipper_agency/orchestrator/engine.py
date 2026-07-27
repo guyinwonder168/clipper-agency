@@ -1702,9 +1702,16 @@ class Orchestrator:
             assets_cache,
         )
         if script_output.get("status") == "failed":
-            return self._fail_agent(
+            fail = self._fail_agent(
                 conn, job_id, "scriptwriter", script_output, "Scriptwriter duration exceeded"
             )
+            # FIX-8 (codex round-9 P2): same gate_reason propagation as the
+            # repair-rerun path (engine.py _stage_content) — route a fresh
+            # cue-contract failure through the bounded Scriptwriter regen loop,
+            # not terminal-fail.
+            if script_output.get("gate_reason"):
+                fail["gate_reason"] = script_output["gate_reason"]
+            return fail
 
         # G7 (active): Narrative coverage contract (ADR 0030 / FIX-1).
         # Shared helper enforces it on this path AND on the retry/repair
