@@ -393,6 +393,26 @@ def _validate_output(
     return errors
 
 
+_BEAT_DEFAULTS = {
+    "description": "",
+    "start_cue": "",
+    "overlay_text": "",
+    "caption_keywords": list,  # factory
+    "word_range": lambda: [0, 0],  # legacy default; overwritten on cue derivation
+}
+
+
+def _backfill_beat_defaults(beat: dict[str, Any], i: int) -> dict[str, Any]:
+    """Return a copy of ``beat`` with required fields backfilled (beat_id, section, defaults)."""
+    b = dict(beat)
+    b.setdefault("beat_id", i + 1)
+    b.setdefault("section", f"section_{i + 1}")
+    for field, default in _BEAT_DEFAULTS.items():
+        if field not in b:
+            b[field] = default() if callable(default) else default
+    return b
+
+
 def _normalize_narrative_structure(
     raw_beats: list[dict[str, Any]],
     voiceover_text: Any = None,
@@ -408,25 +428,7 @@ def _normalize_narrative_structure(
     failure routing emits a cue-specific reason (``cue_not_found`` /
     ``cue_out_of_order``) for the FIX-5 reason-based repair router.
     """
-    normalized: list[dict[str, Any]] = []
-    for i, beat in enumerate(raw_beats):
-        b = dict(beat)
-        if "beat_id" not in b:
-            b["beat_id"] = i + 1
-        if "section" not in b:
-            b["section"] = f"section_{i + 1}"
-        if "description" not in b:
-            b["description"] = ""
-        if "start_cue" not in b:
-            b["start_cue"] = ""
-        if "overlay_text" not in b:
-            b["overlay_text"] = ""
-        if "caption_keywords" not in b:
-            b["caption_keywords"] = []
-        # Legacy default; overwritten below when derivation succeeds.
-        if "word_range" not in b:
-            b["word_range"] = [0, 0]
-        normalized.append(b)
+    normalized = [_backfill_beat_defaults(beat, i) for i, beat in enumerate(raw_beats)]
 
     # FIX-8: derive word_range from start_cue so downstream sees a contract-
     # correct field without any LLM-emitted indices. Only attempt when a

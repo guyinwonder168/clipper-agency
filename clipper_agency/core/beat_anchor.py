@@ -181,6 +181,44 @@ CUE_NOT_FOUND = "cue_not_found"
 CUE_OUT_OF_ORDER = "cue_out_of_order"
 
 
+def _coerce_cue(cue: Any) -> str:
+    """Coerce a (possibly non-string) LLM-emitted cue to ``str`` at the boundary."""
+    if isinstance(cue, str):
+        return cue
+    if cue is None:
+        return ""
+    return str(cue)
+
+
+def _cue_fail(reason: str, violation_type: str, **details: Any) -> DeriveResult:
+    """Build a failure :class:`DeriveResult` with the ``violation_type`` tag."""
+    return DeriveResult(
+        ok=False,
+        reason=reason,
+        details={"violation_type": violation_type, **details},
+    )
+
+
+def _resolve_cue(
+    tokens: list[str], cue_tokens: list[str], prev: int
+) -> tuple[int, float, str | None]:
+    """Resolve one cue's anchor position.
+
+    Forward-search from ``prev + 1`` (so a recurring phrase anchors on its next
+    occurrence). On forward-search failure, re-search the whole voiceover to
+    distinguish ``out_of_order`` (phrase exists at/before the prev anchor) from
+    ``cue_not_matched`` (phrase genuinely absent). Returns
+    ``(position, score, failure_kind)`` where ``failure_kind`` is None on success.
+    """
+    fwd_pos, fwd_score = _find_best_position(tokens, cue_tokens, start_from=prev + 1)
+    if fwd_score >= MATCH_THRESHOLD:
+        return fwd_pos, fwd_score, None
+    any_pos, any_score = _find_best_position(tokens, cue_tokens, start_from=0)
+    if any_score >= MATCH_THRESHOLD:
+        return any_pos, any_score, "out_of_order"
+    return any_pos, max(fwd_score, any_score), "cue_not_matched"
+
+
 def derive_word_ranges(voiceover_text: str, cues: list[str]) -> DeriveResult:
     """Derive contiguous ``[start, end]`` word ranges for each beat from its
     ``start_cue``.
@@ -228,51 +266,31 @@ def derive_word_ranges(voiceover_text: str, cues: list[str]) -> DeriveResult:
     #    anchor) from cue_not_found (phrase genuinely absent).
     positions: list[int] = []
     for i, cue in enumerate(cues):
-        # Coerce non-string cues at the boundary (LLM may emit None/int).
-        cue_str = cue if isinstance(cue, str) else ("" if cue is None else str(cue))
-        cue_tokens = _tokenize(cue_str)
+        cue_tokens = _tokenize(_coerce_cue(cue))
         if not cue_tokens:
-            return DeriveResult(
-                ok=False,
-                reason=CUE_NOT_FOUND,
-                details={
-                    "violation_type": "empty_cue",
-                    "cue_index": i,
-                    "word_count": len(tokens),
-                },
-            )
+            return _cue_fail(CUE_NOT_FOUND, "empty_cue", cue_index=i, word_count=len(tokens))
         prev = positions[-1] if positions else -1
-        fwd_pos, fwd_score = _find_best_position(tokens, cue_tokens, start_from=prev + 1)
-        if fwd_score >= MATCH_THRESHOLD:
-            positions.append(fwd_pos)
-            continue
-        # Forward search failed. Is the cue present EARLIER (out of order) or
-        # genuinely absent (not found)? Search anywhere to tell them apart.
-        any_pos, any_score = _find_best_position(tokens, cue_tokens, start_from=0)
-        if any_score >= MATCH_THRESHOLD:
-            return DeriveResult(
-                ok=False,
-                reason=CUE_OUT_OF_ORDER,
-                details={
-                    "violation_type": "out_of_order",
-                    "cue_index": i,
-                    "prev_pos": prev,
-                    "this_pos": any_pos,
-                    "word_count": len(tokens),
-                },
+        pos, score, failure = _resolve_cue(tokens, cue_tokens, prev)
+        if failure == "out_of_order":
+            return _cue_fail(
+                CUE_OUT_OF_ORDER,
+                "out_of_order",
+                cue_index=i,
+                prev_pos=prev,
+                this_pos=pos,
+                word_count=len(tokens),
             )
-        return DeriveResult(
-            ok=False,
-            reason=CUE_NOT_FOUND,
-            details={
-                "violation_type": "cue_not_matched",
-                "cue_index": i,
-                "cue": cue,
-                "best_score": round(max(fwd_score, any_score), 4),
-                "threshold": MATCH_THRESHOLD,
-                "word_count": len(tokens),
-            },
-        )
+        if failure == "cue_not_matched":
+            return _cue_fail(
+                CUE_NOT_FOUND,
+                "cue_not_matched",
+                cue_index=i,
+                cue=cue,
+                best_score=round(score, 4),
+                threshold=MATCH_THRESHOLD,
+                word_count=len(tokens),
+            )
+        positions.append(pos)
 
     # 4. Derive word_ranges. beat[0].start=0 (per plan §2 — intro words
     #    before the first cue are absorbed into beat 0); beat[i].end =
